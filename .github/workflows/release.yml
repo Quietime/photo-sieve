@@ -1,0 +1,63 @@
+name: Build and release Windows APP
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install native dependencies
+        run: python -m pip install -r requirements-desktop.txt 'pyinstaller>=6,<7' httpx
+      - name: Test library and updater
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Test update UI idle and restart behavior
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/check_update_ui.py
+      - name: Build native EXE
+        run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
+      - name: Create update package and checksums
+        run: python package_release.py
+      - name: Verify packaged APP
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--self-test-output', 'frozen-diagnostics-ci.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged APP diagnostics failed' }
+          if (!(Get-Content frozen-diagnostics-ci.json -Raw | ConvertFrom-Json).ok) { throw 'Diagnostics did not pass' }
+          python tools/check_frozen_update.py
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen updater integration failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSieve-Windows-x64
+          path: |
+            release/*
+            frozen-diagnostics-ci.json
+          retention-days: 14
+      - name: Publish a new version to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $version = python -c 'from version import APP_VERSION; print(APP_VERSION)'
+          $tag = "v$version"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "Version $tag already published. Bump APP_VERSION to release the next update."
+            exit 0
+          }
+          gh release create $tag release/PhotoSieve-Windows-x64.zip release/update.json release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }

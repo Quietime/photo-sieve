@@ -1,0 +1,6 @@
+* text=auto
+*.py text eol=lf
+*.yml text eol=lf
+*.bat text eol=crlf
+# Keep upstream notices byte-for-byte, including their original whitespace.
+third_party_licenses/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

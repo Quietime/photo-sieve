@@ -1,0 +1,32 @@
+Photo Sieve / 照片快筛
+Application source is licensed under MIT; see LICENSE and the included source/ directory.
+Third-party components retain their original copyright and license terms.
+The third_party_licenses/ directory contains notices from upstream Windows wheels,
+plus GNU GPL and LGPL texts. Build-tool notices may also be included.
+
+Qt / PySide6 / Shiboken6 6.8.3 are unmodified and dynamically linked.
+The bundled Qt library and plugin DLLs are in _internal/PySide6/.
+You may replace these libraries with ABI-compatible modified versions.
+Sources and build instructions:
+https://code.qt.io/cgit/pyside/pyside-setup.git/?h=v6.8.3
+https://code.qt.io/cgit/qt/qt5.git/?h=v6.8.3
+https://doc.qt.io/qtforpython-6/building_from_source/index.html
+Qt and PySide6 LGPL-3.0 / GPL license options are described in their upstream metadata.
+No Qt commercial license is asserted or required by this application release.
+
+Versions below describe this supplied release; rebuilds may resolve newer dependencies.
+Other major runtime dependencies (unmodified):
+Python 3.11.9: https://www.python.org/downloads/release/python-3119/
+Pillow 12.3.0: https://github.com/python-pillow/Pillow
+pillow-heif 1.8.0 and its bundled codec libraries: https://github.com/bigcat88/pillow_heif
+  See LICENSES_bundled.txt for codec notices, license texts and upstream sources.
+rawpy 0.27.1 / LibRaw: https://github.com/letmaik/rawpy ; https://www.libraw.org/
+numpy 1.26.4: https://github.com/numpy/numpy/tree/v1.26.4
+FastAPI / Starlette / Pydantic: see their wheel license notices.
+PyInstaller: https://github.com/pyinstaller/pyinstaller
+  Its bootloader license exception permits distribution of this frozen application.
+
+Application rebuild instructions are included in source/README.md,
+source/build_windows.bat and source/photo-sieve.spec.
+The application does not restrict reverse engineering for debugging modifications
+of the dynamically linked LGPL components.

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>照片快筛</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<aside>
+  <div class="brand"><span class="brand-icon">▧</span><div>照片快筛<small>PHOTO SIEVE · 本机照片工作台</small></div></div>
+  <label class="section-label" for="folder">照片文件夹</label>
+  <input id="folder" placeholder="粘贴完整文件夹路径" autocomplete="off">
+  <button id="scan" class="primary full">扫描 / 更新目录</button>
+  <p id="rootHelp" class="muted">↓ 删除 · ↑ 保留 · ← 恢复最近删除。</p>
+  <div class="section-label">筛选队列</div>
+  <nav id="views">
+    <button data-view="pending" class="active">待筛选 <b id="n-pending">0</b></button>
+    <button data-view="keep">已保留 <b id="n-keep">0</b></button>
+    <button data-view="deleted">已删除 <b id="n-deleted">0</b></button>
+    <button data-view="all">全部未删除 <b id="n-all">0</b></button>
+    <button data-view="duplicates">完全重复 <b id="n-duplicates">0</b></button>
+    <button data-view="errors">预览异常 <b>!</b></button>
+  </nav>
+  <button id="dedup" class="full secondary">检查完全重复文件</button>
+  <p class="muted">按文件内容校验；相同画面、不同压缩的照片不属于完全重复。</p>
+  <div class="sidebar-bottom"><button id="saveKept" class="full primary">保存已保留照片</button><div class="section-label">导出筛选清单</div>
+    <button data-export="keep" class="full secondary">保留 CSV 清单</button>
+    <button data-export="all" class="full secondary">全部结果 CSV</button>
+    <p class="muted">删除照片保存在原目录的 .photo-sieve-trash 待删除区，仍占磁盘空间。</p>
+  </div>
+</aside>
+<main>
+  <header><div><span class="section-label">快速筛选</span><h1 id="heading">全部照片</h1></div>
+    <div class="row"><button id="gridToggle">缩略图网格</button><button id="zoom">原尺寸查看 <kbd>Z</kbd></button></div>
+  </header>
+  <div id="job" hidden><span id="jobText"></span><progress id="progress"></progress><details id="warnings" hidden><summary>部分文件无法处理</summary><pre id="warningText"></pre></details></div>
+  <div id="lastDelete" hidden><div><strong id="lastDeleteName"></strong><small id="lastDeletePath"></small></div><div class="row"><button id="viewDeleted">已删除列表</button><button id="openLastDelete">打开所在文件夹</button><button id="restoreLastDelete">恢复这张</button></div></div>
+  <div id="empty"><div class="empty-icon">▧</div><h2>两张一起看，快速删片</h2><p>在左侧填入本机文件夹路径，再点击扫描。<br>↓ 删除 · ↑ 保留 · ← 恢复删除 · → 下一张</p></div>
+  <section id="viewer" hidden>
+    <div id="stage"><div id="currentPane"><span class="pane-label">当前照片 · ↓ 删除这张</span><img id="photo" alt="当前照片"><div id="imageError" hidden></div><div id="loading" hidden>正在读取预览…</div></div><div id="nextPane"><span class="pane-label" id="nextLabel">下一张 · → 前进</span><img id="nextPhoto" alt="下一张照片"><div id="nextEmpty" hidden>已到队列末尾</div></div></div>
+    <div class="photo-info"><div><strong id="filename"></strong><small id="filepath"></small></div><span id="badge"></span></div>
+    <div class="toolbar"><div class="row"><button id="previous">上一张</button><button id="next">下一张 →</button></div><div class="row"><button id="delete" class="reject">删除左图 <kbd>↓</kbd></button><button id="keep" class="keep">保留左图 <kbd>↑</kbd></button></div><div class="row"><button id="restore">恢复删除 <kbd>←</kbd></button><button id="undo">撤回 <kbd>Ctrl Z</kbd></button></div></div>
+    <div id="filmstrip"></div>
+  </section>
+  <section id="grid" hidden><p id="deletedHelp" hidden>照片已移入待删除区，仍占磁盘空间。这里显示原位置和现位置，可单张恢复；不要清理待删除区，直到确认不再需要恢复。</p><div id="gridCards"></div><div class="grid-pages row"><button id="gridPrev">← 上一页</button><span id="gridPage"></span><button id="gridNext">下一页 →</button></div></section>
+  <footer><span><kbd>↓</kbd> 删除 · <kbd>↑</kbd> 保留 · <kbd>←</kbd> 恢复删除 · <kbd>→</kbd> 下一张</span><span>单击任一图片 · 1:1 检查焦点</span><span>已保留图片移出下方队列</span></footer>
+  <div id="toast" role="status" hidden></div>
+</main>
+<div id="detail" role="dialog" aria-modal="true" aria-label="原尺寸照片查看" hidden>
+  <div class="detail-window"><div class="detail-header"><span id="detailTitle"></span><button id="detailClose">返回双图 <kbd>Esc</kbd></button></div><div id="detailViewport"><img id="detailImage" alt="完整分辨率照片"><div id="detailStatus">正在读取完整分辨率…</div></div></div>
+</div>
+<div id="saveDialog" role="dialog" aria-modal="true" aria-label="保存已保留照片" hidden>
+  <div class="save-window"><div class="detail-header"><strong>保存已保留照片</strong><button id="saveClose">关闭</button></div><div class="save-body"><p id="saveCount"></p><label for="destination">目标文件夹</label><div class="row"><input id="destination" placeholder="例如 K:\精选照片，可新建目录"><button id="chooseDestination">选择文件夹</button></div><p class="muted">保留子目录结构和原文件名。同名文件跳过，不覆盖；按开始任务时的保留名单处理。</p><div class="row"><button id="copyKept" class="primary">复制到新文件夹</button><button id="moveKept">移动到新文件夹</button></div><p class="muted">复制后原片仍在原位置；移动后原位置的保留照片会移走。移动不属于删除撤回。</p><p id="saveTaskStatus" class="muted"></p><div id="saveResult" hidden><p id="saveSummary"></p><p id="saveDestination"></p><button id="openDestination">打开目标文件夹</button><details id="saveErrors" hidden><summary>查看未成功的文件</summary><pre id="saveErrorText"></pre></details></div></div></div>
+</div>
+<script src="/static/app.js"></script>
+</body></html>
