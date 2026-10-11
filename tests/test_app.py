@@ -481,18 +481,48 @@ class LibraryTest(unittest.TestCase):
             if old is not None and decoders.gate is old: old.release(); old.release()   # let a failed run still shut down
             decoders.close(); caller.shutdown()
 
-    @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
-    def test_raw_focus_detail_uses_full_sensor_instead_of_embedded_preview(self):
+    def camera_raw(self, thumb_size=None, flip=6):
+        """A mocked LibRaw file with a 3000 x 2000 sensor, holding an embedded JPEG of thumb_size (None: no thumbnail)."""
         import numpy as np
         from unittest.mock import MagicMock
-        raw = MagicMock()
-        raw.postprocess.return_value = np.zeros((20, 30, 3), dtype=np.uint8)
-        raw.__enter__.return_value = raw
+        import rawpy
+        raw = MagicMock(); raw.__enter__.return_value = raw
+        raw.sizes.width, raw.sizes.height, raw.sizes.flip = 3000, 2000, flip
+        raw.postprocess.return_value = np.zeros((2000, 3000, 3), dtype=np.uint8)   # LibRaw has already turned it
+        if thumb_size:
+            out = io.BytesIO(); Image.new('RGB', thumb_size, 'blue').save(out, 'JPEG')
+            raw.extract_thumb.return_value = MagicMock(format=rawpy.ThumbFormat.JPEG, data=out.getvalue())
+        else:
+            raw.extract_thumb.side_effect = rawpy.LibRawNoThumbnailError
+        return raw
+
+    @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
+    def test_raw_focus_detail_uses_the_camera_full_size_jpeg_or_the_sensor(self):
+        # A7 IV style: the embedded JPEG covers the sensor, so it is shown, turned by LibRaw's flip.
+        raw = self.camera_raw((2990, 1990))
         with patch('rawpy.imread', return_value=raw):
-            image = self.lib.decode(Path('camera.nef'), 0)
-        self.assertEqual(image.size, (30, 20))
-        raw.extract_thumb.assert_not_called()
-        self.assertNotIn('half_size', raw.postprocess.call_args.kwargs)
+            image = Library.decode(Path('camera.arw'), 0)
+        self.assertEqual(image.size, (1990, 2990)); self.assertGreater(image.getpixel((500, 500))[2], 200)
+        raw.postprocess.assert_not_called(); self.assertFalse(image.info.get('sensor'))
+        # A7 III style (only a 1616 px preview) or no thumbnail at all: the full sensor image, marked for the cache.
+        for raw in (self.camera_raw((1616, 1077)), self.camera_raw(None)):
+            with patch('rawpy.imread', return_value=raw):
+                image = Library.decode(Path('camera.arw'), 0)
+            self.assertEqual(image.size, (3000, 2000)); self.assertTrue(image.info['sensor'])
+            self.assertNotIn('half_size', raw.postprocess.call_args.kwargs)
+
+    @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
+    def test_only_sensor_decodes_are_cached_for_zoom(self):
+        (self.photos / 'camera.arw').write_bytes(b'raw')
+        self.lib.scan(str(self.photos)); self.wait_job()
+        photo = next(p for p in self.lib.list_photos() if p['name'] == 'camera.arw')
+        cached = self.lib.cache_path(Path(photo['path']), photo['size'], photo['mtime'], 0)
+        with patch('rawpy.imread', return_value=self.camera_raw((2990, 1990))):
+            self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (1990, 2990))
+        self.assertFalse(cached.exists())   # decoding the camera JPEG again is as quick as reading a cached copy
+        with patch('rawpy.imread', return_value=self.camera_raw((1616, 1077))):
+            self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (3000, 2000))
+        self.assertTrue(cached.exists())
 
     def test_delete_waits_for_active_preview_file_handle(self):
         photo = self.lib.list_photos()[0]

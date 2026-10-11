@@ -606,8 +606,9 @@ class Library:
                     image = self.shrink(image, 320)
                 else:
                     image = self.decode(source, edge, self.gate() if edge else None)
-                    # A JPEG original decodes as fast as a cached copy would, so 100% zoom skips the 20 MB re-encode.
-                    if edge == 0 and as_image and source.suffix.lower() not in RAW:
+                    # A JPEG, original or embedded in a RAW, decodes about as fast as a cached copy would, so 100% zoom
+                    # skips the 20 MB re-encode. Only a slow sensor decode is kept.
+                    if edge == 0 and as_image and not image.info.get('sensor'):
                         return image
                 payload = self.save_cache(target, image, quality=96 if edge == 0 else 90)
                 if edge == 1600:
@@ -633,8 +634,19 @@ class Library:
                 raise ValueError('请安装 rawpy 才能预览 RAW')
             if edge == 0:
                 with rawpy.imread(str(source)) as raw:
-                    # Focus inspection uses the sensor image, not the small embedded JPEG.
-                    return Image.fromarray(raw.postprocess(use_camera_wb=True, no_auto_bright=True))
+                    flip = raw.sizes.flip; sensor = max(raw.sizes.width, raw.sizes.height)
+                    try:
+                        thumb = raw.extract_thumb()
+                    except rawpy.LibRawError:
+                        thumb = None
+                    # Recent bodies (A7 IV, A7R V, A1) embed a camera JPEG of nearly sensor size. It shows focus as well,
+                    # decodes six times faster and has the colours of the preview. Older ones only have a small one.
+                    if (thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG
+                            and max(Image.open(io.BytesIO(thumb.data)).size) >= sensor * .95):
+                        return Library.camera_jpeg(thumb.data, flip, 0)
+                    image = Image.fromarray(raw.postprocess(use_camera_wb=True, no_auto_bright=True))
+                image.info['sensor'] = True   # slow to redo, so the preview cache keeps it
+                return image
             thumb = data = None
             with reading, rawpy.imread(str(source)) as raw:
                 flip = raw.sizes.flip
@@ -647,18 +659,10 @@ class Library:
                         image = Image.fromarray(raw.postprocess(half_size=True, use_camera_wb=True))
                     else:
                         if thumb.format == rawpy.ThumbFormat.JPEG: data = thumb.data
-            needs_rotation = False
             if data is not None:
-                with Image.open(io.BytesIO(data)) as im:
-                    needs_rotation = im.getexif().get(274, 1) == 1
-                    im.draft('RGB', Library.box(im, edge))
-                    image = Library.upright(im)
+                image = Library.camera_jpeg(data, flip, edge)
             elif thumb is not None:
-                image = Image.fromarray(thumb.data)
-                needs_rotation = True
-            # RAW embedded preview orientation varies by camera; rawpy's LibRaw flip describes it.
-            if needs_rotation and flip in (3, 5, 6):
-                image = image.rotate({3: 180, 5: 90, 6: 270}[flip], expand=True)
+                image = Library.turn(Image.fromarray(thumb.data), flip)
         else:
             data = image = None
             with reading, Image.open(source) as im:
@@ -679,6 +683,21 @@ class Library:
                     image = Library.upright(im)
         # Embedded RAW previews are often a few pixels over 1600; resampling those buys nothing.
         return Library.shrink(image, edge) if edge and max(image.size) > edge * 1.05 else image
+
+    @staticmethod
+    def camera_jpeg(data, flip, edge):
+        """A JPEG embedded in a RAW, upright and drafted for edge (0 for full size). Cameras either tag it with an
+        EXIF orientation or leave the turn to LibRaw's flip."""
+        with Image.open(io.BytesIO(data)) as im:
+            untagged = im.getexif().get(274, 1) == 1
+            if edge:
+                im.draft('RGB', Library.box(im, edge))
+            image = Library.upright(im)
+        return Library.turn(image, flip) if untagged else image
+
+    @staticmethod
+    def turn(image, flip):
+        return image.rotate({3: 180, 5: 90, 6: 270}[flip], expand=True) if flip in (3, 5, 6) else image
 
     @staticmethod
     def box(im, edge):
