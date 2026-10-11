@@ -662,7 +662,7 @@ class Window(QMainWindow):
     def choose_source(self):
         start = (self.state_data or {}).get('root') or str(Path.home())
         folder = QFileDialog.getExistingDirectory(self, '选择照片文件夹', start)
-        if folder: self.scan(folder)
+        if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
 
     def scan(self, folder=None):
         if folder is None: self.choose_source(); return
@@ -695,7 +695,7 @@ class Window(QMainWindow):
         if urls and urls[0].isLocalFile() and Path(urls[0].toLocalFile()).is_dir(): event.acceptProposedAction()
 
     def dropEvent(self, event):
-        self.scan(event.mimeData().urls()[0].toLocalFile()); event.acceptProposedAction()
+        self.scan(str(Path(event.mimeData().urls()[0].toLocalFile()))); event.acceptProposedAction()
 
     def open_folder(self, path):
         if not Path(path).is_dir(): self.error('文件夹不存在，或硬盘未连接：' + path); return
