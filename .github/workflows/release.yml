@@ -2,11 +2,14 @@ name: Build and release Windows APP
 on:
   push:
     branches: [main]
+  # Pull requests get the full Windows build and checks; only main publishes.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: windows-release
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   windows:
@@ -51,6 +54,7 @@ jobs:
             frozen-diagnostics-ci.json
           retention-days: 14
       - name: Publish a new version to GitHub Releases
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
