@@ -22,7 +22,6 @@ pillow-heif 1.8.0 and its bundled codec libraries: https://github.com/bigcat88/p
   See LICENSES_bundled.txt for codec notices, license texts and upstream sources.
 rawpy 0.27.1 / LibRaw: https://github.com/letmaik/rawpy ; https://www.libraw.org/
 numpy 1.26.4: https://github.com/numpy/numpy/tree/v1.26.4
-FastAPI / Starlette / Pydantic: see their wheel license notices.
 PyInstaller: https://github.com/pyinstaller/pyinstaller
   Its bootloader license exception permits distribution of this frozen application.
 

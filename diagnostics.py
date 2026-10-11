@@ -8,7 +8,7 @@ import time
 def run(application, output):
     from PIL import Image
     from PySide6.QtCore import qVersion
-    from desktop import Window
+    from desktop import Window, Decoders
     from app import Library
     import rawpy
     import pillow_heif
@@ -29,9 +29,9 @@ def run(application, output):
             lib=Library(base/'data');lib.scan(str(photos));wait(lambda:not lib.job['running'])
             rows=lib.list_photos('pending');assert len(rows)==9
             assert lib.decode(photos/'heic.heic',320).size==(320,213)
-            window=Window(lib,check_updates=False);window.show();wait(lambda:window.keep_button.isEnabled())
+            window=Window(lib,check_updates=False,decoders=Decoders(2));window.show();wait(lambda:window.keep_button.isEnabled())
             assert window.photos[0].pixmap and window.photos[1].photo
-            result['checks'].append('native dual-image UI and HEIC')
+            result['checks'].append('native dual-image UI, HEIC, decoder processes')
             original=window.queue[0];original_bytes=Path(original['path']).read_bytes()
             window.act('delete');wait(lambda:not window.busy and lib.state()['counts']['deleted']==1)
             assert lib.preview(original['id'],320)
@@ -45,7 +45,6 @@ def run(application, output):
             result['checks'].append('in-place full-resolution zoom and restore')
             wait(lambda:all(window.strip.item(i).data(256) in window.thumb_cache for i in range(window.strip.count())))
             result['checks'].append('all filmstrip thumbnails, not only first six')
-            assert window.folder.text()=='';result['checks'].append('empty startup folder input, preserved library')
             lib.export_kept(str(base/'copy'),'copy');wait(lambda:not lib.job['running'])
             assert lib.export_summary()['done']==1 and Path(kept['path']).is_file()
             lib.export_kept(str(base/'move'),'move');wait(lambda:not lib.job['running'])

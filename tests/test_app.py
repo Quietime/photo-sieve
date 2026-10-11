@@ -1,4 +1,3 @@
-import csv
 from contextlib import closing
 import errno
 import io
@@ -11,13 +10,13 @@ import time
 import unittest
 import importlib.util
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import multiprocessing
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
 from PIL import Image
-from app import Library, create_app
+from app import Library, LibraryError, build_preview, lower_priority
 
 
 class LibraryTest(unittest.TestCase):
@@ -33,12 +32,14 @@ class LibraryTest(unittest.TestCase):
         self.lib = Library(self.base / 'data')
         self.lib.scan(str(self.photos))
         self.wait_job()
-        app, self.token = create_app(self.lib, 'test-token')
-        self.client = TestClient(app, headers={'X-Photo-Token': self.token})
 
     def tearDown(self):
-        self.client.close()
         self.temp.cleanup()
+
+    def assertFails(self, status, fn, *args, **kwargs):
+        with self.assertRaises(LibraryError) as caught:
+            fn(*args, **kwargs)
+        self.assertEqual(caught.exception.status_code, status)
 
     def wait_job(self):
         deadline = time.monotonic() + 10
@@ -47,25 +48,19 @@ class LibraryTest(unittest.TestCase):
         self.assertFalse(self.lib.job['running'])
         self.assertEqual(self.lib.job['message'], '已完成')
 
-    def test_review_preview_export_undo_and_originals_unchanged(self):
+    def test_review_preview_undo_and_originals_unchanged(self):
         original = {p.name: p.read_bytes() for p in self.photos.iterdir()}
-        photos = self.client.get('/api/photos').json()
+        photos = self.lib.list_photos()
         self.assertEqual(len(photos), 4)
         photo_id = photos[0]['id']
-        response = self.client.get(f'/api/image/{photo_id}?edge=1600')
-        self.assertEqual(response.status_code, 200)
-        image = Image.open(io.BytesIO(response.content))
+        image = Image.open(io.BytesIO(self.lib.preview(photo_id, 1600)))
         self.assertEqual(image.size, (1600, 800))
-        self.assertEqual(self.client.post('/api/mark', json={'id': photo_id, 'status': 1}).status_code, 200)
-        self.assertEqual(self.client.get('/api/state').json()['counts']['keep'], 1)
-        self.assertEqual(self.client.get('/api/photos?view=pending').json()[0]['id'], photos[1]['id'])
-        csv_result = self.client.get('/api/export?view=keep')
-        rows = list(csv.reader(io.StringIO(csv_result.content.decode('utf-8-sig'))))
-        self.assertEqual(rows[1][0], str(self.photos / '01照片.jpg'))
-        self.assertEqual(rows[1][1], '保留')
-        self.assertFalse(list(self.lib.directory.glob('export-*.csv')))
-        self.assertEqual(self.client.post('/api/undo', json={}).json()['id'], photo_id)
-        self.assertEqual(self.client.get('/api/state').json()['counts']['keep'], 0)
+        self.lib.mark(photo_id, 1)
+        self.assertEqual(self.lib.state()['counts']['keep'], 1)
+        self.assertEqual(self.lib.list_photos('pending')[0]['id'], photos[1]['id'])
+        self.assertEqual(self.lib.list_photos('keep')[0]['id'], photo_id)
+        self.assertEqual(self.lib.undo()['id'], photo_id)
+        self.assertEqual(self.lib.state()['counts']['keep'], 0)
         self.assertEqual(original, {p.name: p.read_bytes() for p in self.photos.iterdir()})
 
     def test_rescan_keeps_marks_but_resets_changed_and_hides_missing(self):
@@ -76,32 +71,24 @@ class LibraryTest(unittest.TestCase):
         self.wait_job()
         self.assertEqual(self.lib.photo(photos[0]['id'])['status'], 1)
         Image.new('RGB', (123, 321), 'green').save(self.photos / '01照片.jpg')
-        self.assertEqual(self.client.post('/api/mark', json={'id': photos[0]['id'], 'status': -1}).status_code, 409)
+        self.assertFails(409, self.lib.mark, photos[0]['id'], -1)
         (self.photos / '03照片.png').unlink()
         self.lib.scan(str(self.photos))
         self.wait_job()
         self.assertEqual(self.lib.photo(photos[0]['id'])['status'], 0)
         self.assertEqual(len(self.lib.list_photos()), 3)
 
-    def test_exact_duplicates_and_error_queue(self):
-        self.lib.duplicates()
-        self.wait_job()
-        duplicate_rows = self.lib.list_photos('duplicates')
-        self.assertEqual(len(duplicate_rows), 2)
-        self.assertEqual(duplicate_rows[0]['digest'], duplicate_rows[1]['digest'])
+    def test_broken_photo_reports_why_it_cannot_be_previewed(self):
         broken = self.lib.list_photos()[-1]
-        self.assertEqual(self.client.get(f"/api/image/{broken['id']}").status_code, 422)
-        self.assertEqual(len(self.lib.list_photos('errors')), 1)
-        self.assertEqual(self.client.get('/api/state').json()['counts']['reject'], 0)
+        self.assertFails(422, self.lib.preview, broken['id'], 1600)
+        self.assertEqual(len(self.lib.list_photos()), 4)
 
-    def test_security_and_input_validation(self):
-        self.assertEqual(self.client.get('/api/state', headers={'X-Photo-Token': 'wrong'}).status_code, 403)
-        self.assertEqual(self.client.post('/api/mark', json={'id': 1, 'status': 4}).status_code, 422)
-        self.assertEqual(self.client.get('/api/photos?view=invalid').status_code, 400)
-        self.assertEqual(self.client.get('/api/image/999').status_code, 404)
-        self.assertEqual(self.client.get('/api/state', headers={'Host': 'evil.example'}).status_code, 403)
-        self.assertEqual(self.client.get('/static/no-file').status_code, 404)
-        self.assertEqual(self.client.post('/api/scan', json={'path': str(self.base)}).status_code, 409)
+    def test_input_validation(self):
+        self.assertFails(400, self.lib.list_photos, 'invalid')
+        self.assertFails(400, self.lib.list_photos, 'pending', 0, 'sideways')
+        self.assertFails(404, self.lib.preview, 999, 1600)
+        self.assertFails(409, self.lib.scan, str(self.base))
+        self.assertFails(400, self.lib.scan, str(self.base / 'missing'))
 
     def test_restart_cursor_and_marks(self):
         photo = self.lib.list_photos()[0]
@@ -114,8 +101,7 @@ class LibraryTest(unittest.TestCase):
         photo = self.lib.list_photos()[0]
         source = Path(photo['path'])
         original = source.read_bytes()
-        response = self.client.post('/api/trash', json={'id': photo['id']})
-        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.lib.trash(photo['id'])['staged'])
         self.assertFalse(source.exists())
         backups = list((source.parent / '.photo-sieve-trash').glob('*.jpg'))
         self.assertEqual(len(backups), 1)
@@ -145,7 +131,7 @@ class LibraryTest(unittest.TestCase):
         source = Path(photo['path'])
         self.lib.trash(photo['id'])
         source.write_bytes(b'new unrelated photo')
-        self.assertEqual(self.client.post('/api/undo', json={}).status_code, 409)
+        self.assertFails(409, self.lib.undo)
         self.assertEqual(source.read_bytes(), b'new unrelated photo')
         source.unlink()
         self.assertTrue(self.lib.undo()['restored'])
@@ -153,12 +139,11 @@ class LibraryTest(unittest.TestCase):
     def test_failed_delete_preserves_photo_and_scan_blocks_delete(self):
         photo = self.lib.list_photos()[0]
         with patch('app.os.rename', side_effect=PermissionError('readonly disk')):
-            response = self.client.post('/api/trash', json={'id': photo['id']})
-            self.assertEqual(response.status_code, 409)
+            self.assertFails(409, self.lib.trash, photo['id'])
         self.assertTrue(Path(photo['path']).exists())
         self.assertEqual(len(self.lib.list_photos()), 4)
         self.lib.job['running'] = True
-        self.assertEqual(self.client.post('/api/trash', json={'id': photo['id']}).status_code, 409)
+        self.assertFails(409, self.lib.trash, photo['id'])
         self.lib.job['running'] = False
 
     def test_crash_after_move_recovers_undo_record(self):
@@ -181,13 +166,10 @@ class LibraryTest(unittest.TestCase):
         self.lib.trash(photos[0]['id'])
         self.lib.mark(photos[1]['id'], 1)
         self.lib.trash(photos[2]['id'])
-        result = self.client.post('/api/undo-delete', json={})
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()['id'], photos[2]['id'])
-        result = self.client.post('/api/undo-delete', json={})
-        self.assertEqual(result.json()['id'], photos[0]['id'])
+        self.assertEqual(self.lib.undo(only_delete=True)['id'], photos[2]['id'])
+        self.assertEqual(self.lib.undo(only_delete=True)['id'], photos[0]['id'])
         self.assertEqual(self.lib.photo(photos[1]['id'])['status'], 1)
-        self.assertEqual(self.client.post('/api/undo-delete', json={}).status_code, 404)
+        self.assertFails(404, self.lib.undo, only_delete=True)
         self.assertEqual(self.lib.undo()['id'], photos[1]['id'])
 
     def test_deleted_queue_previews_original_location_and_specific_restore(self):
@@ -195,14 +177,14 @@ class LibraryTest(unittest.TestCase):
         self.lib.preview(photos[0]['id'], 1600)
         self.lib.trash(photos[0]['id'])
         self.lib.trash(photos[1]['id'])
-        self.assertEqual(self.client.get('/api/state').json()['counts']['deleted'], 2)
-        rows = self.client.get('/api/photos?view=deleted').json()
+        self.assertEqual(self.lib.state()['counts']['deleted'], 2)
+        rows = self.lib.list_photos('deleted')
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]['path'], photos[0]['path'])
         self.assertTrue(Path(rows[0]['backup']).is_file())
         self.assertTrue(rows[0]['deleted'])
-        self.assertEqual(self.client.get(f"/api/image/{photos[0]['id']}").status_code, 200)
-        self.assertEqual(self.client.post(f"/api/restore/{photos[0]['id']}", json={}).status_code, 200)
+        self.assertTrue(self.lib.preview(photos[0]['id'], 1600))
+        self.assertTrue(self.lib.undo(only_delete=True, photo_id=photos[0]['id'])['restored'])
         self.assertTrue(Path(photos[0]['path']).is_file())
         self.assertFalse(Path(photos[1]['path']).is_file())
         reopened = Library(self.lib.directory)
@@ -282,20 +264,13 @@ class LibraryTest(unittest.TestCase):
         self.assertFalse((target / photo['name']).exists())
         self.assertTrue(Path(photo['path']).exists())
 
-    def test_save_api_validation_and_folder_actions(self):
-        self.assertEqual(self.client.post('/api/save-kept', json={'destination': str(self.base / 'out')}).status_code, 400)
+    def test_export_validation(self):
+        self.assertFails(400, self.lib.export_kept, str(self.base / 'out'))
         photo = self.lib.list_photos()[0]
         self.lib.mark(photo['id'], 1)
-        self.assertEqual(self.client.post('/api/save-kept', json={'destination': str(self.photos)}).status_code, 400)
-        self.assertEqual(self.client.post('/api/save-kept', json={'destination': str(self.base / 'out'), 'mode':'invalid'}).status_code, 400)
-        if os.name == 'nt':
-            with patch('app.os.startfile', create=True) as opener:
-                self.assertEqual(self.client.post('/api/open-folder', json={'path': str(self.photos)}).status_code, 200)
-                self.assertEqual(opener.call_args.args[0], str(self.photos))
-        else:
-            with patch('app.subprocess.Popen') as popen:
-                self.assertEqual(self.client.post('/api/open-folder', json={'path': str(self.photos)}).status_code, 200)
-                self.assertEqual(popen.call_args.args[0][1], str(self.photos))
+        self.assertFails(400, self.lib.export_kept, str(self.photos))
+        self.assertFails(400, self.lib.export_kept, str(self.lib.directory / 'inside'))
+        self.assertFails(400, self.lib.export_kept, str(self.base / 'out'), 'invalid')
 
     def test_upgrade_first_release_preserves_keep_deleted_and_restore(self):
         old_dir=self.base/'旧版资料库'
@@ -337,9 +312,7 @@ class LibraryTest(unittest.TestCase):
             self.lib.preview(photo['id'], 1600)
             self.lib.preview(photo['id'], 320)
             self.assertEqual(decode.call_count, 1)
-        response = self.client.get(f"/api/detail/{photo['id']}")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(Image.open(io.BytesIO(response.content)).size, (1800, 900))
+        self.assertEqual(Image.open(io.BytesIO(self.lib.preview(photo['id'], 0))).size, (1800, 900))
 
     def test_cached_preview_does_not_wait_for_other_decodes(self):
         photo = self.lib.list_photos()[0]
@@ -357,13 +330,37 @@ class LibraryTest(unittest.TestCase):
         except BaseException:
             raise
 
-    def test_context_omits_kept_from_pending_and_works_after_restart(self):
+    def test_pending_omits_kept_and_works_after_restart(self):
         photos = self.lib.list_photos()
         self.lib.mark(photos[1]['id'], 1)
-        context = self.client.get(f"/api/context/{photos[0]['id']}?view=pending").json()
-        self.assertNotIn(photos[1]['id'], [p['id'] for p in context['after']])
+        self.assertNotIn(photos[1]['id'], [p['id'] for p in self.lib.list_photos('pending', photos[0]['id'])])
         reopened = Library(self.lib.directory)
-        self.assertNotIn(photos[1]['id'], [p['id'] for p in reopened.context(photos[0]['id'])['after']])
+        self.assertNotIn(photos[1]['id'], [p['id'] for p in reopened.list_photos('pending', photos[0]['id'])])
+
+    def test_preview_image_returns_decoded_preview_without_second_decode(self):
+        photo = self.lib.list_photos()[0]
+        image = self.lib.preview_image(photo['id'], 1600)
+        self.assertEqual(image.size, (1600, 800))
+        with patch.object(self.lib, 'decode', side_effect=AssertionError('cached preview must be reused')):
+            self.assertEqual(self.lib.preview_image(photo['id'], 1600).size, (1600, 800))
+            self.assertEqual(Image.open(io.BytesIO(self.lib.preview(photo['id'], 320))).size, (320, 160))
+
+    def test_nearly_sized_preview_is_not_resampled(self):
+        source = self.base / 'embedded.jpg'
+        Image.new('RGB', (1616, 1080), 'white').save(source)
+        self.assertEqual(Library.decode(source, 1600).size, (1616, 1080))
+
+    def test_decoder_process_builds_previews_and_reports_failures(self):
+        photos = self.lib.list_photos()
+        with ProcessPoolExecutor(1, multiprocessing.get_context('spawn'), lower_priority) as pool:
+            self.lib.offload = lambda *job: pool.submit(build_preview, *job).result() or True
+            with patch.object(self.lib, 'decode', side_effect=AssertionError('decoding must happen in the decoder process')):
+                self.assertEqual(self.lib.preview_image(photos[0]['id'], 1600).size, (1600, 800))
+                self.assertEqual(Image.open(io.BytesIO(self.lib.preview(photos[2]['id'], 320))).size, (229, 320))
+            self.assertFails(422, self.lib.preview, photos[3]['id'], 1600)
+        self.lib.offload = lambda *job: False   # decoder processes unavailable: decode in this thread instead
+        self.assertEqual(self.lib.preview_image(photos[1]['id'], 1600).size, (1600, 800))
+        self.lib.offload = None
 
     @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
     def test_raw_focus_detail_uses_full_sensor_instead_of_embedded_preview(self):
