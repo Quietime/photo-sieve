@@ -607,8 +607,8 @@ class Library:
                 else:
                     image = self.decode(source, edge, self.gate() if edge else None)
                     # A JPEG, original or embedded in a RAW, decodes about as fast as a cached copy would, so 100% zoom
-                    # skips the 20 MB re-encode. Only a slow sensor decode is kept.
-                    if edge == 0 and as_image and not image.info.get('sensor'):
+                    # skips the 20 MB re-encode. Only a slow sensor decode is kept (a PNG's text could also say 'sensor').
+                    if edge == 0 and as_image and not (source.suffix.lower() in RAW and image.info.get('sensor') is True):
                         return image
                 payload = self.save_cache(target, image, quality=96 if edge == 0 else 90)
                 if edge == 1600:
@@ -639,11 +639,15 @@ class Library:
                         thumb = raw.extract_thumb()
                     except rawpy.LibRawError:
                         thumb = None
-                    # Recent bodies (A7 IV, A7R V, A1) embed a camera JPEG of nearly sensor size. It shows focus as well,
-                    # decodes six times faster and has the colours of the preview. Older ones only have a small one.
-                    if (thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG
-                            and max(Image.open(io.BytesIO(thumb.data)).size) >= sensor * .95):
-                        return Library.camera_jpeg(thumb.data, flip, 0)
+                    # Many bodies (A7 IV, A7R V, A1 among them) embed a camera JPEG of nearly sensor size. It shows focus
+                    # as well, decodes about nine times faster and has the colours of the preview. Older ones only have a
+                    # small one, and a damaged one is no reason to refuse a zoom the sensor data can still give.
+                    if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
+                        try:
+                            if max(Image.open(io.BytesIO(thumb.data)).size) >= sensor * .95:
+                                return Library.camera_jpeg(thumb.data, flip, 0)
+                        except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+                            pass
                     image = Image.fromarray(raw.postprocess(use_camera_wb=True, no_auto_bright=True))
                 image.info['sensor'] = True   # slow to redo, so the preview cache keeps it
                 return image
@@ -789,7 +793,10 @@ class Library:
 
 
 def cache_file(cache, source, size, mtime, edge):
-    key = hashlib.sha256(f'v2|{source}|{size}|{mtime}|{edge}'.encode()).hexdigest()
+    # Full-size copies saved before 3.1 are LibRaw sensor renders even where the camera's own JPEG is now shown;
+    # a new version leaves them unread, and pruning removes them.
+    version = 'v3' if edge == 0 else 'v2'
+    key = hashlib.sha256(f'{version}|{source}|{size}|{mtime}|{edge}'.encode()).hexdigest()
     return Path(cache) / f'{key}.jpg'
 
 

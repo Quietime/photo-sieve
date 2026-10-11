@@ -481,17 +481,20 @@ class LibraryTest(unittest.TestCase):
             if old is not None and decoders.gate is old: old.release(); old.release()   # let a failed run still shut down
             decoders.close(); caller.shutdown()
 
-    def camera_raw(self, thumb_size=None, flip=6):
-        """A mocked LibRaw file with a 3000 x 2000 sensor, holding an embedded JPEG of thumb_size (None: no thumbnail)."""
+    def camera_raw(self, thumb_size=None, flip=6, damaged=False):
+        """A mocked LibRaw file with a 3000 x 2000 sensor, holding an embedded JPEG of thumb_size (None: no thumbnail).
+        damaged keeps the JPEG's header but cuts its picture data short, as a bad disk sector would."""
         import numpy as np
         from unittest.mock import MagicMock
         import rawpy
         raw = MagicMock(); raw.__enter__.return_value = raw
         raw.sizes.width, raw.sizes.height, raw.sizes.flip = 3000, 2000, flip
-        raw.postprocess.return_value = np.zeros((2000, 3000, 3), dtype=np.uint8)   # LibRaw has already turned it
+        # Like LibRaw, postprocess returns the sensor image already turned by flip.
+        raw.postprocess.return_value = np.zeros((3000, 2000, 3) if flip in (5, 6) else (2000, 3000, 3), dtype=np.uint8)
         if thumb_size:
-            out = io.BytesIO(); Image.new('RGB', thumb_size, 'blue').save(out, 'JPEG')
-            raw.extract_thumb.return_value = MagicMock(format=rawpy.ThumbFormat.JPEG, data=out.getvalue())
+            out = io.BytesIO(); Image.effect_noise(thumb_size, 40).convert('RGB').save(out, 'JPEG')
+            data = out.getvalue()[:len(out.getvalue()) // 2] if damaged else out.getvalue()
+            raw.extract_thumb.return_value = MagicMock(format=rawpy.ThumbFormat.JPEG, data=data)
         else:
             raw.extract_thumb.side_effect = rawpy.LibRawNoThumbnailError
         return raw
@@ -502,13 +505,14 @@ class LibraryTest(unittest.TestCase):
         raw = self.camera_raw((2990, 1990))
         with patch('rawpy.imread', return_value=raw):
             image = Library.decode(Path('camera.arw'), 0)
-        self.assertEqual(image.size, (1990, 2990)); self.assertGreater(image.getpixel((500, 500))[2], 200)
+        self.assertEqual(image.size, (1990, 2990))
         raw.postprocess.assert_not_called(); self.assertFalse(image.info.get('sensor'))
-        # A7 III style (only a 1616 px preview) or no thumbnail at all: the full sensor image, marked for the cache.
-        for raw in (self.camera_raw((1616, 1077)), self.camera_raw(None)):
+        # A7 III style (only a 1616 px preview), no thumbnail at all, or a damaged camera JPEG: the full sensor image,
+        # marked for the cache.
+        for raw in (self.camera_raw((1616, 1077)), self.camera_raw(None), self.camera_raw((2990, 1990), damaged=True)):
             with patch('rawpy.imread', return_value=raw):
                 image = Library.decode(Path('camera.arw'), 0)
-            self.assertEqual(image.size, (3000, 2000)); self.assertTrue(image.info['sensor'])
+            self.assertEqual(image.size, (2000, 3000)); self.assertIs(image.info['sensor'], True)
             self.assertNotIn('half_size', raw.postprocess.call_args.kwargs)
 
     @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
@@ -517,12 +521,23 @@ class LibraryTest(unittest.TestCase):
         self.lib.scan(str(self.photos)); self.wait_job()
         photo = next(p for p in self.lib.list_photos() if p['name'] == 'camera.arw')
         cached = self.lib.cache_path(Path(photo['path']), photo['size'], photo['mtime'], 0)
+        # A sensor render cached by an earlier version is not shown in place of the camera JPEG.
+        before = hashlib.sha256(f"v2|{photo['path']}|{photo['size']}|{photo['mtime']}|0".encode()).hexdigest()
+        Image.new('RGB', (3000, 2000), 'red').save(self.lib.cache / f'{before}.jpg')
         with patch('rawpy.imread', return_value=self.camera_raw((2990, 1990))):
             self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (1990, 2990))
         self.assertFalse(cached.exists())   # decoding the camera JPEG again is as quick as reading a cached copy
         with patch('rawpy.imread', return_value=self.camera_raw((1616, 1077))):
-            self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (3000, 2000))
+            self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (2000, 3000))
         self.assertTrue(cached.exists())
+        # A PNG whose text happens to say 'sensor' is still not copied.
+        from PIL.PngImagePlugin import PngInfo
+        text = PngInfo(); text.add_text('sensor', 'True')
+        Image.new('RGB', (900, 600), 'green').save(self.photos / 'notes.png', pnginfo=text)
+        self.lib.scan(str(self.photos)); self.wait_job()
+        png = next(p for p in self.lib.list_photos() if p['name'] == 'notes.png')
+        self.assertEqual(self.lib.preview_image(png['id'], 0).size, (900, 600))
+        self.assertFalse(self.lib.cache_path(Path(png['path']), png['size'], png['mtime'], 0).exists())
 
     def test_delete_waits_for_active_preview_file_handle(self):
         photo = self.lib.list_photos()[0]
