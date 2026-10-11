@@ -134,4 +134,21 @@ class UpdaterTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'校验失败'):updater.download_release(release,'token')
         self.assertFalse(list((self.base/'local/PhotoSieve/updates').iterdir()))
 
+class IdleTest(unittest.TestCase):
+    def test_idle_time_counts_input_anywhere_on_windows(self):
+        import time
+        from types import SimpleNamespace
+        import update_ui
+        def windll(tick,last):
+            def last_input(info):info._obj.dwTime=last;return 1
+            return SimpleNamespace(user32=SimpleNamespace(GetLastInputInfo=last_input),kernel32=SimpleNamespace(GetTickCount=lambda:tick))
+        controller=SimpleNamespace(last_activity=time.monotonic()-100);idle=update_ui.UpdateController.idle_seconds
+        with patch.object(update_ui,'os',SimpleNamespace(name='nt')):
+            with patch.object(update_ui.ctypes,'windll',windll(5,0xFFFFFFF0),create=True):
+                self.assertAlmostEqual(idle(controller),.021,places=3)   # the mouse moved 21 ms ago, across the tick wrap
+            controller.last_activity=time.monotonic()-2
+            with patch.object(update_ui.ctypes,'windll',windll(100000,40000),create=True):
+                self.assertLess(idle(controller),3)   # a key pressed in the app 2 s ago, though the system says 60 s
+
+
 if __name__=='__main__':unittest.main()

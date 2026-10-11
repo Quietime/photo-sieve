@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 import shutil
 import statistics
+import struct
 import sys
 import tempfile
 import time
@@ -41,6 +42,15 @@ def rss_mb():
     return 0.0
 
 
+def mark_large_thumbnail(path):
+    """Pillow marks extra MPF frames 'Undefined'; cameras mark their preview 'Large Thumbnail (Full HD Equivalent)'."""
+    with Image.open(path) as im:
+        entry = im.mpinfo[0xB002][1]
+    written = struct.pack('<LLL', 0, entry['Size'], entry['DataOffset'])
+    data = path.read_bytes(); assert data.count(written) == 1
+    path.write_bytes(data.replace(written, struct.pack('<LLL', 0x010002, entry['Size'], entry['DataOffset'])))
+
+
 def make_photos(folder, count, megapixels, source, mpf=False):
     if source:
         for i in range(count): shutil.copyfile(source, folder / f'{i:05}{Path(source).suffix.lower()}')
@@ -53,6 +63,7 @@ def make_photos(folder, count, megapixels, source, mpf=False):
         path = folder / f'base{seed}.jpg'
         if mpf:   # like Sony cameras: a ~1616 px second image in the MPF index
             detail.save(path, format='MPO', save_all=True, append_images=[detail.resize((1616, round(1616 * height / width)))], quality=92)
+            mark_large_thumbnail(path)
         else:
             detail.save(path, quality=92)
         bases.append(path)

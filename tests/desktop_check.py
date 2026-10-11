@@ -74,13 +74,14 @@ def run(screenshot=None):
         QTest.mouseClick(w.photos[1].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(200,200))
         until(lambda:w.photos[1].full_resolution)
         assert (w.photos[1].pixmap.width(),w.photos[1].pixmap.height())==(3200,1800)
+        colour=w.photos[1].pixmap.toImage().pixelColor(1600,900);assert max(abs(colour.red()-3),abs(colour.green()-7),abs(colour.blue()-11))<=3,'The original keeps its colours'
         key(w,Qt.Key.Key_Escape);assert not w.photos[1].detail and w.isVisible()
         # A slow original (as with RAW) zooms immediately; changing photos discards its result.
-        gate=threading.Event();started=threading.Event();preview=lib.preview
+        gate=threading.Event();started=threading.Event();preview=lib.preview_image
         def delayed(pid,edge):
             if pid==first and edge==0:started.set();gate.wait(5)
             return preview(pid,edge)
-        with patch.object(lib,'preview',side_effect=delayed):
+        with patch.object(lib,'preview_image',side_effect=delayed):
             QTest.mouseClick(w.photos[0].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(200,200))
             assert w.photos[0].detail and not w.photos[0].full_resolution
             until(started.is_set);w.next_photo();assert w.photos[0].photo['id']==second
@@ -106,10 +107,12 @@ def run(screenshot=None):
         key(w,Qt.Key.Key_Up);settle(w);w.switch('keep');ready(w);assert w.strip.count()==0
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
-        current=w.queue[0]['id']
+        # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.
+        current=w.queue[0]['id'];w.last_motion=time.monotonic()+.1
         with patch.object(lib,'trash',side_effect=LibraryError(409,'模拟：硬盘已断开')):
             key(w,Qt.Key.Key_Down);assert w.queue[0]['id']!=current
             until(lambda:w.queue[0]['id']==current and not w.pending_ops)
+        QTest.qWait(200)
         assert w.toast.isVisible() and '硬盘' in w.toast.message and lib.photo(current)['status']==0
         ready(w)
         # Export through the native sheet (no HTTP/browser).

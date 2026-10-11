@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 
-from PIL import Image, ImageFile, ImageOps
+from PIL import Image, ImageFile, ImageOps, TiffImagePlugin
 
 import machine
 
@@ -119,7 +119,12 @@ class Library:
             db.execute('UPDATE export_batches SET completed_at=? WHERE completed_at IS NULL', (time.time(),))
         self.prune_cache()
         root = self.meta('root')
-        if root and os.path.isdir(root):
+        if root:
+            # A sleeping external disk can take seconds to answer; the window does not wait for it.
+            threading.Thread(target=self.detect_disk, args=(root,), daemon=True).start()
+
+    def detect_disk(self, root):
+        if os.path.isdir(root):
             self.rotational = machine.seek_penalty(root)
 
     @contextmanager
@@ -601,6 +606,9 @@ class Library:
                     image = self.shrink(image, 320)
                 else:
                     image = self.decode(source, edge, self.gate() if edge else None)
+                    # A JPEG original decodes as fast as a cached copy would, so 100% zoom skips the 20 MB re-encode.
+                    if edge == 0 and as_image and source.suffix.lower() not in RAW:
+                        return image
                 payload = self.save_cache(target, image, quality=96 if edge == 0 else 90)
                 if edge == 1600:
                     self.save_cache(self.cache_path(original, stat.st_size, stat.st_mtime_ns, 320), self.shrink(image, 320))
@@ -627,18 +635,23 @@ class Library:
                 with rawpy.imread(str(source)) as raw:
                     # Focus inspection uses the sensor image, not the small embedded JPEG.
                     return Image.fromarray(raw.postprocess(use_camera_wb=True, no_auto_bright=True))
-            thumb = None
-            # LibRaw reads only the embedded preview here (about 1.5 MB of a 25 MB Sony ARW).
+            thumb = data = None
             with reading, rawpy.imread(str(source)) as raw:
                 flip = raw.sizes.flip
-                try:
-                    thumb = raw.extract_thumb()
-                except rawpy.LibRawNoThumbnailError:
-                    image = Image.fromarray(raw.postprocess(half_size=True, use_camera_wb=True))
+                # LibRaw returns the largest embedded JPEG: full size (7 to 12 MB) on an A7 IV, A7R V or A1.
+                data = Library.raw_preview(source, edge)
+                if data is None:
+                    try:
+                        thumb = raw.extract_thumb()
+                    except rawpy.LibRawNoThumbnailError:
+                        image = Image.fromarray(raw.postprocess(half_size=True, use_camera_wb=True))
+                    else:
+                        if thumb.format == rawpy.ThumbFormat.JPEG: data = thumb.data
             needs_rotation = False
-            if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
-                with Image.open(io.BytesIO(thumb.data)) as im:
+            if data is not None:
+                with Image.open(io.BytesIO(data)) as im:
                     needs_rotation = im.getexif().get(274, 1) == 1
+                    im.draft('RGB', Library.box(im, edge))
                     image = Library.upright(im)
             elif thumb is not None:
                 image = Image.fromarray(thumb.data)
@@ -647,25 +660,67 @@ class Library:
             if needs_rotation and flip in (3, 5, 6):
                 image = image.rotate({3: 180, 5: 90, 6: 270}[flip], expand=True)
         else:
-            data = None
+            data = image = None
             with reading, Image.open(source) as im:
                 if edge and im.format == 'MPO':
-                    preview = Library.mpf_preview(im, edge)
-                    if preview is not None:
-                        return preview
-                if gate:
+                    image = Library.mpf_preview(im, edge)
+                if image is not None:
+                    pass
+                elif gate:
                     data = source.read_bytes()   # one sequential read instead of many small seeks
                 else:
                     if edge:
-                        im.draft('RGB', (edge, edge))
+                        im.draft('RGB', Library.box(im, edge))
                     image = Library.upright(im)
             if data is not None:
                 with Image.open(io.BytesIO(data)) as im:
                     if edge:
-                        im.draft('RGB', (edge, edge))
+                        im.draft('RGB', Library.box(im, edge))
                     image = Library.upright(im)
         # Embedded RAW previews are often a few pixels over 1600; resampling those buys nothing.
         return Library.shrink(image, edge) if edge and max(image.size) > edge * 1.05 else image
+
+    @staticmethod
+    def box(im, edge):
+        """Draft size for a preview whose long side is edge. A square box lets the short side decide, so a
+        7008 x 4672 photo would decode at half size when a quarter still covers 1600 px."""
+        longest = max(im.size)
+        return max(1, im.width * edge // longest), max(1, im.height * edge // longest)
+
+    @staticmethod
+    def raw_preview(source, edge):
+        """The smallest JPEG a TIFF-based RAW (Sony ARW, Nikon NEF) embeds that still covers edge pixels and has the
+        same shape as its largest one. Recent Sony bodies keep a 1616 px preview beside the full-size JPEG, so this
+        reads about 0.5 MB instead of up to 12 MB and decodes 30 times faster. None when there is none."""
+        try:
+            with open(source, 'rb') as fp:
+                head = fp.read(8); size = os.fstat(fp.fileno()).st_size
+                pending, seen, found = [TiffImagePlugin.ImageFileDirectory_v2(head).next], set(), []
+                while pending and len(seen) < 16:
+                    offset = pending.pop()
+                    if not offset or offset in seen or offset >= size: continue
+                    seen.add(offset); fp.seek(offset)
+                    ifd = TiffImagePlugin.ImageFileDirectory_v2(head); ifd.load(fp)
+                    start, length = ifd.get(0x201), ifd.get(0x202)   # JPEGInterchangeFormat and its length
+                    if isinstance(start, int) and isinstance(length, int) and length > 0 and start + length <= size:
+                        found.append((length, start))
+                    subs = ifd.get(0x14A, ())   # SubIFDs, where Nikon keeps its preview
+                    pending += [ifd.next, *(subs if isinstance(subs, tuple) else (subs,))]
+                if not found:
+                    return None
+                def read(length, start, limit):
+                    fp.seek(start); return fp.read(min(length, limit))
+                # The full-size JPEG is what LibRaw shows; a preview of another shape would be letterboxed.
+                width, height = Image.open(io.BytesIO(read(*max(found), 65536))).size
+                for length, start in sorted(found):
+                    if length > 4 * 1024 * 1024: break
+                    data = read(length, start, length)
+                    w, h = Image.open(io.BytesIO(data)).size
+                    if max(w, h) >= edge * .9 and abs(w / h - width / height) < .01:
+                        return data
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def mpf_preview(im, edge):
@@ -674,18 +729,23 @@ class Library:
         suitable preview; the full image is then decoded as before."""
         try:
             width, height = im.size; orientation = im.getexif().get(274, 1)
+            entries = im.mpinfo[0xB002]
             for frame in range(1, getattr(im, 'n_frames', 1)):
+                # Phones put HDR gain maps (grey, half size) in MPF too; only a camera's large thumbnail is a preview.
+                if not entries[frame]['Attribute']['MPType'].startswith('Large Thumbnail'):
+                    continue
                 im.seek(frame)
                 w, h = im.size
                 # A letterboxed or cropped preview would misrepresent the photo; only a same-shape one is used.
-                if max(w, h) >= 1200 and abs(w / h - width / height) < .02:
-                    im.draft('RGB', (edge, edge)); im.load()
+                if im.mode in ('RGB', 'YCbCr') and max(w, h) >= 1200 and abs(w / h - width / height) < .02:
+                    im.draft('RGB', Library.box(im, edge)); im.load()
                     image = im.convert('RGB')
                     method = ORIENTATION.get(orientation)
                     return image.transpose(method) if method else image
         except Exception:
             pass
         try:
+            im.decoderconfig = ()   # forget the preview's draft scale, which would otherwise stick to the photo
             im.seek(0)
         except Exception:
             pass

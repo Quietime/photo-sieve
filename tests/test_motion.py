@@ -1,9 +1,10 @@
 import os
 import time
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QCoreApplication, QEvent, QObject
 from PySide6.QtGui import QGuiApplication
 
 import theme
@@ -50,6 +51,23 @@ class FrameClockTest(unittest.TestCase):
         pump(lambda: len(values) > 1 and values[-1] == 1.0)
         # Qt's own animation timer would give about 13 frames in 200 ms; the clock follows the screen instead.
         self.assertGreaterEqual(len(values), 200 // theme.FrameClock.interval() // 2)
+
+    def test_a_failing_step_ends_only_its_own_motion(self):
+        owner = QObject(); finished = []; values = []
+        def broken(value):
+            if value > 0: raise ZeroDivisionError   # fails on a clock tick, after its first frame
+        with patch('theme.traceback.print_exc'):
+            theme.animate(owner, 60, broken, done=lambda: finished.append('broken'))
+            theme.animate(owner, 60, values.append, done=lambda: finished.append('healthy'))
+            self.assertTrue(pump(lambda: len(finished) == 2))
+        self.assertEqual(sorted(finished), ['broken', 'healthy']); self.assertEqual(values[-1], 1.0)
+        self.assertTrue(pump(lambda: not theme.clock().timer.isActive()))
+
+    def test_stopped_motions_are_released(self):
+        owner = QObject()
+        for _ in range(20): theme.animate(owner, 500, lambda v: None).stop()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertEqual(owner.findChildren(theme.Motion), [])
 
     def test_destroyed_owner_ends_its_motion(self):
         owner = QObject(); values = []

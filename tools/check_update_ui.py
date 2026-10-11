@@ -27,6 +27,7 @@ with tempfile.TemporaryDirectory() as temporary:
     lib=Library(base/'records');lib.scan(str(photos));wait(lambda:not lib.job['running'])
     window=Window(lib);window.show();wait(lambda:window.keep_button.isEnabled())
     controller=window.updates;controller.settings=QSettings(str(base/'preferences.ini'),QSettings.Format.IniFormat)
+    controller.idle_seconds=lambda:time.monotonic()-controller.last_activity   # this computer's own mouse and keyboard must not decide the check
     root=base/'stage/new/PhotoSieve';root.mkdir(parents=True)
     release={'version':'99.0.0','page':'https://github.com/Quietime/photo-sieve/releases/tag/v99.0.0'}
     with patch('sys.frozen',True,create=True),patch('updater.credential_store',side_effect=AssertionError('Public updates must not access credentials')),patch('updater.check_release',return_value=release) as check_release,patch('updater.download_release',return_value=root):

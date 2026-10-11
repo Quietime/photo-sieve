@@ -21,7 +21,7 @@ from PIL import Image
 sys.setswitchinterval(.001)
 
 from PySide6.QtCore import Qt, Signal, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
-from PySide6.QtGui import QImage, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
+from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
     QFrame, QMenu, QSizePolicy)
@@ -43,6 +43,29 @@ STRIP = 16
 ROLE = Qt.ItemDataRole.UserRole
 
 
+def qimage(im):
+    """An opaque QImage over a pane-sized image's pixels, converted by Pillow with the GIL released.
+    RGB32 needs an opaque 0xFF fourth byte (Pillow's BGRX pads with 0, which composites as transparent).
+    No copy here: the bytes travel with the image and QPixmap.fromImage copies once on the interface thread."""
+    data = im.convert('RGBA').tobytes('raw', 'BGRA')
+    return QImage(data, im.width, im.height, im.width * 4, QImage.Format.Format_RGB32), data
+
+
+def full_qimage(im, rows=128):
+    """The original for 100% zoom. QImage.fromData, or converting the whole image at once, would hold the GIL for over
+    half a second at 61 MP and freeze the interface. Pillow decodes with the GIL released; then each strip is copied
+    out in Pillow's own RGBX layout and painted in by Qt, so the interface thread runs in between (a few ms at most)."""
+    if im.mode != 'RGB': im = im.convert('RGB')
+    width, height = im.size
+    image = QImage(width, height, QImage.Format.Format_RGB32); painter = QPainter(image)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+    for top in range(0, height, rows):
+        strip = im.crop((0, top, width, min(height, top + rows))); pixels = strip.tobytes('raw', 'RGBX')
+        painter.drawImage(0, top, QImage(pixels, width, strip.height, width * 4, QImage.Format.Format_RGBX8888))
+    painter.end()
+    return image
+
+
 def display_image(image, width, height, thumb):
     """Worker-side preview sized for the pane. Pillow releases the GIL while it decodes and resamples,
     so the interface thread keeps running; Qt's scaler would hold the GIL throughout."""
@@ -51,11 +74,6 @@ def display_image(image, width, height, thumb):
     def fit(im, w, h):
         scale = min(w / im.width, h / im.height)
         return im if scale >= 1 else im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.Resampling.BILINEAR, reducing_gap=2.0)
-    def qimage(im):
-        # RGB32 needs an opaque 0xFF fourth byte (Pillow's BGRX pads with 0, which composites as transparent).
-        # No copy here: the bytes travel with the image and QPixmap.fromImage copies once on the interface thread.
-        data = im.convert('RGBA').tobytes('raw', 'BGRA')
-        return QImage(data, im.width, im.height, im.width * 4, QImage.Format.Format_RGB32), data
     shown = fit(image, width, height)
     return qimage(shown), qimage(fit(shown, *thumb)), source
 
@@ -65,17 +83,20 @@ class Decoders:
     keys are held, and a decoder crash on a damaged file ends only that process, not the app.
     If processes cannot start at all (a blocked spawn, for example), decoding quietly returns to threads."""
     def __init__(self, workers=DECODE_SLOTS):
-        self.workers = workers; self.pool = None; self.lock = threading.Lock(); self.working = False; self.unavailable = False
+        self.workers = workers; self.pool = self.gate = None; self.lock = threading.Lock(); self.working = False; self.unavailable = False
         self.context = multiprocessing.get_context('spawn')
-        # Shared by every decoder process: at most two read a spinning disk at once.
-        self.gate = self.context.BoundedSemaphore(2)
 
     def __call__(self, *job):
         if self.unavailable: return False
         pool = None
         try:
             with self.lock:
-                if self.pool is None: self.pool = ProcessPoolExecutor(self.workers, self.context, decoder_init, (self.gate,))
+                if self.pool is None:
+                    # Shared by every decoder process: at most two read a spinning disk at once. A process that dies
+                    # inside it never gives its slot back (and a broken pool terminates the rest), so each pool gets
+                    # a fresh one; otherwise the next pool would wait on the old one forever.
+                    self.gate = self.context.BoundedSemaphore(2)
+                    self.pool = ProcessPoolExecutor(self.workers, self.context, decoder_init, (self.gate,))
                 pool = self.pool
             pool.submit(build_preview, *job).result(); self.working = True; return True
         except ValueError:
@@ -133,7 +154,7 @@ class Window(QMainWindow):
         self.last_nudge = 0.0; self.delete_streak = 0; self.deleted_rows = []; self.deleted_items = {}; self.deleted_more = False
         self.cursor_id = 0; self.cursor_timer = QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
         self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
-        self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.toast_pending = None
+        self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.burst = False
         self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
         self.build(); self.update_actions()
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
@@ -352,11 +373,11 @@ class Window(QMainWindow):
 
     def refresh_chrome(self):
         """Counts and the delete toast follow every press, but while a key is held they repaint at most every 80 ms."""
-        if not self.chrome_timer.isActive(): self.chrome_timer.start(80 if time.monotonic() - self.last_motion < BURST else 0)
+        if not self.chrome_timer.isActive(): self.chrome_timer.start(80 if self.burst else 0)
 
     def paint_chrome(self):
         self.show_counts()
-        if self.toast_pending: message, self.toast_pending = self.toast_pending, None; self.toast.show_message(message, 'delete')
+        self.toast.show_pending()
 
     def adjust_counts(self, action, status):
         if not self.counts: return
@@ -558,11 +579,13 @@ class Window(QMainWindow):
         if pane.detail or not pane.item or not pane.pixmap: return None
         rect = pane.content_rect()
         if rect.isEmpty(): return None
-        return Ghost(self.centralWidget(), pane.pixmap, QRect(pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size()))
+        # Still easing back from a zoom, the pane shows only part of the photo: take exactly what is on screen.
+        picture = pane.viewport().grab(rect) if pane.zoom_animation else pane.pixmap
+        return Ghost(self.centralWidget(), picture, QRect(pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size()))
 
     def begin_transition(self):
         """Snapshot both panes before the queue moves; held keys get instant swaps instead."""
-        now = time.monotonic(); burst = now - self.last_motion < BURST; self.last_motion = now; self.finish_motion()
+        now = time.monotonic(); burst = self.burst = now - self.last_motion < BURST; self.last_motion = now; self.finish_motion()
         if burst or not self.isVisible(): return None
         return self.ghost(self.photos[0]), self.ghost(self.photos[1])
 
@@ -610,12 +633,12 @@ class Window(QMainWindow):
         self.render(); self.play_transition(action, ghosts); self.prefetch(); self.refill()
         if action == 'delete':
             self.delete_streak += 1
-            self.toast_pending = '已移到暂存 · ← 恢复' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · ← 恢复'; self.refresh_chrome()
-        elif self.delete_streak and not self.toast.isVisible():
+            self.toast.defer('已移到暂存 · ← 恢复' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · ← 恢复', 'delete'); self.refresh_chrome()
+        elif self.delete_streak and not self.toast.active():
             self.delete_streak = 0
         def done(result):
             self.inflight.discard(pid)
-            if not self.toast.isVisible(): self.delete_streak = 0
+            if not self.toast.active(): self.delete_streak = 0
         def failed(message):
             self.inflight.discard(pid)
             if generation == self.generation and self.view == view and all(p['id'] != pid for p in self.queue):
@@ -715,7 +738,7 @@ class Window(QMainWindow):
             for pane in self.photos:
                 if pane.detail and pane.photo and pane.photo['id'] == pid: pane.unzoom(lambda pane=pane: self.reset_pane(pane))
             self.pump_focus()
-        self.submit(lambda: QImage.fromData(library.preview(pid, 0)), loaded, failed, self.detail_pool)
+        self.submit(lambda: full_qimage(library.preview_image(pid, 0)), loaded, failed, self.detail_pool)
 
     def focus_left(self):
         if self.queue and self.view != 'deleted': self.focus(self.queue[0])
@@ -896,30 +919,33 @@ def main():
     if args.self_test_output:
         from diagnostics import run
         return run(application, args.self_test_output)
-    if args.cache_mb is not None and args.cache_mb < 64: parser.error('缓存至少 64 MB')
-    default_directory = Path.home() / '.photo-sieve'
-    directory = args.data_dir or (default_directory if args.folder else Path(settings.value('library', str(default_directory))))
+    # Only a crash skips the finally, so the next start blames the GPU for nothing else (a locked database, say).
     try:
-        lockpath = Path.home() / '.photo-sieve'; lockpath.mkdir(parents=True, exist_ok=True)
-        application.library_lock = QLockFile(str(lockpath / 'desktop.lock')); application.library_lock.setStaleLockTime(0)
-        if not application.library_lock.tryLock(100):
-            QMessageBox.information(None, '照片快筛已在运行', '请使用已经打开的窗口。'); return 1
-        if args.folder and not args.data_dir:
-            directory = default_directory
-            existing = Library(directory, args.cache_mb).meta('root')
-            if existing and Path(existing).resolve() != Path(args.folder).resolve():
-                directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
-        library = Library(directory, args.cache_mb); settings.setValue('library', str(library.directory)); window = Window(library, decoders=Decoders())
-        screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60)); window.show()
-        if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
-        if COMPOSITING['gpu']: QTimer.singleShot(3000, lambda: settings.setValue('gpu_pending', False))   # the GPU-composed window is healthy
-        if settings.value('gpu_fell_back', False, type=bool):
-            settings.setValue('gpu_fell_back', False)
-            QTimer.singleShot(800, lambda: window.toast.show_message('上次以 GPU 合成启动未成功，已改用 CPU 合成；可在 ⋯ 中重新开启', 'error', 5000))
-    except Exception:
-        QMessageBox.critical(None, '无法启动照片快筛', traceback.format_exc()); return 1
-    result = application.exec(); settings.setValue('gpu_pending', False)
-    return result
+        if args.cache_mb is not None and args.cache_mb < 64: parser.error('缓存至少 64 MB')
+        default_directory = Path.home() / '.photo-sieve'
+        directory = args.data_dir or (default_directory if args.folder else Path(settings.value('library', str(default_directory))))
+        try:
+            lockpath = Path.home() / '.photo-sieve'; lockpath.mkdir(parents=True, exist_ok=True)
+            application.library_lock = QLockFile(str(lockpath / 'desktop.lock')); application.library_lock.setStaleLockTime(0)
+            if not application.library_lock.tryLock(100):
+                QMessageBox.information(None, '照片快筛已在运行', '请使用已经打开的窗口。'); return 1
+            if args.folder and not args.data_dir:
+                directory = default_directory
+                existing = Library(directory, args.cache_mb).meta('root')
+                if existing and Path(existing).resolve() != Path(args.folder).resolve():
+                    directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
+            library = Library(directory, args.cache_mb); settings.setValue('library', str(library.directory)); window = Window(library, decoders=Decoders())
+            screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60)); window.show()
+            if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
+            if COMPOSITING['gpu']: QTimer.singleShot(3000, lambda: settings.setValue('gpu_pending', False))   # the GPU-composed window is healthy
+            if settings.value('gpu_fell_back', False, type=bool):
+                settings.setValue('gpu_fell_back', False)
+                QTimer.singleShot(800, lambda: window.toast.show_message('上次以 GPU 合成启动未成功，已改用 CPU 合成；可在 ⋯ 中重新开启', 'error', 5000))
+        except Exception:
+            QMessageBox.critical(None, '无法启动照片快筛', traceback.format_exc()); return 1
+        return application.exec()
+    finally:
+        settings.setValue('gpu_pending', False)
 
 
 if __name__ == '__main__':

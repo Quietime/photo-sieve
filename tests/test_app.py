@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+import struct
 import tempfile
 import time
 import unittest
@@ -350,10 +351,30 @@ class LibraryTest(unittest.TestCase):
         Image.new('RGB', (1616, 1080), 'white').save(source)
         self.assertEqual(Library.decode(source, 1600).size, (1616, 1080))
 
-    def mpo(self, name, preview_size, orientation=1):
+    def mpo(self, name, preview_size, orientation=1, kind=0x010002, mode='RGB'):
         main = Image.new('RGB', (3000, 2000), 'red'); exif = Image.Exif(); exif[274] = orientation
         path = self.base / name
-        main.save(path, format='MPO', save_all=True, append_images=[Image.new('RGB', preview_size, 'blue')], exif=exif)
+        second = Image.new(mode, preview_size, 'blue' if mode == 'RGB' else 128)
+        main.save(path, format='MPO', save_all=True, append_images=[second], exif=exif)
+        # Pillow marks extra frames 'Undefined'; cameras mark theirs 'Large Thumbnail (Full HD Equivalent)'.
+        with Image.open(path) as im:
+            entry = im.mpinfo[0xB002][1]
+        data = path.read_bytes(); written = struct.pack('<LLL', 0, entry['Size'], entry['DataOffset'])
+        self.assertEqual(data.count(written), 1)
+        path.write_bytes(data.replace(written, struct.pack('<LLL', kind, entry['Size'], entry['DataOffset'])))
+        return path
+
+    def tiff_raw(self, name, previews):
+        """A minimal TIFF-based RAW whose IFD0 and next IFDs each point at one embedded JPEG, as a Sony ARW does."""
+        blobs = []
+        for size, color in previews:
+            out = io.BytesIO(); Image.new('RGB', size, color).save(out, 'JPEG'); blobs.append(out.getvalue())
+        step = 2 + 2 * 12 + 4; position = 8 + step * len(blobs); data = b'II*\x00' + struct.pack('<I', 8)
+        for index, blob in enumerate(blobs):
+            following = 8 + step * (index + 1) if index + 1 < len(blobs) else 0
+            data += struct.pack('<HHHIIHHIII', 2, 0x201, 4, 1, position, 0x202, 4, 1, len(blob), following)
+            position += len(blob)
+        path = self.base / name; path.write_bytes(data + b''.join(blobs))
         return path
 
     def test_camera_jpeg_preview_is_decoded_from_its_mpf_preview(self):
@@ -362,11 +383,55 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(image.size, (1077, 1616))                       # main image's orientation applied
         self.assertEqual(image.getpixel((500, 500))[2] > 200, True)      # pixels come from the embedded preview
         # Letterboxed (different shape) or small previews are ignored; the photo itself is decoded instead.
-        for name, size in (('letterbox.jpg', (1920, 1080)), ('small.jpg', (640, 427))):
-            image = Library.decode(self.mpo(name, size), 1600)
-            self.assertEqual(image.size, (1600, 1067)); self.assertGreater(image.getpixel((500, 500))[0], 200)
+        # So is a phone's HDR gain map: grey, half size, the same shape, and typed 'Undefined' rather than a thumbnail.
+        for name, size, kind, mode in (('letterbox.jpg', (1920, 1080), 0x010002, 'RGB'), ('small.jpg', (640, 427), 0x010002, 'RGB'),
+                                       ('iphone.jpg', (1500, 1000), 0, 'L'), ('grey.jpg', (1500, 1000), 0x010002, 'L')):
+            image = Library.decode(self.mpo(name, size, kind=kind, mode=mode), 1600)
+            self.assertEqual(image.size, (1600, 1067), name); self.assertGreater(image.getpixel((500, 500))[0], 200, name)
         # 100% zoom still decodes the original at full size.
         self.assertEqual(Library.decode(path, 0).size, (2000, 3000))
+
+    def test_draft_box_follows_the_long_side(self):
+        path = self.base / 'wide.jpg'; Image.new('RGB', (3600, 2400), 'red').save(path)
+        with Image.open(path) as im:
+            self.assertEqual(Library.box(im, 800), (800, 533))
+            im.draft('RGB', Library.box(im, 800))
+            self.assertEqual(im.size, (900, 600))   # a square 800 box would decode 1800 x 1200, four times the pixels
+
+    def test_raw_preview_picks_the_small_embedded_jpeg_of_the_same_shape(self):
+        path = self.tiff_raw('a7iv.arw', [((1616, 1080), 'blue'), ((160, 120), 'green'), ((6000, 4000), 'red')])
+        data = Library.raw_preview(path, 1600)
+        self.assertEqual(Image.open(io.BytesIO(data)).size, (1616, 1080))
+        # Letterboxed or too small previews are passed over for the full-size one, which is what LibRaw would return.
+        for name, small in (('wide.arw', (1616, 910)), ('old.arw', (640, 427))):
+            data = Library.raw_preview(self.tiff_raw(name, [(small, 'blue'), ((6000, 4000), 'red')]), 1600)
+            self.assertEqual(Image.open(io.BytesIO(data)).size, (6000, 4000), name)
+        # Not a TIFF at all (CR3 and RAF use other containers), or unreadable: LibRaw decides as before.
+        other = self.base / 'camera.cr3'; other.write_bytes(b'\x00\x00\x00\x18ftypcrx ' + bytes(64))
+        self.assertIsNone(Library.raw_preview(other, 1600))
+        self.assertIsNone(Library.raw_preview(self.base / 'missing.arw', 1600))
+
+    @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
+    def test_raw_preview_is_decoded_without_libraw_reading_the_full_size_jpeg(self):
+        from unittest.mock import MagicMock
+        import rawpy
+        path = self.tiff_raw('portrait.arw', [((1616, 1080), 'blue'), ((6000, 4000), 'red')])
+        raw = MagicMock(); raw.__enter__.return_value = raw; raw.sizes.flip = 6
+        with patch('rawpy.imread', return_value=raw):
+            image = Library.decode(path, 1600)
+        raw.extract_thumb.assert_not_called()
+        self.assertEqual(image.size, (1080, 1616)); self.assertGreater(image.getpixel((500, 500))[2], 200)   # LibRaw's flip applied
+        # Without a suitable preview LibRaw's largest one is used, decoded at the smallest scale that covers 1600 px.
+        out = io.BytesIO(); Image.new('RGB', (6000, 4000), 'red').save(out, 'JPEG')
+        raw.extract_thumb.return_value = MagicMock(format=rawpy.ThumbFormat.JPEG, data=out.getvalue()); raw.sizes.flip = 0
+        with patch('rawpy.imread', return_value=raw), patch.object(Library, 'raw_preview', return_value=None):
+            image = Library.decode(path, 1600)
+        self.assertEqual(image.size, (1600, 1067)); self.assertGreater(image.getpixel((500, 500))[0], 200)
+
+    def test_zooming_a_jpeg_does_not_write_a_full_size_copy(self):
+        photo = self.lib.list_photos()[0]
+        self.assertEqual(self.lib.preview_image(photo['id'], 0).size, (1800, 900))
+        self.assertFalse(self.lib.cache_path(Path(photo['path']), photo['size'], photo['mtime'], 0).exists())
 
     def test_spinning_disk_reads_happen_inside_the_gate_and_decode_after(self):
         events = []
@@ -397,6 +462,24 @@ class LibraryTest(unittest.TestCase):
         self.lib.offload = lambda *job: False   # decoder processes unavailable: decode in this thread instead
         self.assertEqual(self.lib.preview_image(photos[1]['id'], 1600).size, (1600, 800))
         self.lib.offload = None
+
+    def test_a_crashed_decoder_pool_starts_over_with_a_fresh_read_gate(self):
+        from concurrent.futures.process import BrokenProcessPool
+        from desktop import Decoders
+        decoders = Decoders(1); photo = self.lib.photo(self.lib.list_photos()[0]['id'])
+        job = (photo['path'], photo['path'], photo['size'], photo['mtime'], str(self.lib.cache), True)   # on a spinning disk
+        caller = ThreadPoolExecutor(1); old = None
+        try:
+            self.assertTrue(caller.submit(decoders, *job).result(30)); old = decoders.gate
+            # A decoder dies inside the gate and the broken pool terminates the other: neither slot comes back.
+            old.acquire(); old.acquire()
+            with self.assertRaises(BrokenProcessPool): decoders.pool.submit(os._exit, 1).result(30)
+            with self.assertRaises(ValueError): caller.submit(decoders, *job).result(30)
+            self.assertTrue(caller.submit(decoders, *job).result(30))   # the next pool does not wait on the old gate
+            self.assertIsNot(decoders.gate, old)
+        finally:
+            if old is not None and decoders.gate is old: old.release(); old.release()   # let a failed run still shut down
+            decoders.close(); caller.shutdown()
 
     @unittest.skipUnless(importlib.util.find_spec('rawpy'), 'optional RAW dependency absent')
     def test_raw_focus_detail_uses_full_sensor_instead_of_embedded_preview(self):

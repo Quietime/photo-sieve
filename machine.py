@@ -140,7 +140,7 @@ def _windows_seek_penalty(path):
     mount = root.value
     if mount.startswith('\\\\') and not mount.startswith('\\\\?\\'):
         return None   # network share
-    if len(mount) >= 2 and mount[1] == ':':
+    if len(mount) <= 3 and mount[1:2] == ':':   # a drive root such as E:\ (a disk mounted on a folder has its own volume)
         device = '\\\\.\\' + mount[:2]
     else:
         name = ctypes.create_unicode_buffer(64)

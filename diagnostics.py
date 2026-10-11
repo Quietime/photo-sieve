@@ -21,8 +21,8 @@ def run(application, output):
             if fn():return
             time.sleep(.01)
         raise TimeoutError('packaging check timed out')
-    try:
-        with tempfile.TemporaryDirectory() as temp:
+    with tempfile.TemporaryDirectory() as temp:
+        try:
             base=Path(temp);photos=base/'photos';photos.mkdir()
             for i in range(8):Image.new('RGB',(2400,1400),(i*30,100,50)).save(photos/f'{i:02}.jpg')
             heif=pillow_heif.from_pillow(Image.new('RGB',(900,600),'blue'));heif.save(photos/'heic.heic')
@@ -39,7 +39,9 @@ def run(application, output):
             window.restore();wait(lambda:not window.busy and lib.state()['counts']['deleted']==0)
             assert Path(original['path']).read_bytes()==original_bytes and lib.photo(kept['id'])['status']==1
             result['checks'].append('delete, keep, deletion-only restore, original bytes')
-            wait(lambda:window.keep_button.isEnabled());window.focus(original);wait(lambda:window.photos[0].full_resolution)
+            # The library records the restore before the window puts the photo back in front; zoom only once it is there.
+            wait(lambda:window.queue and window.queue[0]['id']==original['id'] and window.keep_button.isEnabled())
+            window.focus(original);wait(lambda:window.photos[0].full_resolution)
             assert window.photos[0].pixmap.width()==2400;window.reset_zoom()
             assert not window.photos[0].detail
             result['checks'].append('in-place full-resolution zoom and restore')
@@ -52,10 +54,10 @@ def run(application, output):
             result['checks'].append('copy and Windows file move')
             result['checks'].append('RAW decoder DLL import')
             window.close();window=None;result['ok']=True
-    except Exception as exc:
-        import traceback
-        result.update(ok=False,error=str(exc),traceback=traceback.format_exc())
-        if window:
-            window.busy=False;window.library.job['running']=False;window.close()
+        except Exception as exc:
+            import traceback
+            result.update(ok=False,error=str(exc),traceback=traceback.format_exc())
+            if window:   # closed while its temporary library still exists
+                window.busy=False;window.library.job['running']=False;window.close()
     output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     return 0 if result['ok'] else 1

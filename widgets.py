@@ -174,7 +174,7 @@ class Toast(QWidget):
 
     def __init__(self, parent):
         super().__init__(parent); self.message = ''; self.kind = 'info'; self.opacity = 0.0; self.offset = 0.0; self.bottom = 0
-        self.animation = None; self.leaving = False
+        self.animation = None; self.leaving = False; self.pending = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.hide()
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.timeout.connect(self.leave)
         font = QFont(self.font()); font.setPixelSize(13); font.setWeight(QFont.Weight.Medium); self.setFont(font)
@@ -187,7 +187,18 @@ class Toast(QWidget):
         rect = QRect((parent.width() - width) // 2, int(self.bottom - height + self.offset), width, height)
         if rect != self.geometry(): self.setGeometry(rect)
 
+    def defer(self, message, kind):
+        """Hold a message for show_pending (held keys coalesce into one repaint); any message shown before then wins."""
+        self.pending = (message, kind)
+
+    def show_pending(self):
+        if self.pending: self.show_message(*self.pending)
+
+    def active(self):
+        return self.isVisible() or self.pending is not None
+
     def show_message(self, message, kind='info', duration=1400):
+        self.pending = None
         changed = (message, kind) != (self.message, self.kind); self.message = message; self.kind = kind
         if changed: self.reposition(); self.update()
         self.raise_()

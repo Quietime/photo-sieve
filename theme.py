@@ -1,5 +1,6 @@
 """Design tokens, stylesheet and motion curves (Apple dark system colours)."""
 import time
+import traceback
 
 from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
@@ -119,7 +120,7 @@ class Motion(QObject):
 
     def stop(self):
         if self.running:
-            self.running = False; clock().remove(self)
+            self.running = False; clock().remove(self); self.deleteLater()   # a stopped motion never restarts
 
     def complete(self):
         if self.running:
@@ -160,6 +161,8 @@ class FrameClock(QObject):
                 motion.advance(now)
             except RuntimeError:   # its widget was destroyed mid-animation
                 motion.running = False; self.remove(motion)
+            except Exception:   # a failing step ends only its own motion, and finished still lets its owner tidy up
+                traceback.print_exc(); motion.complete()
 
 
 _clock = None
