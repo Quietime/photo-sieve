@@ -23,7 +23,7 @@ from app import Library, create_app
 class LibraryTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.photos = self.base / '中文照片'
         self.photos.mkdir()
         Image.new('RGB', (1800, 900), 'red').save(self.photos / '01照片.jpg')
