@@ -95,6 +95,11 @@ class UpdaterTest(unittest.TestCase):
         self.assertGreater(updater.version_tuple('3.0.10'),updater.version_tuple('3.0.9'))
         for bad in ['../3.0.0','v3.0.0','3.0.0-beta','3.0']:
             with self.assertRaises(ValueError):updater.version_tuple(bad)
+    def test_public_api_requests_do_not_include_authorization(self):
+        api=f'https://api.github.com/repos/{UPDATE_REPOSITORY}/releases/latest'
+        with patch('updater.build_opener') as opener:
+            updater.open_api(api,'')
+            self.assertIsNone(opener.return_value.open.call_args.args[0].get_header('Authorization'))
     def test_api_auth_never_sent_to_redirect_host(self):
         api=f'https://api.github.com/repos/{UPDATE_REPOSITORY}/releases/assets/1'
         error=HTTPError(api,302,'redirect',{'Location':'https://release-assets.githubusercontent.com/a'},None)

@@ -1,4 +1,4 @@
-# 照片快筛 · 原生桌面版 3.0.0
+# 照片快筛 · 原生桌面版 3.0.1
 
 适用于 Windows 10 / 11 64 位，使用 Qt Widgets 直接显示双图，不使用浏览器、WebView 或网页服务器。JPG、PNG、TIFF、HEIC 和多种相机 RAW 可以在同一资料库内筛选。针对大量照片采用 SQLite 索引、分页队列、后台读取与有限预加载；十万张照片不会一次加载进内存。支持本机硬盘、移动硬盘和可访问的 NAS 路径。
 
@@ -71,19 +71,19 @@ Windows 双击 `build_windows.bat`，会在独立构建环境内安装依赖，�
 
 十万条合成记录的索引分页测试及小图片连续删除测试用于检查队列结构和回归，不代表十万张实际 RAW 的吞吐量。Windows 构建通过 Wine 的 Windows Python 生成，兼容层启动检查不等同于在真实 Windows 硬件上的完整测试。
 
-## GitHub 私有仓库与自动更新
+## GitHub 公开仓库与自动更新
 
-源码仓库：https://github.com/Quietime/photo-sieve （私有，需登录并有仓库权限）。
+源码仓库：https://github.com/Quietime/photo-sieve 。
 正式版本：https://github.com/Quietime/photo-sieve/releases/latest 。
 
-v2 没有更新功能，需要手动下载 3.0.0 并解压一次。新版本点击“GitHub 更新设置…”：创建 GitHub 细粒度令牌，只选择此仓库，授予 **Contents: Read-only**。令牌写入本机 Windows 凭据管理器，不写进源码、配置文件或安装包。不需要授予写入权限；令牌过期或撤销后重新设置即可。
+首次手动下载 3.0.1 并解压，之后可以在 APP 内检查更新。公开仓库更新无需 GitHub 登录、授权或令牌；“更新设置…”可以关闭自动更新。
 
 默认启动时检查正式版本，后台下载并验证 SHA256 和安装文件清单。下载时仍可筛选；扫描、复制、移动等操作完成且停止操作 30 秒后，自动关闭、替换 APP 自身文件并重新启动。也可以点击“立即安装更新并重启”。关闭自动更新选项后仍可手动检查和安装。路径输入框仍在启动时留空，照片、筛选数据库、删除暂存区不会清空。替换失败会尝试恢复旧版；更新目录保留旧版文件备份和结果。
 
-APP 目录需要当前用户可写，建议解压到本机普通文件夹，不要放在 Program Files。更新需要 GitHub 网络连接；失败会显示状态，原版继续可用。检查和下载会使用令牌访问 GitHub API，但跨域下载时不会向下载站点发送令牌。
+APP 目录需要当前用户可写，建议解压到本机普通文件夹。更新需要 GitHub 网络连接；失败会显示状态，原版继续可用。GitHub 无登录 API 有请求次数限制，遇到限制可稍后重试。
 
 ### 发布下一版
 
-修改程序后，在 `version.py` 提高 `APP_VERSION`（例如 `3.0.1`），更新 `RELEASE_NOTES.md`，提交并推送 `main`。GitHub Actions 自动在 Windows 上测试、打包、验证完整 EXE 更新流程，然后创建对应 tag 和 Release，并上传 ZIP、`update.json` 与 SHA256 清单。已发布版本不覆盖；仅改代码而不提高版本会运行构建验证，但不会发布另一个同版本包。仓库需要启用 Actions 并有可用运行额度。
+修改程序后，在 `version.py` 提高 `APP_VERSION`（例如 `3.0.2`），更新 `RELEASE_NOTES.md`，提交并推送 `main`。GitHub Actions 自动在 Windows 上测试、打包、验证完整 EXE 更新流程，然后创建对应 tag 和 Release，并上传 ZIP、`update.json` 与 SHA256 清单。已发布版本不覆盖；仅改代码而不提高版本会运行构建验证，但不会发布另一个同版本包。仓库需要启用 Actions 并有可用运行额度。
 
 本地发布也可运行 `build_windows.bat`，产物在 `release/`。不要上传照片、数据库、缓存或 GitHub 令牌；`.gitignore` 已排除常见本地数据与构建文件。

@@ -29,7 +29,7 @@ def run(application, output):
             lib=Library(base/'data');lib.scan(str(photos));wait(lambda:not lib.job['running'])
             rows=lib.list_photos('pending');assert len(rows)==9
             assert lib.decode(photos/'heic.heic',320).size==(320,213)
-            window=Window(lib);window.show();wait(lambda:window.keep_button.isEnabled())
+            window=Window(lib,check_updates=False);window.show();wait(lambda:window.keep_button.isEnabled())
             assert window.photos[0].pixmap and window.photos[1].photo
             result['checks'].append('native dual-image UI and HEIC')
             original=window.queue[0];original_bytes=Path(original['path']).read_bytes()

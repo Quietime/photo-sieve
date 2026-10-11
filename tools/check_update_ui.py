@@ -29,8 +29,9 @@ with tempfile.TemporaryDirectory() as temporary:
     controller=window.updates;controller.settings=QSettings(str(base/'preferences.ini'),QSettings.Format.IniFormat)
     root=base/'stage/new/PhotoSieve';root.mkdir(parents=True)
     release={'version':'99.0.0','page':'https://github.com/Quietime/photo-sieve/releases/tag/v99.0.0'}
-    with patch('sys.frozen',True,create=True),patch('updater.credential_store',return_value='fake'),patch('updater.check_release',return_value=release),patch('updater.download_release',return_value=root):
+    with patch('sys.frozen',True,create=True),patch('updater.credential_store',side_effect=AssertionError('Public updates must not access credentials')),patch('updater.check_release',return_value=release) as check_release,patch('updater.download_release',return_value=root):
         controller.check();wait(lambda:controller.staged is not None)
+        check_release.assert_called_once_with('')
         assert not window.closed and window.keep_button.isEnabled(),'Downloads must not block photo review'
     controller.last_activity=time.monotonic()-31
     with patch('updater.launch_helper',return_value=base/'stage') as launch:

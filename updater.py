@@ -1,4 +1,4 @@
-"""Private GitHub releases, Windows credential storage and transactional updates.
+"""GitHub releases, optional Windows credentials and transactional updates.
 
 No credentials are shipped with the application. GitHub tokens are used only
 against api.github.com; asset redirects are followed without Authorization.
@@ -85,7 +85,7 @@ def open_api(url, token, binary=False):
                 raise ValueError('GitHub 下载重定向地址无效') from None
             # Deliberately discard the authorization header when leaving the API.
             return urlopen(Request(location,headers={'User-Agent':'PhotoSieve/'+APP_VERSION}),timeout=45)
-        if error.code in (401,403,404):raise RuntimeError('无法访问私有仓库：请在更新设置中填写可读取 photo-sieve 内容的 GitHub 令牌；也可能尚未发布版本或达到请求限制。') from None
+        if error.code in (401,403,404):raise RuntimeError('无法获取 GitHub 更新：仓库可能尚未发布正式版本、没有访问权限，或已达到请求次数限制；请稍后重试。') from None
         raise RuntimeError(f'GitHub 请求失败（HTTP {error.code}）') from None
 
 

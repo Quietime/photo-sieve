@@ -95,7 +95,7 @@ class PhotoView(QGraphicsView):
         super().keyPressEvent(event)
 
 class Window(QMainWindow):
-    def __init__(self, library):
+    def __init__(self, library, check_updates=True):
         super().__init__(); self.library=library; self.setWindowTitle('照片快筛 · 原生桌面版 '+APP_VERSION); self.resize(1480,960)
         self.pool=QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.image_pool=QThreadPool(self); self.image_pool.setMaxThreadCount(2)
@@ -108,7 +108,7 @@ class Window(QMainWindow):
         self.cursor_id=0; self.cursor_timer=QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
         self.deleted_rows=[]; self.deleted_cards={}; self.deleted_more=False
         self.build(); self.update_actions()
-        self.updates=UpdateController(self);self.updates.report_previous()
+        self.updates=UpdateController(self,check_on_start=check_updates);self.updates.report_previous()
         self.shortcuts=[]
         for key,fn in [('Up',lambda:self.act('keep')),('Down',lambda:self.act('delete')),('Right',self.next_photo),
                        ('Left',lambda:self.restore()),('Ctrl+Z',lambda:self.restore(general=True)),('Z',self.focus_left),('Esc',self.reset_zoom)]:
@@ -145,7 +145,7 @@ class Window(QMainWindow):
         side.addStretch();side.addWidget(QLabel('↑ 保留    ↓ 删除左图\n← 恢复删除    → 下一张\nCtrl+Z 撤回    单击图片检查对焦'))
         side.addWidget(self.button('复制 / 移动保留照片…',self.export_dialog,True));side.addWidget(self.button('打开筛选记录文件夹',lambda:self.open_folder(str(self.library.directory))))
         side.addWidget(self.button('检查更新',lambda:self.updates.check()))
-        side.addWidget(self.button('GitHub 更新设置…',lambda:self.updates.configure()))
+        side.addWidget(self.button('更新设置…',lambda:self.updates.configure()))
         self.update_label=QLabel('版本 '+APP_VERSION);self.update_label.setWordWrap(True);side.addWidget(self.update_label)
         self.install_update_button=self.button('立即安装更新并重启',lambda:self.updates.install());self.install_update_button.hide();side.addWidget(self.install_update_button)
         side_scroll=QScrollArea();side_scroll.setFixedWidth(270);side_scroll.setFrameShape(QFrame.Shape.NoFrame);side_scroll.setWidgetResizable(True);side_scroll.setWidget(sidebar);outer.addWidget(side_scroll)

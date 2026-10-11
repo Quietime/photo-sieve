@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 import time
 from PySide6.QtCore import QObject, Signal, QTimer, QSettings, QEvent
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QCheckBox
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from version import APP_VERSION, UPDATE_REPOSITORY
@@ -12,7 +12,7 @@ import updater
 
 class UpdateController(QObject):
     progress = Signal(int, int)
-    def __init__(self, window):
+    def __init__(self, window, check_on_start=True):
         super().__init__(window);self.window=window;self.settings=QSettings('PhotoSieve','PhotoSieve')
         self.running=False;self.staged=None;self.last_activity=time.monotonic();self.installing=False
         self.progress.connect(lambda done,total:self.show(f'下载更新：{done*100//max(1,total)}%'))
@@ -20,7 +20,7 @@ class UpdateController(QObject):
         from PySide6.QtWidgets import QApplication
         QApplication.instance().installEventFilter(self)
         self.timer=QTimer(self);self.timer.timeout.connect(self.maybe_install);self.timer.start(1000)
-        if getattr(sys,'frozen',False) and self.auto_enabled():QTimer.singleShot(2500,lambda:self.check(False))
+        if check_on_start and getattr(sys,'frozen',False) and self.auto_enabled():QTimer.singleShot(2500,lambda:self.check(False))
     def eventFilter(self, watched, event):
         if event.type() in (QEvent.Type.KeyPress,QEvent.Type.MouseButtonPress,QEvent.Type.Wheel):self.last_activity=time.monotonic()
         return False
@@ -30,12 +30,7 @@ class UpdateController(QObject):
         if self.window.closed or self.running or self.installing:return
         if self.staged:
             self.show('新版已下载；停止操作 30 秒后自动更新。');return
-        try:token=updater.credential_store()
-        except Exception as error:self.show(str(error));return
-        if not token:
-            self.show('私有仓库：请先设置 GitHub 更新授权')
-            if manual:self.configure()
-            return
+        token=''  # Public releases never use previously saved credentials.
         self.running=True;self.show('正在检查 GitHub 最新版本…')
         def failed(message):self.running=False;self.show('检查更新失败：'+message)
         def checked(release):
@@ -68,23 +63,14 @@ class UpdateController(QObject):
         w.submit(lambda:updater.launch_helper(self.staged,Path(sys.executable).parent,arguments),ready,failed)
     def configure(self):
         dialog=QDialog(self.window);dialog.setWindowTitle('GitHub 更新设置');dialog.resize(620,330)
-        layout=QVBoxLayout(dialog);layout.addWidget(QLabel(f'当前版本：{APP_VERSION}\n私有仓库：{UPDATE_REPOSITORY}'))
-        instructions=QLabel('请创建 GitHub 细粒度令牌：只选择 photo-sieve 仓库，\nRepository permissions → Contents → Read-only。\n令牌保存在本机 Windows 凭据管理器，不包含在安装包中。')
+        layout=QVBoxLayout(dialog);layout.addWidget(QLabel(f'当前版本：{APP_VERSION}\n公开仓库：{UPDATE_REPOSITORY}'))
+        instructions=QLabel('更新包从 GitHub 公开仓库获取，无需登录或填写令牌。\n下载完成后会校验安装包，保留照片和筛选记录。')
         instructions.setWordWrap(True);layout.addWidget(instructions)
-        link=QPushButton('打开 GitHub 令牌创建页面');link.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/settings/personal-access-tokens/new')));layout.addWidget(link)
-        token=QLineEdit();token.setEchoMode(QLineEdit.EchoMode.Password);token.setPlaceholderText('粘贴 GitHub 授权令牌；留空保留已有授权');layout.addWidget(token)
         automatic=QCheckBox('启动检查更新，下载完成并停止操作 30 秒后自动安装重启');automatic.setChecked(self.auto_enabled());layout.addWidget(automatic)
         def save():
-            try:
-                if token.text().strip():updater.credential_store(token.text())
-                self.settings.setValue('automatic_updates',automatic.isChecked());self.settings.sync();dialog.accept();self.check()
-            except Exception as error:QMessageBox.warning(dialog,'无法保存授权',str(error))
+            self.settings.setValue('automatic_updates',automatic.isChecked());self.settings.sync();dialog.accept();self.check()
         button=QPushButton('保存并检查更新');button.clicked.connect(save);layout.addWidget(button)
-        revoke=QPushButton('清除本机 GitHub 授权')
-        def clear():
-            try:updater.credential_store(delete=True);self.show('GitHub 授权已清除');dialog.accept()
-            except Exception as error:QMessageBox.warning(dialog,'无法清除授权',str(error))
-        revoke.clicked.connect(clear);layout.addWidget(revoke);dialog.exec()
+        close=QPushButton('关闭');close.clicked.connect(dialog.reject);layout.addWidget(close);dialog.exec()
     def report_previous(self):
         stage=self.settings.value('last_update_stage','')
         if not stage:return
