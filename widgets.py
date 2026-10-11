@@ -164,7 +164,9 @@ class Ghost(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.setGeometry(rect); self.show(); self.raise_()
 
     def paintEvent(self, event):
-        painter = QPainter(self); painter.setOpacity(self.opacity); painter.drawPixmap(self.rect(), self.pixmap)
+        painter = QPainter(self); painter.setOpacity(self.opacity)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)   # a 1:1 blit unless the pane is scaling its preview
+        painter.drawPixmap(self.rect(), self.pixmap)
 
 
 class Toast(QWidget):

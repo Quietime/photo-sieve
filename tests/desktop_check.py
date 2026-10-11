@@ -13,7 +13,8 @@ from unittest.mock import patch
 import threading
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import Library, LibraryError
-from desktop import Window, Decoders, STYLE, CACHE
+from desktop import Window, Decoders, STYLE
+import machine
 
 application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
 def until(fn, seconds=15):
@@ -47,6 +48,9 @@ def run(screenshot=None):
         # Decoder processes finish in any order; every filmstrip entry gets its own thumbnail.
         until(lambda:w.strip.count()==16 and all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count())))
         assert w.strip.item(15).icon().isNull() is False and w.strip.currentRow()==0
+        # The ready buffer fills to every queued photo here (80 < the 100-200 target), then stays within its bound.
+        assert 100<=w.ahead_target<=200 or w.ahead_target==machine.PROFILE.buffer(w.display_size.width()*w.display_size.height()*4+160*110*4)
+        until(lambda:all(p['id'] in w.cache for p in w.queue[:w.ahead_target]),30)
         size=w.photos[0].viewport().size();shown=w.photos[0].pixmap.deviceIndependentSize()
         assert shown.width()<=size.width()+1 and shown.height()<=size.height()+1,'Previews are decoded for the pane size'
         assert w.photos[0].transform().m11()==1,'A pane-sized preview draws without resampling'
@@ -82,7 +86,7 @@ def run(screenshot=None):
             until(started.is_set);w.next_photo();assert w.photos[0].photo['id']==second
             gate.set();until(lambda:not w.focus_loading)
             assert w.photos[0].photo['id']==second and not w.photos[0].detail
-        w.load(first-1);until(lambda:not w.fetching and w.queue[0]['id']==first);ready(w)
+        w.load(first-1);until(lambda:not w.fetching and w.queue and w.queue[0]['id']==first);ready(w)
         # ↓ moves on at once; the file move completes in order behind the interface.
         key(w,Qt.Key.Key_Down);assert w.queue[0]['id']==second;settle(w);ready(w)
         deleted=lib.list_photos('deleted');assert len(deleted)==1 and deleted[0]['id']==first and Path(deleted[0]['backup']).is_file()
@@ -128,7 +132,7 @@ def run(screenshot=None):
         print(f'Native Qt: 45 synthetic deletes accepted in {time.monotonic()-start:.2f}s')
         settle(w);w.poll();until(lambda:w.state_data['counts']['deleted']==45)
         assert sorted(p['id'] for p in lib.list_photos('deleted',limit=100))==sorted(expected)
-        assert len(w.queue)>0;assert len(w.cache)<=CACHE;assert len(w.thumb_cache)<=64
+        assert len(w.queue)>0;assert len(w.cache)<=w.cache_limit;assert len(w.thumb_cache)<=64
         until(lambda:all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count())))
         if screenshot:QTest.qWait(400);w.grab().save(str(screenshot))
         # Dropping a folder onto the window opens it.
@@ -142,6 +146,13 @@ def run(screenshot=None):
             w.scan(str(other));until(lambda:w.library is not lib and not w.library.job['running'] and not w.fetching and len(w.queue)==3)
         assert lib.state()['counts']['deleted']==45 and w.library.state()['counts']['pending']==3
         w.resize(1280,720);application.processEvents();assert w.width()<=1280 and w.height()<=720
+        # Frame meter, GPU compositing preference and the machine line in the ⋯ menu.
+        w.show_fps(True);w.frames=0;w.photos[0].viewport().update();QTest.qWait(1100);assert w.fps_label.text().endswith('帧/秒')
+        w.show_fps(False);assert w.fps_label is None
+        from PySide6.QtCore import QSettings
+        with patch('desktop.QSettings',return_value=QSettings(str(base/'prefs.ini'),QSettings.Format.IniFormat)):
+            w.set_gpu(False);assert not QSettings(str(base/'prefs.ini'),QSettings.Format.IniFormat).value('gpu_compositing',True,type=bool)
+        assert '解码' in w.machine_status() and '预读' in w.machine_status()
         w.close();application.processEvents()
         reopened=Library(base/'data');assert reopened.state()['counts']['deleted']==45
         restored=reopened.undo(only_delete=True);assert restored['restored']

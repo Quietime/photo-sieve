@@ -20,12 +20,13 @@ from PIL import Image
 # waits for the GIL near 1 ms instead of 5 ms while previews decode in the background.
 sys.setswitchinterval(.001)
 
-from PySide6.QtCore import Qt, Signal, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
+from PySide6.QtCore import Qt, Signal, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
 from PySide6.QtGui import QImage, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
     QFrame, QMenu, QSizePolicy)
-from app import Library, DECODE_SLOTS, build_preview, lower_priority
+from app import Library, DECODE_SLOTS, build_preview, decoder_init
+import machine
 from version import APP_VERSION
 from update_ui import UpdateController
 import theme
@@ -34,9 +35,9 @@ from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine
 
 PAGE = 1200         # rows per queue page; ids are indexed, so a page costs a few milliseconds
 REFILL = 800        # fetch the next page while this many photos remain
-AHEAD = 24          # decoded, pane-sized previews kept ready in memory
 WARM = 1200         # further photos whose disk preview is prepared in the background, within the cache budget
-CACHE = 40          # in-memory previews, including a few already passed for ← and Ctrl+Z
+BEHIND = 20         # previews kept for photos already passed, for ← and Ctrl+Z
+# Decoded, pane-sized previews kept ready ahead: 100 to 200 depending on pane size and memory (machine.Profile.buffer).
 BURST = .22         # actions closer together than this skip the transition animation
 STRIP = 16
 ROLE = Qt.ItemDataRole.UserRole
@@ -65,13 +66,16 @@ class Decoders:
     If processes cannot start at all (a blocked spawn, for example), decoding quietly returns to threads."""
     def __init__(self, workers=DECODE_SLOTS):
         self.workers = workers; self.pool = None; self.lock = threading.Lock(); self.working = False; self.unavailable = False
+        self.context = multiprocessing.get_context('spawn')
+        # Shared by every decoder process: at most two read a spinning disk at once.
+        self.gate = self.context.BoundedSemaphore(2)
 
     def __call__(self, *job):
         if self.unavailable: return False
         pool = None
         try:
             with self.lock:
-                if self.pool is None: self.pool = ProcessPoolExecutor(self.workers, multiprocessing.get_context('spawn'), lower_priority)
+                if self.pool is None: self.pool = ProcessPoolExecutor(self.workers, self.context, decoder_init, (self.gate,))
                 pool = self.pool
             pool.submit(build_preview, *job).result(); self.working = True; return True
         except ValueError:
@@ -107,23 +111,29 @@ class Work(QRunnable):
 
 class Window(QMainWindow):
     VIEWS = [('pending', '未筛选'), ('keep', '保留'), ('deleted', '已删除')]
+    fps_label = None   # Qt sends events before __init__ finishes
 
     def __init__(self, library, check_updates=True, decoders=None):
         super().__init__(); self.library = library; self.decoders = decoders; library.offload = decoders; self.setWindowTitle('照片快筛'); self.resize(1480, 960); self.setAcceptDrops(True)
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.op_pool = QThreadPool(self); self.op_pool.setMaxThreadCount(1)   # file and record changes run strictly in order
-        self.image_pool = QThreadPool(self); self.image_pool.setMaxThreadCount(DECODE_SLOTS + 1)
+        # Image threads mostly wait for decoder processes; only a few at a time do interface-side decoding.
+        self.workers = decoders.workers if decoders else DECODE_SLOTS; self.in_flight = self.workers + 4
+        self.image_pool = QThreadPool(self); self.image_pool.setMaxThreadCount(self.in_flight)
+        self.display_gate = threading.Semaphore(machine.PROFILE.interface_threads())
+        self.ahead_target = 24; self.cache_limit = 24 + BEHIND; self.frames = 0
         self.thumb_pool = QThreadPool(self); self.thumb_pool.setMaxThreadCount(2)
         self.detail_pool = QThreadPool(self); self.detail_pool.setMaxThreadCount(1)
         for pool in (self.image_pool, self.thumb_pool, self.detail_pool): pool.setThreadPriority(QThread.Priority.LowPriority)   # the interface thread wins any CPU contention
         self.tasks = set(); self.cache = OrderedDict(); self.cache_size = {}; self.sources = {}; self.loading = set(); self.image_errors = {}
         self.thumb_cache = OrderedDict(); self.warming = set(); self.warmed = set(); self.thumb_wanted = deque(); self.thumb_loading = set()
         self.queue = []; self.view = 'pending'; self.busy = False; self.fetching = False; self.state_pending = False; self.state_data = None
-        self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.generation = 0; self.focus_loading = set()
+        self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.queue_end = False; self.generation = 0; self.focus_loading = set()
         self.was_running = False; self.closed = False; self.closing = False; self.display_size = None; self.motions = []; self.last_motion = 0.0
         self.last_nudge = 0.0; self.delete_streak = 0; self.deleted_rows = []; self.deleted_items = {}; self.deleted_more = False
         self.cursor_id = 0; self.cursor_timer = QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
         self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
+        self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.toast_pending = None
         self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
         self.build(); self.update_actions()
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
@@ -235,6 +245,7 @@ class Window(QMainWindow):
         self.toast = Toast(root)
 
     def show_menu(self):
+        self.updates.touch()
         menu = QMenu(self); menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
@@ -243,8 +254,40 @@ class Window(QMainWindow):
         automatic = QAction('自动更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic); menu.addAction(automatic)
         if self.updates.staged: menu.addAction('立即安装更新并重启', lambda: self.updates.install())
-        menu.addSeparator(); status = menu.addAction(self.updates.status or '版本 ' + APP_VERSION); status.setEnabled(False)
+        menu.addSeparator()
+        gpu = QAction('GPU 合成（重启后生效）', menu); gpu.setCheckable(True); gpu.setEnabled(os.name == 'nt')
+        gpu.setChecked(QSettings('PhotoSieve', 'PhotoSieve').value('gpu_compositing', True, type=bool)); gpu.toggled.connect(self.set_gpu); menu.addAction(gpu)
+        fps = QAction('显示帧率', menu); fps.setCheckable(True); fps.setChecked(self.fps_label is not None); fps.toggled.connect(self.show_fps); menu.addAction(fps)
+        menu.addSeparator()
+        for line in (self.machine_status(), self.updates.status or '版本 ' + APP_VERSION): menu.addAction(line).setEnabled(False)
         menu.exec(self.more_button.mapToGlobal(QPoint(self.more_button.width() - menu.sizeHint().width(), self.more_button.height() + 6)))
+
+    def machine_status(self):
+        return (f'{machine.PROFILE.describe()} · 解码 {self.workers} · 预读 {self.ahead_target} · '
+                + ('GPU 合成' if COMPOSITING['gpu'] else 'CPU 合成'))
+
+    def set_gpu(self, enabled):
+        QSettings('PhotoSieve', 'PhotoSieve').setValue('gpu_compositing', bool(enabled))
+        self.toast.show_message(('GPU 合成' if enabled else 'CPU 合成') + '将在下次启动时生效', 'info', 2600)
+
+    def show_fps(self, enabled):
+        if not enabled:
+            if self.fps_label: self.removeEventFilter(self); self.fps_timer.stop(); self.fps_label.deleteLater(); self.fps_label = None
+            return
+        self.installEventFilter(self)   # only while the meter is shown: every window event passes through Python
+        self.fps_label = QLabel(self.centralWidget()); self.fps_label.setObjectName('caption')
+        self.fps_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.frames = 0
+        self.fps_timer = QTimer(self.fps_label); self.fps_timer.timeout.connect(self.tick_fps); self.fps_timer.start(1000); self.tick_fps()
+        self.fps_label.show()
+
+    def tick_fps(self):
+        # Window frames actually composed in the last second (one UpdateRequest per frame).
+        self.fps_label.setText(f'{self.frames} 帧/秒'); self.frames = 0; self.fps_label.adjustSize()
+        self.fps_label.move(self.centralWidget().width() - self.fps_label.width() - 20, 68); self.fps_label.raise_()
+
+    def eventFilter(self, watched, event):
+        if watched is self and event.type() == QEvent.Type.UpdateRequest: self.frames += 1
+        return False
 
     def update_ready(self):
         self.badge.show(); self.toast.show_message('新版已下载 · 空闲 30 秒后自动更新，或在 ⋯ 中立即安装', 'info', 3600)
@@ -307,6 +350,14 @@ class Window(QMainWindow):
             text = '原生桌面版 ' + APP_VERSION
         self.subtitle.set_text(text)
 
+    def refresh_chrome(self):
+        """Counts and the delete toast follow every press, but while a key is held they repaint at most every 80 ms."""
+        if not self.chrome_timer.isActive(): self.chrome_timer.start(80 if time.monotonic() - self.last_motion < BURST else 0)
+
+    def paint_chrome(self):
+        self.show_counts()
+        if self.toast_pending: message, self.toast_pending = self.toast_pending, None; self.toast.show_message(message, 'delete')
+
     def adjust_counts(self, action, status):
         if not self.counts: return
         source = 'keep' if status == 1 else 'pending'
@@ -315,10 +366,11 @@ class Window(QMainWindow):
             self.counts['all'] = max(0, self.counts.get('all', 0) - 1)
         elif action == 'keep' and status != 1:
             self.counts['pending'] = max(0, self.counts.get('pending', 0) - 1); self.counts['keep'] = self.counts.get('keep', 0) + 1
-        self.show_counts()
+        self.refresh_chrome()
 
     # ---- queue ------------------------------------------------------------
     def switch(self, view):
+        self.updates.touch()
         if self.busy or view == self.view and not self.fetching: self.segments.set_current(self.view); return
         self.reset_zoom(); self.view = view; self.segments.set_current(view)
         if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 0)
@@ -334,7 +386,7 @@ class Window(QMainWindow):
             if generation != self.generation: return
             self.fetching = False
             if view == 'deleted': self.add_deleted(rows); self.update_actions(); return
-            self.queue = [p for p in rows if p['id'] not in self.inflight]
+            self.queue = [p for p in rows if p['id'] not in self.inflight]; self.queue_end = len(rows) < PAGE
             if not self.queue and anchor: self.load(); return
             self.warmed.clear(); self.render(); self.prefetch()
         def failed(message):
@@ -342,15 +394,15 @@ class Window(QMainWindow):
         self.submit(lambda: library.list_photos(view, anchor, 'next', 60 if view == 'deleted' else PAGE), done, failed)
 
     def refill(self):
-        if self.fetching or len(self.queue) >= REFILL or not self.queue or self.view == 'deleted': return
+        if self.fetching or self.queue_end or len(self.queue) >= REFILL or not self.queue or self.view == 'deleted': return
         self.fetching = True; anchor = self.queue[-1]['id']; generation = self.generation; view = self.view; library = self.library
         def done(rows):
-            self.fetching = False
-            if generation != self.generation: return
+            if generation != self.generation: return   # a newer load owns the fetching flag now
+            self.fetching = False; self.queue_end = len(rows) < PAGE
             ids = {p['id'] for p in self.queue}; self.queue.extend(p for p in rows if p['id'] not in ids and p['id'] not in self.inflight)
             self.render(); self.prefetch()
         def failed(message):
-            self.fetching = False
+            if generation == self.generation: self.fetching = False
         self.submit(lambda: library.list_photos(view, anchor, 'next', PAGE), done, failed)
 
     # ---- previews -----------------------------------------------------------
@@ -359,7 +411,11 @@ class Window(QMainWindow):
         size = QSize(max(320, round(view.width() * dpr)), max(240, round(view.height() * dpr)))
         old = self.display_size
         if old is None or abs(size.width() - old.width()) > old.width() * .06 or abs(size.height() - old.height()) > old.height() * .06:
-            self.display_size = size; return old is not None
+            self.display_size = size
+            # Pane-sized RGB32 preview plus its strip thumbnail.
+            self.ahead_target = machine.PROFILE.buffer(size.width() * size.height() * 4 + 160 * 110 * 4)
+            self.cache_limit = self.ahead_target + BEHIND
+            return old is not None
         return False
 
     def resized(self):
@@ -375,9 +431,9 @@ class Window(QMainWindow):
             self.loading.discard(pid); (image, _), (small, _), source = result
             pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(dpr)
             self.cache[pid] = pixmap; self.cache_size[pid] = size; self.sources[pid] = source[0]; self.cache.move_to_end(pid)
-            if len(self.cache) > CACHE:
-                ahead = {p['id'] for p in self.queue[:AHEAD]}
-                for old in [k for k in self.cache if k not in ahead][:len(self.cache) - CACHE]:
+            if len(self.cache) > self.cache_limit:
+                ahead = {p['id'] for p in self.queue[:self.ahead_target]}
+                for old in [k for k in self.cache if k not in ahead][:len(self.cache) - self.cache_limit]:
                     self.cache.pop(old); self.cache_size.pop(old, None); self.sources.pop(old, None)
             icon = QPixmap.fromImage(small); icon.setDevicePixelRatio(dpr); self.thumb_cache[pid] = icon
             while len(self.thumb_cache) > 64: self.thumb_cache.popitem(last=False)
@@ -392,20 +448,24 @@ class Window(QMainWindow):
             for pane in self.photos:
                 if pane.photo and pane.photo['id'] == pid and not pane.detail: pane.show_photo(pane.photo, error=message)
             self.update_thumbnail(pid); self.update_actions(); self.prefetch()
-        self.submit(lambda: display_image(library.preview_image(pid, 1600), size.width(), size.height(), thumb), done, failed, self.image_pool, priority)
+        gate = self.display_gate
+        def work():
+            image = library.preview_image(pid, 1600)   # may wait for a decoder process, without holding the gate
+            with gate: return display_image(image, size.width(), size.height(), thumb)
+        self.submit(work, done, failed, self.image_pool, priority)
 
     def prefetch(self):
         if self.view == 'deleted' or self.display_size is None: return
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
-        for index, photo in enumerate(self.queue[:AHEAD]):
-            if len(self.loading) >= DECODE_SLOTS + 1: break
-            self.request_image(photo, 100 - index)
+        for index, photo in enumerate(self.queue[:self.ahead_target]):
+            if len(self.loading) >= self.in_flight: break
+            self.request_image(photo, 1000 - index)
         # Beyond that, build disk previews ahead with every decoder, but only once the nearest photos are ready.
-        library = self.library; limit = 0 if self.loading else DECODE_SLOTS
+        library = self.library; limit = 0 if self.loading else self.workers
         if len(self.warming) >= limit: return
         # Previews average roughly 0.4 MB; never warm further ahead than 40% of the disk cache holds.
-        horizon = min(WARM, max(AHEAD, int(library.cache_limit * .4 / 400_000)))
-        for photo in self.queue[AHEAD:horizon]:
+        horizon = min(WARM, max(self.ahead_target, int(library.cache_limit * .4 / 400_000)))
+        for photo in self.queue[self.ahead_target:horizon]:
             if len(self.warming) >= limit: break
             pid = photo['id']
             if pid in self.warming or pid in self.warmed or pid in self.cache: continue
@@ -494,10 +554,11 @@ class Window(QMainWindow):
         item.setOpacity(start); self.track(animate(self, duration, step, theme.EASE, None, start, end))
 
     def ghost(self, pane):
-        if pane.detail or not pane.item: return None
+        # The pane's own pixmap, not a viewport grab: no re-render on the keypress frame, whatever composites the window.
+        if pane.detail or not pane.item or not pane.pixmap: return None
         rect = pane.content_rect()
         if rect.isEmpty(): return None
-        return Ghost(self.centralWidget(), pane.viewport().grab(rect), QRect(pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size()))
+        return Ghost(self.centralWidget(), pane.pixmap, QRect(pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size()))
 
     def begin_transition(self):
         """Snapshot both panes before the queue moves; held keys get instant swaps instead."""
@@ -539,6 +600,7 @@ class Window(QMainWindow):
 
     # ---- actions ------------------------------------------------------------
     def act(self, action):
+        self.updates.touch()
         if action not in ('keep', 'delete') or self.closing: return
         if not self.keep_button.isEnabled():
             if self.queue and self.view != 'deleted' and not self.busy and not self.job_running(): self.nudge()
@@ -548,7 +610,7 @@ class Window(QMainWindow):
         self.render(); self.play_transition(action, ghosts); self.prefetch(); self.refill()
         if action == 'delete':
             self.delete_streak += 1
-            self.toast.show_message('已移到暂存 · ← 恢复' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · ← 恢复', 'delete')
+            self.toast_pending = '已移到暂存 · ← 恢复' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · ← 恢复'; self.refresh_chrome()
         elif self.delete_streak and not self.toast.isVisible():
             self.delete_streak = 0
         def done(result):
@@ -562,15 +624,18 @@ class Window(QMainWindow):
         self.op((lambda: library.mark(pid, 1)) if action == 'keep' else (lambda: library.trash(pid)), done, failed)
 
     def next_photo(self):
+        self.updates.touch()
         if self.busy or self.view == 'deleted' or not self.queue: return
         ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
 
     def strip_select(self, item):
+        self.updates.touch()
         if self.busy: return
         pid = item.data(ROLE); index = next((i for i, p in enumerate(self.queue) if p['id'] == pid), None)
         if index: self.finish_motion(); self.queue = self.queue[index:]; self.render(); self.prefetch(); self.refill()
 
     def restore(self, photo_id=None, general=False):
+        self.updates.touch()
         if self.busy or self.closing: return
         library = self.library; generation = self.generation
         def work():
@@ -616,6 +681,7 @@ class Window(QMainWindow):
                 photo = pane.photo; pane.unzoom(lambda pane=pane: self.reset_pane(pane)); self.caption(self.photos.index(pane), photo)
 
     def focus(self, photo, point=None):
+        self.updates.touch()
         sender = self.sender()
         pane = sender if isinstance(sender, PhotoView) else next((v for v in self.photos if v.photo and v.photo['id'] == photo['id']), None)
         if pane is None or not pane.pixmap: return
@@ -660,6 +726,7 @@ class Window(QMainWindow):
 
     # ---- folders --------------------------------------------------------------
     def choose_source(self):
+        self.updates.touch()
         start = (self.state_data or {}).get('root') or str(Path.home())
         folder = QFileDialog.getExistingDirectory(self, '选择照片文件夹', start)
         if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
@@ -742,6 +809,7 @@ class Window(QMainWindow):
 
     # ---- export -------------------------------------------------------------------
     def export_dialog(self):
+        self.updates.touch()
         dialog = QDialog(self); dialog.setWindowTitle('导出保留的照片'); dialog.setFixedWidth(560)
         layout = QVBoxLayout(dialog); layout.setContentsMargins(28, 24, 28, 22); layout.setSpacing(10)
         count = self.counts.get('keep', 0); heading = QLabel('导出保留的照片'); heading.setObjectName('heading'); layout.addWidget(heading)
@@ -782,13 +850,34 @@ class Window(QMainWindow):
             # Queued keeps and deletions finish first; the window stays responsive and closes by itself.
             self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项筛选记录…', 'info', 2000)
             event.ignore(); QTimer.singleShot(120, self.close); return
-        for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer): timer.stop()
+        for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer): timer.stop()
         self.closed = True
         self.op_pool.waitForDone()
         for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()
         if self.decoders: self.decoders.close()
         if self.cursor_id: self.library.remember('cursor', self.cursor_id)
         event.accept()
+
+COMPOSITING = {'gpu': False}
+
+
+def configure_compositing(settings, windows=os.name == 'nt'):
+    """GPU compositing on Windows: the window is composed with Direct3D 11 through Qt's RHI, and Qt itself falls back
+    to WARP software rendering when no GPU device can be created. A launch that never reached a healthy window
+    turns it off for the next start. Must run before QApplication exists."""
+    COMPOSITING['gpu'] = False
+    if 'QT_WIDGETS_RHI' in os.environ and not os.environ.get('PHOTOSIEVE_RHI_AUTO'):
+        COMPOSITING['gpu'] = os.environ['QT_WIDGETS_RHI'] == '1'; return   # set by hand for an A/B test
+    for name in ('QT_WIDGETS_RHI', 'QT_WIDGETS_RHI_BACKEND', 'PHOTOSIEVE_RHI_AUTO'): os.environ.pop(name, None)
+    if not windows or os.environ.get('QT_QPA_PLATFORM', '').startswith(('offscreen', 'minimal')): return
+    if settings.value('gpu_pending', False, type=bool):
+        settings.setValue('gpu_compositing', False); settings.setValue('gpu_fell_back', True)
+    settings.setValue('gpu_pending', False)
+    if settings.value('gpu_compositing', True, type=bool):
+        os.environ.update(QT_WIDGETS_RHI='1', QT_WIDGETS_RHI_BACKEND='d3d11', PHOTOSIEVE_RHI_AUTO='1')
+        settings.setValue('gpu_pending', True); COMPOSITING['gpu'] = True
+    settings.sync()
+
 
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == '--apply-update':
@@ -797,15 +886,18 @@ def main():
         except Exception:
             Path(sys.argv[2]).with_name('helper-error.txt').write_text(traceback.format_exc(), encoding='utf-8'); return 1
     parser = argparse.ArgumentParser(description='照片快筛 · 原生 Qt 桌面版')
-    parser.add_argument('--folder'); parser.add_argument('--data-dir', type=Path); parser.add_argument('--cache-mb', type=int, default=2048)
+    parser.add_argument('--folder'); parser.add_argument('--data-dir', type=Path)
+    parser.add_argument('--cache-mb', type=int, help='磁盘预览缓存（MB）；默认取缓存盘可用空间的 5%%，2 到 20 GB')
     parser.add_argument('--self-test-output', type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args(); application = QApplication(sys.argv[:1]); application.setStyleSheet(STYLE)
+    args = parser.parse_args(); settings = QSettings('PhotoSieve', 'PhotoSieve')
+    if not args.self_test_output: configure_compositing(settings)
+    machine.interface_qos(); machine.fine_timer()
+    application = QApplication(sys.argv[:1]); application.setStyleSheet(STYLE)
     if args.self_test_output:
         from diagnostics import run
         return run(application, args.self_test_output)
-    if args.cache_mb < 64: parser.error('缓存至少 64 MB')
+    if args.cache_mb is not None and args.cache_mb < 64: parser.error('缓存至少 64 MB')
     default_directory = Path.home() / '.photo-sieve'
-    settings = QSettings('PhotoSieve', 'PhotoSieve')
     directory = args.data_dir or (default_directory if args.folder else Path(settings.value('library', str(default_directory))))
     try:
         lockpath = Path.home() / '.photo-sieve'; lockpath.mkdir(parents=True, exist_ok=True)
@@ -820,9 +912,14 @@ def main():
         library = Library(directory, args.cache_mb); settings.setValue('library', str(library.directory)); window = Window(library, decoders=Decoders())
         screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60)); window.show()
         if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
+        if COMPOSITING['gpu']: QTimer.singleShot(3000, lambda: settings.setValue('gpu_pending', False))   # the GPU-composed window is healthy
+        if settings.value('gpu_fell_back', False, type=bool):
+            settings.setValue('gpu_fell_back', False)
+            QTimer.singleShot(800, lambda: window.toast.show_message('上次以 GPU 合成启动未成功，已改用 CPU 合成；可在 ⋯ 中重新开启', 'error', 5000))
     except Exception:
         QMessageBox.critical(None, '无法启动照片快筛', traceback.format_exc()); return 1
-    return application.exec()
+    result = application.exec(); settings.setValue('gpu_pending', False)
+    return result
 
 
 if __name__ == '__main__':

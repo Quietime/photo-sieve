@@ -1,5 +1,9 @@
 """Design tokens, stylesheet and motion curves (Apple dark system colours)."""
-from PySide6.QtCore import QEasingCurve, QPointF, QVariantAnimation
+import time
+
+from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
+from shiboken6 import isValid
 
 BG = '#000000'
 ELEVATED = '#1C1C1E'
@@ -82,16 +86,97 @@ EASE = bezier(.25, .1, .25, 1)
 SNAPPY = bezier(.32, .72, 0, 1)
 
 
+class Motion(QObject):
+    """One animation on the shared FrameClock. It offers the QVariantAnimation calls the app relies on:
+    stop() ends it silently, setCurrentTime(duration()) jumps to the end, finished fires on completion."""
+    finished = Signal()
+
+    def __init__(self, owner, duration, step, curve, start, end):
+        super().__init__(owner)
+        self.length = max(1, int(duration)); self.step = step; self.curve = curve
+        self.start_value = float(start); self.end_value = float(end); self.began = time.perf_counter(); self.running = True
+
+    def duration(self):
+        return self.length
+
+    def apply(self, progress):
+        eased = self.curve.valueForProgress(progress)
+        self.step(self.start_value + (self.end_value - self.start_value) * eased)
+
+    def advance(self, now):
+        progress = min(1.0, (now - self.began) * 1000 / self.length)
+        self.apply(progress)
+        if progress >= 1.0:
+            self.complete()
+
+    def setCurrentTime(self, ms):
+        if not self.running:
+            return
+        if ms >= self.length:
+            self.apply(1.0); self.complete()
+        else:
+            self.began = time.perf_counter() - ms / 1000; self.apply(ms / self.length)
+
+    def stop(self):
+        if self.running:
+            self.running = False; clock().remove(self)
+
+    def complete(self):
+        if self.running:
+            self.running = False; clock().remove(self); self.finished.emit(); self.deleteLater()
+
+
+class FrameClock(QObject):
+    """One precise timer at the display's refresh rate drives every animation (4 ms on a 240 Hz panel,
+    16 ms at 60 Hz), instead of Qt's fixed ~60 Hz animation timer."""
+    def __init__(self):
+        super().__init__(); self.motions = []
+        self.timer = QTimer(self); self.timer.setTimerType(Qt.TimerType.PreciseTimer); self.timer.timeout.connect(self.tick)
+
+    @staticmethod
+    def interval(owner=None):
+        screen = owner.screen() if hasattr(owner, 'screen') else None
+        screen = screen or QGuiApplication.primaryScreen()
+        rate = screen.refreshRate() if screen else 60.0
+        return max(2, int(1000 / max(30.0, min(rate or 60.0, 500.0))))
+
+    def add(self, motion, owner):
+        self.motions.append(motion); interval = self.interval(owner)
+        if not self.timer.isActive() or interval < self.timer.interval():
+            self.timer.start(interval)
+
+    def remove(self, motion):
+        if motion in self.motions:
+            self.motions.remove(motion)
+        if not self.motions:
+            self.timer.stop()
+
+    def tick(self):
+        now = time.perf_counter()
+        for motion in list(self.motions):
+            if not isValid(motion) or not motion.running:
+                self.remove(motion); continue
+            try:
+                motion.advance(now)
+            except RuntimeError:   # its widget was destroyed mid-animation
+                motion.running = False; self.remove(motion)
+
+
+_clock = None
+
+
+def clock():
+    global _clock
+    if _clock is None:
+        _clock = FrameClock()
+    return _clock
+
+
 def animate(owner, duration, step, curve=SNAPPY, done=None, start=0.0, end=1.0):
-    """Drive step(value) from start to end; the animation is parented to owner so it is never collected early."""
-    animation = QVariantAnimation(owner)
-    animation.setStartValue(float(start))
-    animation.setEndValue(float(end))
-    animation.setDuration(duration)
-    animation.setEasingCurve(curve)
-    animation.valueChanged.connect(step)
+    """Drive step(value) from start to end at the display's refresh rate; parented to owner, never collected early."""
+    motion = Motion(owner, duration, step, curve, start, end)
     if done:
-        animation.finished.connect(done)
-    animation.finished.connect(animation.deleteLater)
-    animation.start()
-    return animation
+        motion.finished.connect(done)
+    motion.apply(0.0)
+    clock().add(motion, owner)
+    return motion

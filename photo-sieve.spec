@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
 binaries = collect_dynamic_libs('rawpy') + collect_dynamic_libs('pillow_heif')
 datas = collect_data_files('pillow_heif')
-a = Analysis(['desktop.py'], pathex=[], binaries=binaries, datas=datas,
+a = Analysis(['photosieve.py'], pathex=[], binaries=binaries, datas=datas,
     hiddenimports=['rawpy', 'pillow_heif', 'PIL.JpegImagePlugin', 'PIL.TiffImagePlugin', 'PIL.PngImagePlugin'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=['PySide6.QtWebEngineCore','PySide6.QtWebEngineWidgets','PySide6.QtWebEngineQuick',

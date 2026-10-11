@@ -19,5 +19,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-.venv\Scripts\python.exe desktop.py %*
+.venv\Scripts\python.exe photosieve.py %*
 pause

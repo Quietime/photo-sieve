@@ -350,6 +350,42 @@ class LibraryTest(unittest.TestCase):
         Image.new('RGB', (1616, 1080), 'white').save(source)
         self.assertEqual(Library.decode(source, 1600).size, (1616, 1080))
 
+    def mpo(self, name, preview_size, orientation=1):
+        main = Image.new('RGB', (3000, 2000), 'red'); exif = Image.Exif(); exif[274] = orientation
+        path = self.base / name
+        main.save(path, format='MPO', save_all=True, append_images=[Image.new('RGB', preview_size, 'blue')], exif=exif)
+        return path
+
+    def test_camera_jpeg_preview_is_decoded_from_its_mpf_preview(self):
+        path = self.mpo('sony.jpg', (1616, 1077), orientation=6)
+        image = Library.decode(path, 1600)
+        self.assertEqual(image.size, (1077, 1616))                       # main image's orientation applied
+        self.assertEqual(image.getpixel((500, 500))[2] > 200, True)      # pixels come from the embedded preview
+        # Letterboxed (different shape) or small previews are ignored; the photo itself is decoded instead.
+        for name, size in (('letterbox.jpg', (1920, 1080)), ('small.jpg', (640, 427))):
+            image = Library.decode(self.mpo(name, size), 1600)
+            self.assertEqual(image.size, (1600, 1067)); self.assertGreater(image.getpixel((500, 500))[0], 200)
+        # 100% zoom still decodes the original at full size.
+        self.assertEqual(Library.decode(path, 0).size, (2000, 3000))
+
+    def test_spinning_disk_reads_happen_inside_the_gate_and_decode_after(self):
+        events = []
+        class Gate:
+            def __enter__(self): events.append('enter')
+            def __exit__(self, *args): events.append('exit')
+        source = Path(self.lib.list_photos()[0]['path'])
+        original_read = Path.read_bytes
+        def read_bytes(path):
+            events.append('read'); return original_read(path)
+        with patch.object(Path, 'read_bytes', read_bytes):
+            gated = Library.decode(source, 1600, Gate())
+        self.assertEqual(events, ['enter', 'read', 'exit'])
+        self.assertEqual(gated.tobytes(), Library.decode(source, 1600).tobytes())
+        self.lib.rotational = True
+        self.assertIs(self.lib.gate(), self.lib.read_gate)
+        self.lib.rotational = False
+        self.assertIsNone(self.lib.gate())
+
     def test_decoder_process_builds_previews_and_reports_failures(self):
         photos = self.lib.list_photos()
         with ProcessPoolExecutor(1, multiprocessing.get_context('spawn'), lower_priority) as pool:
@@ -379,11 +415,11 @@ class LibraryTest(unittest.TestCase):
         photo = self.lib.list_photos()[0]
         entered, release = threading.Event(), threading.Event()
         original_decode = self.lib.decode
-        def slow_decode(path, edge):
+        def slow_decode(path, edge, gate=None):
             entered.set()
             release.wait(3)
             self.assertTrue(path.exists())
-            return original_decode(path, edge)
+            return original_decode(path, edge, gate)
         with patch.object(self.lib, 'decode', side_effect=slow_decode), ThreadPoolExecutor(max_workers=2) as pool:
             preview = pool.submit(self.lib.preview, photo['id'], 320)
             self.assertTrue(entered.wait(3))

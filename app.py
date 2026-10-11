@@ -1,7 +1,7 @@
 """Photo Sieve: local dual-photo review with persistent undoable deletion."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import errno
 import hashlib
 import io
@@ -16,6 +16,8 @@ import time
 
 from PIL import Image, ImageFile, ImageOps
 
+import machine
+
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
@@ -29,8 +31,12 @@ TRASH_DIRECTORY = '.photo-sieve-trash'
 # Pillow re-takes the GIL after every block it reads; with 64 KB blocks a 20 MB photo decoding beside
 # other threads waits on the GIL hundreds of times (10x slower). Larger blocks avoid that convoy.
 ImageFile.MAXBLOCK = 4 * 1024 * 1024
-# Previews decode in parallel; leave one core for the interface thread.
-DECODE_SLOTS = max(2, min(8, (os.cpu_count() or 4) - 1))
+# Previews decode in parallel, scaled to this computer's cores (8P+16E i9-14900HX: 12 decoders).
+DECODE_SLOTS = machine.PROFILE.decoders()
+# Set in decoder processes: limits how many read a spinning disk at once, so its head is not thrashed.
+READ_GATE = None
+ORIENTATION = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM,
+               5: Image.Transpose.TRANSPOSE, 6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE, 8: Image.Transpose.ROTATE_90}
 
 
 class LibraryError(Exception):
@@ -41,9 +47,10 @@ class LibraryError(Exception):
 
 
 class Library:
-    def __init__(self, directory: Path, cache_mb=2048):
+    def __init__(self, directory: Path, cache_mb=None):
         self.directory = directory.resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
+        cache_mb = cache_mb or machine.cache_default_mb(self.directory)
         self.cache = self.directory / 'cache'
         self.cache.mkdir(exist_ok=True)
         self.database = self.directory / 'library.sqlite3'
@@ -58,6 +65,7 @@ class Library:
         self.job = {'revision': secrets.token_hex(8), 'running': False, 'kind': '', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
         self.offload = None
+        self.read_gate = threading.BoundedSemaphore(2); self.rotational = None
         with self.connect() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -110,6 +118,9 @@ class Library:
             db.execute("UPDATE export_files SET result='failed',error='上次任务被中断，请检查目标文件后再重试' WHERE result IN ('pending','working')")
             db.execute('UPDATE export_batches SET completed_at=? WHERE completed_at IS NULL', (time.time(),))
         self.prune_cache()
+        root = self.meta('root')
+        if root and os.path.isdir(root):
+            self.rotational = machine.seek_penalty(root)
 
     @contextmanager
     def connect(self):
@@ -167,6 +178,7 @@ class Library:
         old = self.meta('root')
         if old and Path(old) != root:
             raise LibraryError(409, '此资料库已绑定其他文件夹。请用 --data-dir 指定新资料库，以保留原筛选记录。')
+        self.rotational = machine.seek_penalty(root)
         def work():
             self.remember('root', str(root))
             self._scan(root)
@@ -569,7 +581,7 @@ class Library:
                 return Image.open(io.BytesIO(cached)) if as_image else cached
             # A decoder process does the work when available; this thread keeps the photo's lock, so a delete still waits.
             if (self.offload and (edge == 1600 or edge == 320 and not self.cache_path(original, stat.st_size, stat.st_mtime_ns, 1600).exists())
-                    and self.offload(str(source), str(original), stat.st_size, stat.st_mtime_ns, str(self.cache))):
+                    and self.offload(str(source), str(original), stat.st_size, stat.st_mtime_ns, str(self.cache), bool(self.rotational))):
                 cached = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, edge)
                 if cached is None:
                     raise ValueError('预览未能写入缓存')
@@ -584,11 +596,11 @@ class Library:
                         image = self.shrink(self.upright(im), 320)
                 elif edge == 320:
                     # The strip also warms the review preview with one original-file decode.
-                    image = self.decode(source, 1600)
+                    image = self.decode(source, 1600, self.gate())
                     self.save_cache(larger, image)
                     image = self.shrink(image, 320)
                 else:
-                    image = self.decode(source, edge)
+                    image = self.decode(source, edge, self.gate() if edge else None)
                 payload = self.save_cache(target, image, quality=96 if edge == 0 else 90)
                 if edge == 1600:
                     self.save_cache(self.cache_path(original, stat.st_size, stat.st_mtime_ns, 320), self.shrink(image, 320))
@@ -597,40 +609,87 @@ class Library:
         except Exception as exc:
             raise LibraryError(422, f'无法预览：{exc}。HEIC 需要 pillow-heif；RAW 需要 rawpy。')
 
+    def gate(self):
+        """The read gate when the library's photos are on a spinning disk."""
+        return self.read_gate if self.rotational else None
+
     @staticmethod
-    def decode(source, edge):
+    def decode(source, edge, gate=None):
+        """Decode for a preview of edge pixels (0 for the full image). gate, when given, is held only while the
+        file is read: decoding happens after the disk is free for the next photo."""
+        reading = gate or nullcontext()
         if source.suffix.lower() in RAW:
             try:
                 import rawpy
             except ImportError:
                 raise ValueError('请安装 rawpy 才能预览 RAW')
-            with rawpy.imread(str(source)) as raw:
-                if edge == 0:
+            if edge == 0:
+                with rawpy.imread(str(source)) as raw:
                     # Focus inspection uses the sensor image, not the small embedded JPEG.
                     return Image.fromarray(raw.postprocess(use_camera_wb=True, no_auto_bright=True))
+            thumb = None
+            # LibRaw reads only the embedded preview here (about 1.5 MB of a 25 MB Sony ARW).
+            with reading, rawpy.imread(str(source)) as raw:
                 flip = raw.sizes.flip
-                needs_rotation = False
                 try:
                     thumb = raw.extract_thumb()
-                    if thumb.format == rawpy.ThumbFormat.JPEG:
-                        with Image.open(io.BytesIO(thumb.data)) as im:
-                            needs_rotation = im.getexif().get(274, 1) == 1
-                            image = Library.upright(im)
-                    else:
-                        image = Image.fromarray(thumb.data)
-                        needs_rotation = True
                 except rawpy.LibRawNoThumbnailError:
                     image = Image.fromarray(raw.postprocess(half_size=True, use_camera_wb=True))
+            needs_rotation = False
+            if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
+                with Image.open(io.BytesIO(thumb.data)) as im:
+                    needs_rotation = im.getexif().get(274, 1) == 1
+                    image = Library.upright(im)
+            elif thumb is not None:
+                image = Image.fromarray(thumb.data)
+                needs_rotation = True
             # RAW embedded preview orientation varies by camera; rawpy's LibRaw flip describes it.
             if needs_rotation and flip in (3, 5, 6):
                 image = image.rotate({3: 180, 5: 90, 6: 270}[flip], expand=True)
         else:
-            with Image.open(source) as im:
-                if edge:
-                    im.draft('RGB', (edge, edge))
-                image = Library.upright(im)
+            data = None
+            with reading, Image.open(source) as im:
+                if edge and im.format == 'MPO':
+                    preview = Library.mpf_preview(im, edge)
+                    if preview is not None:
+                        return preview
+                if gate:
+                    data = source.read_bytes()   # one sequential read instead of many small seeks
+                else:
+                    if edge:
+                        im.draft('RGB', (edge, edge))
+                    image = Library.upright(im)
+            if data is not None:
+                with Image.open(io.BytesIO(data)) as im:
+                    if edge:
+                        im.draft('RGB', (edge, edge))
+                    image = Library.upright(im)
         # Embedded RAW previews are often a few pixels over 1600; resampling those buys nothing.
         return Library.shrink(image, edge) if edge and max(image.size) > edge * 1.05 else image
+
+    @staticmethod
+    def mpf_preview(im, edge):
+        """Camera JPEGs (Sony among them) often carry a second, roughly 1616 px image in their MPF index. Decoding
+        only that one reads about 1 MB instead of the whole file and is ten times faster. None when there is no
+        suitable preview; the full image is then decoded as before."""
+        try:
+            width, height = im.size; orientation = im.getexif().get(274, 1)
+            for frame in range(1, getattr(im, 'n_frames', 1)):
+                im.seek(frame)
+                w, h = im.size
+                # A letterboxed or cropped preview would misrepresent the photo; only a same-shape one is used.
+                if max(w, h) >= 1200 and abs(w / h - width / height) < .02:
+                    im.draft('RGB', (edge, edge)); im.load()
+                    image = im.convert('RGB')
+                    method = ORIENTATION.get(orientation)
+                    return image.transpose(method) if method else image
+        except Exception:
+            pass
+        try:
+            im.seek(0)
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def upright(im):
@@ -656,21 +715,20 @@ def cache_file(cache, source, size, mtime, edge):
 
 
 def lower_priority():
-    """Decoder-process initializer: yield the CPU to the interface whenever both want it."""
-    try:
-        if os.name == 'nt':
-            import ctypes
-            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)   # BELOW_NORMAL_PRIORITY_CLASS
-        else:
-            os.nice(5)
-    except (OSError, AttributeError):
-        pass
+    """Decoder-process initializer: yield the CPU to the interface whenever both want it, but never be slowed by
+    Windows EcoQoS (which would hold efficiency cores at low clock speed)."""
+    machine.below_normal(); machine.decoder_qos()
 
 
-def build_preview(source, original, size, mtime, cache):
+def decoder_init(gate=None):
+    global READ_GATE
+    READ_GATE = gate; lower_priority()
+
+
+def build_preview(source, original, size, mtime, cache, rotational=False):
     """Decoder-process entry: decode an original once and store its 1600 and 320 previews in the disk cache."""
     try:
-        image = Library.decode(Path(source), 1600)
+        image = Library.decode(Path(source), 1600, READ_GATE if rotational else None)
         Library.save_cache(cache_file(cache, original, size, mtime, 1600), image)
         Library.save_cache(cache_file(cache, original, size, mtime, 320), Library.shrink(image, 320))
     except Exception as exc:

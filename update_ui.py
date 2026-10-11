@@ -2,7 +2,9 @@
 from pathlib import Path
 import sys
 import time
-from PySide6.QtCore import QObject, Signal, QTimer, QSettings, QEvent, QUrl
+import ctypes
+import os
+from PySide6.QtCore import QObject, Signal, QTimer, QSettings, QUrl
 from PySide6.QtGui import QDesktopServices
 from version import APP_VERSION
 import updater
@@ -14,14 +16,23 @@ class UpdateController(QObject):
         super().__init__(window);self.window=window;self.settings=QSettings('PhotoSieve','PhotoSieve')
         self.running=False;self.staged=None;self.last_activity=time.monotonic();self.installing=False;self.status=''
         self.progress.connect(lambda done,total:self.show(f'下载更新：{done*100//max(1,total)}%'))
-        window.installEventFilter(self)
-        from PySide6.QtWidgets import QApplication
-        QApplication.instance().installEventFilter(self)
         self.timer=QTimer(self);self.timer.timeout.connect(self.maybe_install);self.timer.start(1000)
         if check_on_start and getattr(sys,'frozen',False) and self.auto_enabled():QTimer.singleShot(2500,lambda:self.check(False))
-    def eventFilter(self, watched, event):
-        if event.type() in (QEvent.Type.KeyPress,QEvent.Type.MouseButtonPress,QEvent.Type.Wheel):self.last_activity=time.monotonic()
-        return False
+    def touch(self):
+        # Called from the window's own actions. An application-wide event filter would route every Qt event
+        # through Python, which cost the interface thread about 8% while keys were held.
+        self.last_activity=time.monotonic()
+    def idle_seconds(self):
+        idle=time.monotonic()-self.last_activity
+        if os.name=='nt':
+            # Mouse, wheel and typing anywhere count too: GetLastInputInfo gives the system-wide idle time.
+            class LASTINPUTINFO(ctypes.Structure):_fields_=[('cbSize',ctypes.c_uint),('dwTime',ctypes.c_uint)]
+            info=LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO))
+            try:
+                if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+                    idle=min(idle,((ctypes.windll.kernel32.GetTickCount()-info.dwTime)&0xFFFFFFFF)/1000)
+            except (AttributeError,OSError):pass
+        return idle
     def show(self,message,toast=False):
         # Status lives in the ⋯ menu; only results the user asked about surface as a toast.
         self.status=message
@@ -47,7 +58,7 @@ class UpdateController(QObject):
             self.window.submit(lambda:updater.download_release(release,token,self.progress.emit),downloaded,failed)
         self.window.submit(lambda:updater.check_release(token),checked,failed)
     def maybe_install(self):
-        if self.staged and self.auto_enabled() and time.monotonic()-self.last_activity>=30:self.install()
+        if self.staged and self.auto_enabled() and self.idle_seconds()>=30:self.install()
     def install(self):
         w=self.window
         if w.closed or not self.staged or self.installing:return
