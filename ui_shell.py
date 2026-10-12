@@ -67,7 +67,7 @@ class TitleBar(QWidget):
         self.label=QLabel(title or window.windowTitle()); row.addWidget(self.label); row.addStretch()
         if not main: self.label.setObjectName('heading')
         if main:
-            self.add_button(row,'−','最小化',window.showMinimized)
+            self.min_button=self.add_button(row,'−','最小化',window.showMinimized)
             self.max_button=self.add_button(row,'□','最大化 / 还原',self.toggle_max)
         self.add_button(row,'×','关闭',window.close)
 

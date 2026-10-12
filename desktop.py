@@ -470,16 +470,21 @@ class Window(QMainWindow):
         if not enabled:
             if self.fps_label: self.removeEventFilter(self); self.fps_timer.stop(); self.fps_label.deleteLater(); self.fps_label = None
             return
+        if self.fps_label is not None:return
         self.installEventFilter(self)   # only while the meter is shown: every window event passes through Python
-        self.fps_label = QLabel(self.centralWidget()); self.fps_label.setObjectName('caption')
+        self.fps_label = QLabel(self.window_chrome); self.fps_label.setObjectName('caption')
+        self.fps_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.fps_label.setContentsMargins(8,0,8,0)
+        row=self.window_chrome.layout()
+        row.insertWidget(row.indexOf(self.window_chrome.min_button),self.fps_label)
         self.fps_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.frames = 0
         self.fps_timer = QTimer(self.fps_label); self.fps_timer.timeout.connect(self.tick_fps); self.fps_timer.start(1000); self.tick_fps()
         self.fps_label.show()
 
     def tick_fps(self):
         # Window frames actually composed in the last second (one UpdateRequest per frame).
-        self.fps_label.setText(f'{self.frames} 帧/秒'); self.frames = 0; self.fps_label.adjustSize()
-        self.fps_label.move(self.centralWidget().width() - self.fps_label.width() - 20, 68); self.fps_label.raise_()
+        if self.fps_label is None:return
+        self.fps_label.setText(f'{self.frames} 帧/秒'); self.frames = 0
 
     def eventFilter(self, watched, event):
         if watched is self and event.type() == QEvent.Type.UpdateRequest: self.frames += 1

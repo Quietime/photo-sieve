@@ -360,6 +360,27 @@ def run(output):
                 panel = audit.open_menu(window, '15_more_options_preferences')
                 audit.click(audit.button(panel, '显示帧率'))
                 audit.check('fps_toggle_operates', window.fps_label is not None)
+                panel.hide()
+                original_size=window.size()
+                def verify_fps(tag):
+                    application.processEvents()
+                    fps=window.fps_label
+                    rect=QRectF(fps.mapTo(window,QPoint(0,0)),fps.size())
+                    controls=[window.open_button,window.export_button,window.more_button,
+                        *window.window_chrome.findChildren(QAbstractButton)]
+                    audit.check(tag+'_no_button_overlap',all(not rect.intersects(
+                        QRectF(button.mapTo(window,QPoint(0,0)),button.size())) for button in controls))
+                    audit.check(tag+'_inside_title_bar',fps.parentWidget() is window.window_chrome
+                        and window.window_chrome.rect().contains(fps.geometry()))
+                    audit.screenshot(tag,window)
+                verify_fps('15a_fps_enabled')
+                fps=window.fps_label;window.show_fps(True)
+                audit.check('fps_repeated_enable_reuses_label',window.fps_label is fps)
+                window.frames=9999;window.tick_fps();window.resize(900,640)
+                verify_fps('15a2_fps_narrow_large_value')
+                window.showMaximized();verify_fps('15a3_fps_maximized')
+                window.showNormal();window.resize(original_size);panel.exec()
+
                 audit.click(audit.button(panel, '显示帧率'))
                 audit.check('fps_toggle_off_operates', window.fps_label is None)
                 audit.click(audit.button(panel, '减少动态效果'))
