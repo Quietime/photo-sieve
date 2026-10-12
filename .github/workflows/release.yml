@@ -78,6 +78,21 @@ jobs:
         run: python tools/check_performance.py --output performance-ci.json
       - name: Build native EXE
         run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
+      - name: Verify normal frozen startup, real folder picker and repeated RAW switches
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_frozen_runtime.py --output frozen-runtime-ci.json
+      - name: Preserve normal frozen runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-normal-runtime-diagnostics
+          path: |
+            frozen-runtime-ci.json
+            frozen-runtime-ci-*.png
+            frozen-runtime-ci-logs/**
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Create update package and checksums
         run: python package_release.py
       - name: Build Windows installer with selectable installation folder

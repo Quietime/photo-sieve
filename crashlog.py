@@ -112,6 +112,7 @@ class Session:
         LOGGER.addHandler(handler);LOGGER.setLevel(logging.INFO);self.handler=handler
         fault=(self.directory/'native-fault.log').open('a',encoding='utf-8',buffering=1)
         _files.append(fault);faulthandler.enable(fault,all_threads=True)
+        self.fault=fault;self.watchdog_timer=None;self.watchdog_interval=15
         self.original_hooks=(sys.excepthook,threading.excepthook)
         def exception(kind,value,tb):
             LOGGER.critical('Unhandled Python exception',exc_info=(kind,value,tb))
@@ -146,6 +147,7 @@ class Session:
     def update(self,force=False,**fields):
         with self.lock:
             self.state.update(fields)
+            if hasattr(self,'gui_heartbeat'):self.state['gui_heartbeat']=self.gui_heartbeat
             now=time.monotonic()
             if force or now-self.last_write>=1:
                 try:_write_state(self.path,self.state)
@@ -153,6 +155,8 @@ class Session:
                 self.last_write=now
 
     def finish(self,code=0):
+        if self.watchdog_timer:
+            self.watchdog_timer.stop();faulthandler.cancel_dump_traceback_later()
         self.update(force=True,status='finished' if code==0 else 'abnormal',ended=time.time(),exit_code=code)
         LOGGER.info('Session exited: %s',code)
         for handler in LOGGER.handlers:handler.flush()
@@ -203,3 +207,23 @@ def install_qt_handler():
 
 def finish(code=0):
     if SESSION:SESSION.finish(code)
+
+
+def install_gui_watchdog(application,timeout=15):
+    """A C-level watchdog also works when Python or Qt holds the GUI/GIL.
+
+    Only the GUI event loop can reset it. If that loop stops processing events,
+    faulthandler writes *all* thread stacks without requiring a crash first.
+    """
+    if not SESSION:return
+    from PySide6.QtCore import QTimer
+    session=SESSION;session.watchdog_interval=timeout
+    def beat():
+        session.gui_heartbeat=time.time()
+        faulthandler.dump_traceback_later(timeout,repeat=True,file=session.fault)
+    timer=QTimer(application);timer.setInterval(1000);timer.timeout.connect(beat)
+    session.watchdog_timer=timer
+    application.aboutToQuit.connect(timer.stop)
+    application.aboutToQuit.connect(faulthandler.cancel_dump_traceback_later)
+    beat();timer.start()
+    LOGGER.info('GUI watchdog active: stacks saved after %s seconds without a GUI heartbeat',timeout)

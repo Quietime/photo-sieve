@@ -51,6 +51,7 @@ class LibraryError(Exception):
 
 class Library:
     def __init__(self, directory: Path, cache_mb=None):
+        crashlog.event('workspace_initializing',directory=str(directory))
         self.directory = directory.resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         cache_mb = cache_mb or machine.cache_default_mb(self.directory)
@@ -71,6 +72,7 @@ class Library:
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
         self.offload = None
         self.read_gate = threading.BoundedSemaphore(2); self.rotational = None
+        crashlog.event('workspace_database',directory=str(self.directory))
         with self.connect() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -127,6 +129,7 @@ class Library:
                         db.execute('UPDATE photos SET present=0 WHERE id=?', (row['photo_id'],))
             db.execute("UPDATE export_files SET result='failed',error='上次任务被中断，请检查目标文件后再重试' WHERE result IN ('pending','working')")
             db.execute('UPDATE export_batches SET completed_at=? WHERE completed_at IS NULL', (time.time(),))
+        crashlog.event('workspace_cache',directory=str(self.directory))
         self.recount_cache(); self.prune_cache()
         root = self.meta('root')
         if root:
@@ -188,7 +191,7 @@ class Library:
                 raise LibraryError(409, '正在执行任务，请等待完成。')
             self.job = {'revision': secrets.token_hex(8), 'running': True, 'kind': kind, 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         def work():
-            crashlog.event('job_started',job=kind,library=str(self.directory))
+            crashlog.event('job_started',job=kind,library=str(self.directory),done=0,total=0,found=0,file='')
             try:
                 action()
                 self.job['message'] = '已完成'
@@ -211,7 +214,9 @@ class Library:
         old = self.meta('root')
         if old and Path(old) != root:
             raise LibraryError(409, '此资料库已绑定其他文件夹。请用 --data-dir 指定新资料库，以保留原筛选记录。')
-        self.rotational = machine.seek_penalty(root)
+        # Disk-driver queries are advisory. Never hold up starting an import on
+        # a slow removable-volume DeviceIoControl call.
+        threading.Thread(target=self.detect_disk,args=(str(root),),daemon=True).start()
         def work():
             self.remember('root', str(root))
             self._scan(root)
@@ -239,22 +244,31 @@ class Library:
         # Disk-backed inventory gives a real total without retaining every filename
         # in RAM; no RAW is opened until discovery and all index batches finish.
         with tempfile.TemporaryFile(mode='w+t',encoding='utf-8',dir=self.directory,prefix='scan-') as manifest:
-            for base, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+            pending=[root]
+            while pending:
+                base=pending.pop()
+                crashlog.event('scanning_directory',folder=str(root),directory=str(base),found=self.job['found'])
                 children=[]
-                for name in sorted(dirs):
-                    path=Path(base)/name
-                    try:
-                        resolved=path.resolve()
-                        if name.casefold()==TRASH_DIRECTORY.casefold() or path.is_symlink() or resolved==self.directory or resolved in excluded or resolved in visited:continue
-                        visited.add(resolved);children.append(name)
-                    except OSError as exc:walk_error(exc)
-                dirs[:]=children
-                for name in sorted(names):
-                    path=Path(base)/name
-                    if path.suffix.lower() not in EXTENSIONS or path.is_symlink():continue
-                    manifest.write(json.dumps(str(path),ensure_ascii=False)+'\n')
-                    self.job['found']+=1
-                    crashlog.progress(stage='discovering_photos',found=self.job['found'],folder=str(root))
+                try:
+                    # DirEntry carries the link/type flags from enumeration. On
+                    # Windows Path.is_symlink would otherwise re-stat every RAW
+                    # during discovery, before its metadata is read once again.
+                    with os.scandir(base) as entries:
+                        for entry in sorted(entries,key=lambda item:item.name):
+                            try:
+                                if entry.is_symlink():continue
+                                path=Path(entry.path)
+                                if entry.is_dir(follow_symlinks=False):
+                                    resolved=path.resolve()
+                                    if entry.name.casefold()==TRASH_DIRECTORY.casefold() or resolved==self.directory or resolved in excluded or resolved in visited:continue
+                                    visited.add(resolved);children.append(path)
+                                elif path.suffix.lower() in EXTENSIONS and entry.is_file(follow_symlinks=False):
+                                    manifest.write(json.dumps(str(path),ensure_ascii=False)+'\n')
+                                    self.job['found']+=1
+                                    crashlog.progress(stage='discovering_photos',found=self.job['found'],folder=str(root))
+                            except OSError as exc:walk_error(exc)
+                except OSError as exc:walk_error(exc)
+                pending.extend(reversed(sorted(children)))
             self.job.update(phase='导入照片',total=self.job['found'],done=0)
             manifest.seek(0)
             for line in manifest:

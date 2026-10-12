@@ -21,7 +21,7 @@ from PIL import Image
 # waits for the GIL near 1 ms instead of 5 ms while previews decode in the background.
 sys.setswitchinterval(.001)
 
-from PySide6.QtCore import Qt, Signal, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
+from PySide6.QtCore import Qt, Signal, Slot, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
 from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
@@ -140,6 +140,29 @@ class Result(QObject):
     fail = Signal(str)
 
 
+class Completion(QObject):
+    """An explicit GUI-thread receiver; workers never call UI closures directly."""
+    def __init__(self,window,ok,fail):
+        super().__init__(window);self.window=window;self.ok=ok;self.fail=fail;self.task=None
+
+    @Slot(object)
+    def succeeded(self,value):
+        try:
+            if not self.window.closed:self.ok(value)
+        finally:self.finish()
+
+    @Slot(str)
+    def failed(self,message):
+        try:
+            if not self.window.closed:(self.fail or self.window.error)(message)
+        finally:self.finish()
+
+    def finish(self):
+        self.window.tasks.discard(self.task)
+        self.task=None;self.ok=self.fail=None
+        self.deleteLater()
+
+
 class Work(QRunnable):
     def __init__(self, fn):
         super().__init__(); self.fn = fn; self.signals = Result()
@@ -157,6 +180,8 @@ class Window(QMainWindow):
     fps_label = None   # Qt sends events before __init__ finishes
 
     def __init__(self, library, check_updates=True, decoders=None, start_empty=False, prompt_on_close=False, data_root=None):
+        import gui_runtime
+        gui_runtime.install()
         super().__init__(); self.library = library; self.decoders = decoders; library.offload = decoders; self.setWindowTitle('照片快筛'); self.resize(1480, 960); self.setAcceptDrops(True)
         self.session_active = not start_empty; self.prompt_on_close = prompt_on_close; self.close_choice = None
         library.start_session()
@@ -251,15 +276,10 @@ class Window(QMainWindow):
     def submit(self, fn, ok=lambda _: None, fail=None, pool=None, priority=0):
         if self.closed: return   # late timers must not start work after the pools were drained
         task = Work(fn); self.tasks.add(task)
-        def success(value):
-            try:
-                if not self.closed: ok(value)
-            finally: self.tasks.discard(task)
-        def failure(message):
-            try:
-                if not self.closed: (fail or self.error)(message)
-            finally: self.tasks.discard(task)
-        task.signals.ok.connect(success); task.signals.fail.connect(failure); (pool or self.pool).start(task, priority)
+        completion=Completion(self,ok,fail);completion.task=task
+        task.signals.ok.connect(completion.succeeded,Qt.ConnectionType.QueuedConnection)
+        task.signals.fail.connect(completion.failed,Qt.ConnectionType.QueuedConnection)
+        (pool or self.pool).start(task, priority)
 
     def op(self, fn, done, failed):
         self.pending_ops += 1
@@ -995,8 +1015,10 @@ class Window(QMainWindow):
     # ---- folders --------------------------------------------------------------
     def choose_source(self):
         self.updates.touch()
+        crashlog.event('choosing_folder')
         start = (self.state_data or {}).get('root') or str(Path.home())
         folder = QFileDialog.getExistingDirectory(self, '选择照片文件夹', start)
+        crashlog.event('folder_chosen' if folder else 'folder_choice_cancelled',folder=folder)
         if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
 
     def scan(self, folder=None):
@@ -1005,13 +1027,14 @@ class Window(QMainWindow):
         folder = str(folder); self.session_active=True; self.state_data=None; current = self.library.meta('root')
         self.busy=True;self.importing=True;self.import_revision=None;self.update_actions();self.toast.hide()
         self.import_page.set_progress('正在打开筛选记录',folder=folder);self.stack.setCurrentIndex(3);self.place_overlays()
-        crashlog.event('opening_folder',folder=folder,preload_requested=self.preload_count)
+        crashlog.event('opening_folder',folder=folder,preload_requested=self.preload_count,done=0,total=0,found=0,file='')
         if (current and Path(current).resolve() != Path(folder).resolve()) or (self.managed_workspaces and (not current or not self.library.directory.is_relative_to(self.data_root.resolve()))):
             newdir = self.data_root / 'libraries' / hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
             def changed(library):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
                 self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
+                crashlog.event('workspace_ready',library=str(library.directory))
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed): store.clear()
                 self.reset_zoom(); self.state_data = None; self.state_pending = False; self.counts = {}
                 self.cursor_timer.stop(); self.cursor_id = 0; self.view = 'pending'; self.segments.set_current('pending', False)
@@ -1024,7 +1047,9 @@ class Window(QMainWindow):
         self.start_scan(self.library, folder)
 
     def start_scan(self, library, folder):
+        crashlog.event('starting_scan',folder=str(folder))
         def started(_):
+            crashlog.event('scan_notified',folder=str(folder))
             self.import_revision=library.job['revision']
             self.poll(); self.timer.start(180)
         def failed(message):
@@ -1237,6 +1262,8 @@ def main():
     parser.add_argument('--folder'); parser.add_argument('--data-dir', type=Path)
     parser.add_argument('--cache-mb', type=int, help='磁盘预览缓存（MB）；默认取缓存盘可用空间的 5%%，2 到 20 GB')
     parser.add_argument('--self-test-output', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--runtime-check-output',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--runtime-check-folders',nargs='+',help=argparse.SUPPRESS)
     args = parser.parse_args(); settings = QSettings('PhotoSieve', 'PhotoSieve')
     if os.name=='nt':
         import ctypes
@@ -1268,7 +1295,11 @@ def main():
             screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
             window.move(screen.center()-window.rect().center());window.show()
             crashlog.event('waiting_for_folder',gpu=COMPOSITING['gpu'])
-            if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
+            crashlog.install_gui_watchdog(application)
+            if args.runtime_check_output:
+                from runtime_check import install
+                install(window,args.runtime_check_output,args.runtime_check_folders or [])
+            elif args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
             # Keep gpu_pending until normal exit: an import/render crash can occur
             # well after the first three seconds of an apparently healthy startup.
             if settings.value('gpu_fell_back', False, type=bool):

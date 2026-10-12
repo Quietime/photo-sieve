@@ -164,8 +164,13 @@ class QFileDialog:
         dialog=RoundedFileDialog(parent,title,start); dialog.setOption(QtFileDialog.Option.DontUseNativeDialog)
         dialog.setFileMode(QtFileDialog.FileMode.Directory); dialog.setOption(QtFileDialog.Option.ShowDirsOnly)
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint); dialog.setWindowIcon(app_icon())
-        if dialog.exec(): return dialog.selectedFiles()[0]
-        return ''
+        # Dispose on the GUI thread. The dialog and its filesystem-model worker
+        # must not remain in a cycle for an indexing thread's GC to destroy.
+        try:
+            return dialog.selectedFiles()[0] if dialog.exec() else ''
+        finally:
+            dialog.deleteLater()
+
 
 class SettingsPanel(QFrame):
     """An anchored child panel: no top-level window and no focus-loss auto-dismiss."""
