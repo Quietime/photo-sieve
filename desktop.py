@@ -537,7 +537,9 @@ class Window(QMainWindow):
         self.submit(lambda: library.list_photos(view, anchor, 'next', 60 if view == 'deleted' else PAGE), done, failed)
 
     def refill(self):
-        if self.fetching or self.queue_end or len(self.queue) >= REFILL or not self.queue or self.view == 'deleted': return
+        horizon=min(self.warm_count,max(self.ahead_target,int(self.library.cache_limit*.4/400_000)))
+        needed=max(REFILL,self.ahead_target,horizon)
+        if self.fetching or self.queue_end or len(self.queue) >= needed or not self.queue or self.view == 'deleted': return
         self.fetching = True; anchor = self.queue[-1]['id']; generation = self.generation; view = self.view; library = self.library
         def done(rows):
             if generation != self.generation: return   # a newer load owns the fetching flag now
@@ -601,6 +603,7 @@ class Window(QMainWindow):
 
     def prefetch(self):
         if not self.session_active or self.cache_clearing or self.view == 'deleted' or self.display_size is None: return
+        self.refill()  # custom horizons can exceed the first 1,200 metadata rows
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
         for index, photo in enumerate(self.queue[:self.ahead_target]):
             if len(self.loading) >= self.in_flight: break

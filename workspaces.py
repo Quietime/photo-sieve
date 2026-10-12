@@ -2,6 +2,7 @@
 import hashlib
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 from app import Library
 
 def workspace_key(folder):
@@ -18,12 +19,12 @@ def open_workspace(root, folder, previous=None, cache_mb=None):
             source=candidate/'library.sqlite3'
             if not source.is_file() or source.resolve()==database.resolve(): continue
             try:
-                with sqlite3.connect(source.as_uri()+'?mode=ro',uri=True) as old:
+                with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as old:
                     row=old.execute("SELECT value FROM meta WHERE key='root'").fetchone()
                     if not row or Path(row[0]).resolve()!=Path(folder).resolve(): continue
                     target.mkdir(parents=True,exist_ok=True)
                     temporary=target/'migration.sqlite3'
-                    with sqlite3.connect(temporary) as new: old.backup(new)
+                    with closing(sqlite3.connect(temporary)) as new: old.backup(new)
                     temporary.replace(database)
                 break
             except sqlite3.Error:

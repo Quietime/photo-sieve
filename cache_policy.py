@@ -1,6 +1,6 @@
 """One oldest-first 10 GiB disk-preview budget across the installation's workspaces."""
 from pathlib import Path
-from contextlib import nullcontext
+from contextlib import nullcontext, closing
 import hashlib
 import sqlite3
 import time
@@ -18,7 +18,7 @@ def expire_inactive_workspaces(root, active_directory, grace=120):
         existing={p.name for p in cache.glob('*.jpg')}
         if not existing: continue
         try:
-            with sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True) as db:
+            with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
                 rows=db.execute('SELECT path,size,mtime FROM photos WHERE status=1 OR present=0').fetchall()
             for source,size,mtime in rows:
                 names=[cache_file(cache,source,size,mtime,edge).name for edge in (0,320,1600)]
