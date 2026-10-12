@@ -220,7 +220,7 @@ class Window(QMainWindow):
     # ---- layout ---------------------------------------------------------
     def build(self):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
-        bar = QWidget(); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(22, 10, 16, 10); top.setSpacing(10)
+        bar = QWidget(); bar.setFixedHeight(72); top = QHBoxLayout(bar); top.setContentsMargins(24, 16, 24, 16); top.setSpacing(16)
         left = QWidget(); titles = QVBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(1)
         left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
@@ -231,29 +231,31 @@ class Window(QMainWindow):
         self.open_button = self.button('打开文件夹…', self.choose_source); tools.addWidget(self.open_button)
         self.export_button = self.button('导出', self.export_dialog, 'primary'); tools.addWidget(self.export_button)
         self.more_button = self.button('⋯', self.show_menu, 'icon'); tools.addWidget(self.more_button)
+        for control in (self.open_button, self.export_button, self.more_button): control.setFixedHeight(32)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
         top.addWidget(right, 1); outer.addWidget(bar)
         self.progress = ProgressLine(); outer.addWidget(self.progress)
         self.stack = QStackedWidget(); outer.addWidget(self.stack, 1)
 
-        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(20, 10, 20, 0); column.setSpacing(0)
+        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
         pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
         for index in range(2):
-            pane = QVBoxLayout(); pane.setSpacing(2); photo = PhotoView()
+            pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0); photo = PhotoView()
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
-            photo.resized.connect(lambda: self.resize_timer.start(160)); pane.addWidget(photo, 1)
-            name = Elided('name'); name.setFixedHeight(22); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-            detail = Elided('caption'); detail.setFixedHeight(18); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
+            name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+            detail = Elided('caption'); detail.setFixedHeight(20); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
-        actions = QHBoxLayout(); actions.setContentsMargins(0, 12, 0, 10); actions.addStretch()
-        self.actionbar = QFrame(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(6, 5, 6, 5); row.setSpacing(2)
+        actions = QHBoxLayout(); actions.setContentsMargins(0, 16, 0, 12); actions.addStretch()
+        self.actionbar = QFrame(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(8, 4, 8, 4); row.setSpacing(4)
         self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
         self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
         divider = QFrame(); divider.setObjectName('divider'); divider.setFixedSize(1, 20)
         for widget in (self.keep_button, self.delete_button, divider, self.restore_button, self.next_button): row.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button): control.setFixedHeight(36)
         actions.addWidget(self.actionbar); actions.addStretch(); column.addLayout(actions)
         self.strip = QListWidget(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
@@ -265,7 +267,7 @@ class Window(QMainWindow):
         # The grid sizes every cell from its first item, so its placeholder must be full size.
         tile = QPixmap(176, 118); tile.fill(QColor(theme.ELEVATED)); self.tile = QIcon(tile)
 
-        deleted = QWidget(); grid_layout = QVBoxLayout(deleted); grid_layout.setContentsMargins(20, 12, 20, 14); grid_layout.setSpacing(10)
+        deleted = QWidget(); grid_layout = QVBoxLayout(deleted); grid_layout.setContentsMargins(24, 8, 24, 16); grid_layout.setSpacing(16)
         self.deleted_grid = QListWidget(); self.deleted_grid.setViewMode(QListWidget.ViewMode.IconMode); self.deleted_grid.setWrapping(True)
         self.deleted_grid.setResizeMode(QListWidget.ResizeMode.Adjust); self.deleted_grid.setMovement(QListWidget.Movement.Static)
         self.deleted_grid.setUniformItemSizes(True); self.deleted_grid.setIconSize(QSize(176, 118)); self.deleted_grid.setGridSize(QSize(196, 158))
@@ -716,6 +718,13 @@ class Window(QMainWindow):
         if items: self.restore(photo_id=items[0].data(ROLE))
 
     # ---- zoom -----------------------------------------------------------------
+    def zoom_caption(self, index):
+        pane = self.photos[index]
+        if not pane.detail or not pane.photo: return
+        percent = pane.transform().m11() / max(.0001, pane.zoom_target()) * 100
+        size = f'{pane.pixmap.width()} × {pane.pixmap.height()}' if pane.full_resolution else '正在读取原始分辨率…'
+        self.caption(index, pane.photo, f'{percent:.0f}% · {size} · 滚轮缩放 / 拖动查看 · {self.key("unzoom")} 还原')
+
     def reset_pane(self, pane):
         if pane.detail or not pane.photo: return
         pid = pane.photo['id']; pane.show_photo(pane.photo, self.cache.get(pid), self.image_errors.get(pid, '')); pane.source_width = self.sources.get(pid, 0)
@@ -753,7 +762,7 @@ class Window(QMainWindow):
                 if pane.detail and pane.photo and pane.photo['id'] == pid:
                     if pixmap is None: pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(self.devicePixelRatioF())
                     pane.install_full_image(pixmap)
-                    self.caption(index, photo, f'100% · {image.width()} × {image.height()} · 拖动查看，再点一次或 {self.key("unzoom")} 还原')
+                    self.zoom_caption(index)
             self.pump_focus()
         def failed(message):
             if library is not self.library: return

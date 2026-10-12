@@ -14,13 +14,14 @@ class PhotoView(QGraphicsView):
     next_requested = Signal()
     escape_requested = Signal()
     resized = Signal()
+    zoom_changed = Signal()
 
     def __init__(self):
         super().__init__()
         self.setScene(QGraphicsScene(self)); self.item = None; self.text = None
         self.photo = None; self.pixmap = None; self.press = None
         self.detail = False; self.full_resolution = False; self.source_width = 0
-        self.zoom_animation = None; self.pending_full = None
+        self.zoom_animation = None; self.pending_full = None; self.wheel_adjusted = False
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -37,7 +38,7 @@ class PhotoView(QGraphicsView):
             animation.stop(); animation.deleteLater()
 
     def show_photo(self, photo, pixmap=None, error='', message=''):
-        self.stop_zoom(); self.pending_full = None
+        self.stop_zoom(); self.pending_full = None; self.wheel_adjusted = False
         self.detail = False; self.full_resolution = False; self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.photo = photo; self.pixmap = pixmap; self.scene().clear(); self.item = self.text = None; self.resetTransform()
         if pixmap:
@@ -76,7 +77,7 @@ class PhotoView(QGraphicsView):
 
     def zoom_at(self, point=None):
         if not self.pixmap: return
-        self.detail = True; self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.detail = True; self.wheel_adjusted = False; self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         view = QPointF(point) if point is not None else QPointF(self.viewport().rect().center())
         self.animate_scale(self.zoom_target(), self.mapToScene(view.toPoint()), view, done=self.apply_pending)
 
@@ -96,7 +97,11 @@ class PhotoView(QGraphicsView):
         rect = self.item.boundingRect(); self.scene().setSceneRect(rect); self.full_resolution = True
         target = QPointF(rect.left() + fraction[0] * rect.width(), rect.top() + fraction[1] * rect.height())
         self.setTransform(QTransform.fromScale(scale, scale)); self.centerOn(target)
-        self.animate_scale(1.0, target, QPointF(self.viewport().rect().center()), 260)
+        # A wheel adjustment during decoding owns the magnification: swapping pixels must not reset it to 100%.
+        if self.wheel_adjusted:
+            self.zoom_changed.emit()
+        else:
+            self.animate_scale(1.0, target, QPointF(self.viewport().rect().center()), 260, self.zoom_changed.emit)
 
     def unzoom(self, done):
         """Leave zoom immediately in state, then animate back to the fitted photo."""
@@ -134,6 +139,23 @@ class PhotoView(QGraphicsView):
         click = event.button() == Qt.MouseButton.LeftButton and self.press is not None and (event.position() - self.press).manhattanLength() < 5
         point = event.position(); super().mouseReleaseEvent(event)
         if click and self.photo: self.clicked.emit(self.photo, point)
+
+    def wheelEvent(self, event):
+        if not self.detail or not self.pixmap:
+            event.ignore(); return
+        delta = event.angleDelta().y()
+        steps = delta / 120 if delta else event.pixelDelta().y() / 100
+        if not steps:
+            event.accept(); return
+        view = event.position(); anchor = self.mapToScene(view.toPoint())
+        self.stop_zoom(); self.wheel_adjusted = True
+        # Smooth trackpad deltas and high-resolution wheels use fractional steps. Limits prevent huge render sizes.
+        native = self.zoom_target(); current = self.transform().m11()
+        scale = max(self.fit_scale(), min(native * 8, current * 1.2 ** max(-20, min(20, steps))))
+        self.setTransform(QTransform.fromScale(scale, scale))
+        centre = QPointF(self.viewport().rect().center())
+        self.centerOn(anchor - (view - centre) / scale)
+        self.apply_pending(); self.zoom_changed.emit(); event.accept()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape: self.escape_requested.emit(); event.accept(); return
