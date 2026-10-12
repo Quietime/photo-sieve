@@ -4,10 +4,41 @@ from PySide6.QtCore import Qt, QEvent, QPoint, QRectF
 from PySide6.QtGui import QIcon, QPainter, QPainterPath, QColor, QPen, QRegion
 from PySide6.QtWidgets import (QDialog as QtDialog, QMessageBox as QtMessageBox,
     QFileDialog as QtFileDialog, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QPushButton, QCheckBox, QSizeGrip, QFrame, QScrollArea, QApplication)
+    QPushButton, QCheckBox, QSizeGrip, QFrame, QScrollArea, QApplication,
+    QSpinBox, QStyle, QStyleOptionSpinBox)
 
 def app_icon():
     return QIcon(str(Path(__file__).parent / 'assets' / 'photosieve.ico'))
+
+class CacheSpinBox(QSpinBox):
+    """Native editable number field with clear, theme-independent step arrows."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet('''QSpinBox { padding-right:30px; }
+            QSpinBox::up-button { subcontrol-origin:border; subcontrol-position:top right;
+                width:28px; height:19px; border:0; background:transparent; }
+            QSpinBox::down-button { subcontrol-origin:border; subcontrol-position:bottom right;
+                width:28px; height:19px; border:0; background:transparent; }
+            QSpinBox::up-arrow, QSpinBox::down-arrow { width:0; height:0; }''')
+
+    def step_rect(self, up):
+        option=QStyleOptionSpinBox(); self.initStyleOption(option)
+        control=QStyle.SubControl.SC_SpinBoxUp if up else QStyle.SubControl.SC_SpinBoxDown
+        return self.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,control,self)
+
+    def paintEvent(self,event):
+        super().paintEvent(event)
+        import theme
+        painter=QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for up in (True,False):
+            rect=self.step_rect(up); center=QRectF(rect).center()
+            enabled=self.isEnabled() and (self.value()<self.maximum() if up else self.value()>self.minimum())
+            pen=QPen(QColor(theme.LABEL if enabled else theme.TERTIARY),1.6)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap); pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen); path=QPainterPath(); direction=-1 if up else 1
+            path.moveTo(center.x()-4,center.y()-direction*2)
+            path.lineTo(center.x(),center.y()+direction*2)
+            path.lineTo(center.x()+4,center.y()-direction*2); painter.drawPath(path)
 
 class TitleBar(QWidget):
     def __init__(self, window, title='', main=False):

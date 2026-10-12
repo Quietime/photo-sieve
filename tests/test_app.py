@@ -554,8 +554,10 @@ class LibraryTest(unittest.TestCase):
             delete = pool.submit(self.lib.trash, photo['id'])
             self.assertTrue(Path(photo['path']).exists())
             release.set()
-            self.assertTrue(preview.result(timeout=5))
-            self.assertTrue(delete.result(timeout=5)['staged'])
+            # This verifies coordination and intact files, not filesystem latency.
+            # Shared Windows runners can spend several seconds creating WAL files.
+            self.assertTrue(preview.result(timeout=30))
+            self.assertTrue(delete.result(timeout=30)['staged'])
         self.assertFalse(Path(photo['path']).exists())
 
     @unittest.skipUnless(importlib.util.find_spec('pillow_heif'), 'optional HEIC dependency absent')

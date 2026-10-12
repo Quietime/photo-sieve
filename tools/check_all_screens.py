@@ -317,6 +317,15 @@ def run(output):
                     audit.check('cache_form_rows_have_vertical_spacing', all(
                         ordered[i+1].mapTo(dialog, QPoint(0, 0)).y() - ordered[i].mapTo(dialog, QPoint(0, 0)).y() - ordered[i].height() >= 8
                         for i in range(len(ordered)-1)))
+                    for field_index,field in enumerate(fields):
+                        original=field.value()
+                        field.setValue(max(field.minimum()+1,original))
+                        initial=field.value()
+                        QTest.mouseClick(field,Qt.MouseButton.LeftButton,pos=field.step_rect(True).center())
+                        audit.check('cache_step_up_'+str(field_index),field.value()==initial+1)
+                        QTest.mouseClick(field,Qt.MouseButton.LeftButton,pos=field.step_rect(False).center())
+                        audit.check('cache_step_down_'+str(field_index),field.value()==initial)
+                        field.setValue(original)
                     fields[0].setValue(350)
                     fields[1].setValue(0)
                     fields[2].setValue(128)

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QFrame, QMenu, QSizePolicy, QSpinBox, QFormLayout, QCheckBox, QSizeGrip)
 from app import Library, DECODE_SLOTS, build_preview, decoder_init
 import keys
-from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel, app_icon
+from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel, app_icon, CacheSpinBox
 import machine
 from cache_policy import prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
@@ -382,9 +382,9 @@ class Window(QMainWindow):
         dialog=QDialog(self); dialog.setWindowTitle('预加载与缓存'); dialog.setMinimumWidth(510)
         layout=QVBoxLayout(dialog); layout.setContentsMargins(24,20,24,24); layout.setSpacing(18)
         form=QFormLayout(); form.setVerticalSpacing(16); form.setHorizontalSpacing(20)
-        ahead=QSpinBox(); ahead.setRange(0,5000); ahead.setSpecialValueText('自动（按内存调整）'); ahead.setValue(self.preload_count)
-        warm=QSpinBox(); warm.setRange(0,50000); warm.setValue(self.warm_count)
-        disk=QSpinBox(); disk.setRange(64,10240); disk.setSuffix(' MB'); disk.setValue(self.library.cache_limit//(1024*1024))
+        ahead=CacheSpinBox(); ahead.setRange(0,5000); ahead.setSpecialValueText('自动（按内存调整）'); ahead.setValue(self.preload_count)
+        warm=CacheSpinBox(); warm.setRange(0,50000); warm.setValue(self.warm_count)
+        disk=CacheSpinBox(); disk.setRange(64,10240); disk.setSuffix(' MB'); disk.setValue(self.library.cache_limit//(1024*1024))
         for field in (ahead,warm,disk): field.setMinimumHeight(38); field.setMinimumWidth(240)
         form.addRow('内存预加载照片数',ahead); form.addRow('后台磁盘预读照片数',warm); form.addRow('磁盘缓存上限',disk); layout.addLayout(form)
         note=QLabel(); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
