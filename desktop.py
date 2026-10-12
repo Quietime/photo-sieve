@@ -351,7 +351,7 @@ class Window(QMainWindow):
         rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
         menu.addAction('快捷键…').triggered.connect(self.edit_shortcuts)
         menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
-        undo=menu.addAction('撤回上一步'); undo.setEnabled(bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0)
+        undo=menu.addAction('撤回上一步'); undo.setEnabled(self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
         undo.triggered.connect(lambda:self.restore(general=True))
         menu.addSeparator(); menu.addAction('检查更新').triggered.connect(lambda: self.updates.check())
         automatic = QAction('启动时检查更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
@@ -838,7 +838,7 @@ class Window(QMainWindow):
 
     def restore(self, photo_id=None, general=False):
         self.updates.touch()
-        if self.busy or self.closing: return
+        if not self.session_active or self.busy or self.closing: return
         library = self.library; generation = self.generation
         def work():
             result = library.undo(only_delete=not general, photo_id=photo_id)
