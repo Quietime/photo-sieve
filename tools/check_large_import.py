@@ -31,7 +31,14 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix='photosieve-large-import-') as temp:
         base=Path(temp).resolve();photos=base/'photos';photos.mkdir()
         template=base/'template.dng';write_raw(template)
-        for i in range(args.photos):os.link(template,photos/f'{i:05}.arw')
+        # NTFS permits at most 1024 hard links to one file. Use separate seeds
+        # so the 16000-file fixture exercises import instead of that OS limit.
+        seed=template
+        for i in range(args.photos):
+            if i and i%500==0:
+                import shutil
+                seed=base/f'template-{i}.dng';shutil.copyfile(template,seed)
+            os.link(seed,photos/f'{i:05}.arw')
         (photos/'voice.wav').write_bytes(b'non-photo fixture')
         prefs=QSettings(str(base/'preferences.ini'),QSettings.Format.IniFormat)
         prefs.setValue('preload_count',1200);prefs.setValue('warm_count',0)
