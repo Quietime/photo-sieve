@@ -164,7 +164,7 @@ APP 目录需要当前用户可写，请在安装向导选择可写的本机目�
 - 操作条与分段导航采用局部磨砂材质，轻微拾取当前照片颜色、细边缘高光；图像画布保持清晰。Windows 原生 Qt 不使用网页 WebGL 折射，采用轻量内容取色作为材质回退。
 - 保留、删除、恢复、下一张使用固定线条图标，快捷键在独立标签中显示；修改按键不改变动作图标。备用键在悬停提示中显示。
 - 按钮靠近响应采用高斯距离衰减，邻近按钮渐进响应；按下轻微压缩，松开用无夸张反弹的临界阻尼弹簧返回。菜单从触发位置快速淡入。
-- “⋯”菜单可启用“减少动态效果”和“减少透明效果”；同时尊重 Windows 系统动画、透明度及高对比度偏好。Tab / Shift+Tab 导航控件，空格激活按钮，分段导航聚焦后左右键及 Home/End 切换视图。
+- “⋯”菜单可启用“减少动态效果”；同时尊重 Windows 系统动画、透明度及高对比度偏好。Tab / Shift+Tab 导航控件，空格激活按钮，分段导航聚焦后左右键及 Home/End 切换视图。
 - 复用 `apple_ui.py` 中的 AppleButton、GlassSurface、GlassDock、GlassPopover；视觉/动效参数集中在 theme.py。材质只使用已缓存预览的轻量取色，不做全屏截图或全屏模糊，没有空闲持续动画。
 
 设计参考：[Apple Materials](https://developer.apple.com/design/human-interface-guidelines/materials)、[Motion](https://developer.apple.com/design/human-interface-guidelines/motion)、[Pointing Devices](https://developer.apple.com/design/human-interface-guidelines/pointing-devices)，以及用户提供规范中的 Liquid Glass / Dock 项目。以上用于交互和设计原则参考；应用仍为 Windows 原生 Qt Widgets。

@@ -407,8 +407,6 @@ class Window(QMainWindow):
         menu.addSeparator()
         reduced = QAction('减少动态效果', menu); reduced.setCheckable(True); reduced.setChecked(theme.REDUCED_MOTION)
         reduced.toggled.connect(lambda enabled:self.set_accessibility('reduced_motion',enabled)); menu.addAction(reduced)
-        opaque = QAction('减少透明效果', menu); opaque.setCheckable(True); opaque.setChecked(theme.REDUCED_TRANSPARENCY)
-        opaque.toggled.connect(lambda enabled:self.set_accessibility('reduced_transparency',enabled)); menu.addAction(opaque)
         menu.addSeparator()
         for line in (self.machine_status(), self.updates.status or '版本 ' + APP_VERSION): menu.addStatus(line)
         menu.addSeparator();menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)

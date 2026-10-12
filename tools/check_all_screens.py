@@ -417,7 +417,7 @@ def run(output):
                 audit.click(audit.button(panel, '显示帧率'))
                 audit.check('fps_toggle_off_operates', window.fps_label is None)
                 audit.click(audit.button(panel, '减少动态效果'))
-                audit.click(audit.button(panel, '减少透明效果'))
+                audit.check('obsolete_transparency_option_removed',not any(button.text()=='减少透明效果' for button in panel.findChildren(QAbstractButton)))
                 audit.screenshot('15b_more_options_accessibility', panel)
                 panel.close()
 
