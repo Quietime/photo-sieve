@@ -354,7 +354,7 @@ class Segmented(GlassSurface):
     def paintEvent(self, event):
         painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setPen(Qt.PenStyle.NoPen)
         painter.end();super().paintEvent(event);painter.begin(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing);painter.setPen(Qt.PenStyle.NoPen)
-        width = self.segment_width(); painter.setBrush(QColor('#45474D' if not theme.HIGH_CONTRAST else '#FFFFFF'))
+        width = self.segment_width(); painter.setBrush(QColor(theme.ELEVATED2 if not theme.HIGH_CONTRAST else '#FFFFFF'))
         painter.drawRoundedRect(QRectF(2 + self.position * width, 2, width, self.height() - 4), 14, 14)
         metrics = self.fontMetrics()
         for i in range(len(self.items)):
@@ -365,8 +365,8 @@ class Segmented(GlassSurface):
             painter.setPen(QColor('#000000' if theme.HIGH_CONTRAST and i==self.index else theme.LABEL)); painter.drawText(box, Qt.AlignmentFlag.AlignVCenter, text)
             if count:
                 painter.setPen(QColor('#000000' if theme.HIGH_CONTRAST and i==self.index else '#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY)); painter.drawText(box.adjusted(metrics.horizontalAdvance(text + '  '), 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, count)
-        if self.hasFocus():
-            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.BLUE));painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),15,15)
+        if self.hasFocus() and theme.HIGH_CONTRAST:
+            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QColor('#FFFFFF'));painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),15,15)
 
 
 class ProgressLine(QWidget):

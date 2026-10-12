@@ -84,6 +84,7 @@ class Library:
                 CREATE INDEX IF NOT EXISTS photo_status ON photos(present,status,id);
                 CREATE INDEX IF NOT EXISTS photo_size ON photos(present,size);
                 CREATE INDEX IF NOT EXISTS photo_digest ON photos(present,digest);
+                CREATE INDEX IF NOT EXISTS photo_date ON photos(present,status,mtime,id);
                 CREATE TABLE IF NOT EXISTS history(
                     seq INTEGER PRIMARY KEY, photo_id INTEGER, before INTEGER, after INTEGER,
                     size INTEGER, mtime INTEGER, action TEXT DEFAULT 'mark', backup TEXT);
@@ -295,21 +296,43 @@ class Library:
             raise LibraryError(400, '未知筛选条件')
         return filters[view]
 
-    def list_photos(self, view='all', anchor=0, direction='next', limit=60):
-        where = self.query(view)
-        if direction not in ('next', 'prev'):
-            raise LibraryError(400, '未知翻页方向')
-        relation, order = ('>', 'ASC') if direction == 'next' else ('<', 'DESC')
-        columns = '''photos.*,
-            (SELECT backup FROM history WHERE photo_id=photos.id AND action='trash' ORDER BY seq DESC LIMIT 1) backup,
-            (SELECT deleted_at FROM trash_log WHERE photo_id=photos.id AND result='staged' ORDER BY id DESC LIMIT 1) deleted_at''' if view == 'deleted' else '*'
+    def navigation_scope(self,view,start_ns=None,end_ns=None):
+        where=self.query(view);values=[]
+        if view!='deleted':
+            if start_ns is not None:where+=' AND mtime>=?';values.append(start_ns)
+            if end_ns is not None:where+=' AND mtime<?';values.append(end_ns)
+        return where,values
+
+    def navigation_order(self,sort):
+        if sort not in ('file','oldest','newest'):raise LibraryError(400,'未知排序方式')
+        return ('id',False) if sort=='file' else ('mtime',sort=='newest')
+
+    def list_ids(self,view='pending',sort='file',start_ns=None,end_ns=None):
+        if view!='pending':return []  # retained photos never reappear in the filmstrip
+        where,values=self.navigation_scope(view,start_ns,end_ns);key,descending=self.navigation_order(sort)
+        order='DESC' if descending else 'ASC'
         with self.connect() as db:
-            rows = db.execute(f'SELECT {columns} FROM photos WHERE {where} AND id {relation} ? ORDER BY id {order} LIMIT ?',
-                              (anchor, limit)).fetchall()
-        if direction == 'prev':
-            rows = list(reversed(rows))
-        root = self.meta('root') or self.directory
-        return [self.public(row, root) for row in rows]
+            return [row[0] for row in db.execute(f'SELECT id FROM photos WHERE {where} ORDER BY {key} {order},id {order}',values)]
+
+    def list_photos(self,view='all',anchor=0,direction='next',limit=60,sort='file',start_ns=None,end_ns=None,inclusive=False):
+        where,values=self.navigation_scope(view,start_ns,end_ns)
+        if direction not in ('next','prev'):raise LibraryError(400,'未知翻页方向')
+        key,descending=self.navigation_order(sort)
+        reverse=descending != (direction=='prev');relation='<' if reverse else '>';order='DESC' if reverse else 'ASC'
+        columns='''photos.*,(SELECT backup FROM history WHERE photo_id=photos.id AND action='trash' ORDER BY seq DESC LIMIT 1) backup,(SELECT deleted_at FROM trash_log WHERE photo_id=photos.id AND result='staged' ORDER BY id DESC LIMIT 1) deleted_at''' if view=='deleted' else '*'
+        with self.connect() as db:
+            if anchor:
+                if key=='id':
+                    where+=f' AND id {relation+"=" if inclusive else relation} ?';values.append(anchor)
+                else:
+                    found=db.execute('SELECT mtime FROM photos WHERE id=?',(anchor,)).fetchone()
+                    if found:
+                        where+=f' AND (mtime {relation} ? OR (mtime=? AND id {relation+"=" if inclusive else relation} ?))'
+                        values.extend([found[0],found[0],anchor])
+            rows=db.execute(f'SELECT {columns} FROM photos WHERE {where} ORDER BY {key} {order},id {order} LIMIT ?',[*values,limit]).fetchall()
+        if direction=='prev':rows=list(reversed(rows))
+        root=self.meta('root') or self.directory
+        return [self.public(row,root) for row in rows]
 
     def public(self, row, root=None):
         data = dict(row)

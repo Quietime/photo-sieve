@@ -39,7 +39,7 @@ def install(window,output,folders):
                 dialog.accept();return
         QTimer.singleShot(50,accept_picker)
     def open_next():
-        state['opening']=True;state['folder']=folders[state['index']]
+        state['opening']=True;state['folder']=folders[state['index']];state['last_target']=None
         QTimer.singleShot(150,accept_picker)
         # This actually opens and closes the production folder picker; the
         # earlier test suite bypassed this step with window.scan directly.
@@ -56,7 +56,19 @@ def install(window,output,folders):
             if window.library.meta('root')!=str(state['folder']):return
             if any(p.pixmap is None or not p.photo or not Path(p.photo['path']).is_relative_to(state['folder']) for p in window.photos):return
             assert window.counts['all']==len(list(state['folder'].glob('*.arw')))
-            row={'folder':str(state['folder']),'photos':window.counts['all'],'rendered_pair':True}
+            assert window.strip.count()==window.counts['all']
+            if state['last_target'] is None:
+                state['last_target']=window.strip.item(window.strip.count()-2).data(256)
+                bar=window.strip.horizontalScrollBar();bar.setValue(bar.maximum())
+                app.processEvents()
+                from PySide6.QtTest import QTest
+                from PySide6.QtCore import Qt
+                item=window.strip.item(window.strip.count()-2)
+                QTest.mouseClick(window.strip.viewport(),Qt.MouseButton.LeftButton,pos=window.strip.visualItemRect(item).center())
+                return
+            if window.queue[0]['id']!=state['last_target']:return
+
+            row={'folder':str(state['folder']),'photos':window.counts['all'],'rendered_pair':True,'all_photos_indexed':True,'scroll_and_distant_jump':True}
             report['folders'].append(row)
             window.grab().save(str(output.with_name(output.stem+f'-{state["index"]}.png')))
             state['index']+=1;state['opening']=False

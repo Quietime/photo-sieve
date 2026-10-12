@@ -111,34 +111,17 @@ class AppleButton(QPushButton):
 
 
 class GlassSurface(QFrame):
-    """A small frosted surface with live photo colour pickup and opaque accessibility fallback."""
+    """A solid deep-blue surface; current photos never alter its background."""
     def __init__(self,parent=None):
-        super().__init__(parent);self.texture=None;self.source_keys=();self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
-    def set_sources(self, pixmaps):
-        values=[p for p in pixmaps if p is not None and not p.isNull()];keys=tuple(p.cacheKey() for p in values)
-        if keys==self.source_keys:return
-        self.source_keys=keys
-        if not values:self.texture=None
-        else:
-            texture=QPixmap(32*len(values),12);texture.fill(Qt.GlobalColor.black);painter=QPainter(texture)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            for i,value in enumerate(values):painter.drawPixmap(QRectF(i*32,0,32,12),value,QRectF(value.rect()))
-            painter.end();self.texture=texture.scaled(16,4,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
-        self.update()
+        super().__init__(parent);self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
+    def set_sources(self,pixmaps):
+        # Solid surfaces deliberately do not pick up photograph colours.
+        return
     def paintEvent(self,event):
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect=QRectF(self.rect()).adjusted(1,1,-1,-1);path=QPainterPath();path.addRoundedRect(rect,rect.height()/2,rect.height()/2)
-        opaque=theme.REDUCED_TRANSPARENCY or theme.HIGH_CONTRAST
-        painter.fillPath(path,QColor('#000000' if theme.HIGH_CONTRAST else theme.ELEVATED))
-        if not opaque:
-            painter.save();painter.setClipPath(path)
-            if self.texture:
-                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform);painter.setOpacity(.18);painter.drawPixmap(rect,self.texture,QRectF(self.texture.rect()));painter.setOpacity(1.)
-            light=QLinearGradient(rect.topLeft(),rect.bottomLeft());light.setColorAt(0,QColor(255,255,255,15));light.setColorAt(1,QColor(255,255,255,1));painter.fillPath(path,light);painter.restore()
-        painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor(255,255,255,200 if theme.HIGH_CONTRAST else 35),1));painter.drawPath(path)
-        if not opaque:
-            highlight=QLinearGradient(rect.topLeft(),rect.bottomLeft());highlight.setColorAt(0,QColor(255,255,255,38));highlight.setColorAt(.5,QColor(255,255,255,0))
-            painter.setPen(QPen(highlight,1));painter.drawRoundedRect(rect.adjusted(1,1,-1,-1),rect.height()/2-1,rect.height()/2-1)
+        rect=QRectF(self.rect()).adjusted(1,1,-1,-1)
+        painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor('#000000' if theme.HIGH_CONTRAST else theme.ELEVATED))
+        painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
 
 
 class GlassDock(GlassSurface):

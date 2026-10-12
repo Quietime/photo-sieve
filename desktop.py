@@ -21,11 +21,11 @@ from PIL import Image
 # waits for the GIL near 1 ms instead of 5 ms while previews decode in the background.
 sys.setswitchinterval(.001)
 
-from PySide6.QtCore import Qt, Signal, Slot, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
+from PySide6.QtCore import Qt, Signal, Slot, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect, QDate
 from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
-    QFrame, QMenu, QSizePolicy, QSpinBox, QFormLayout, QCheckBox, QSizeGrip)
+    QFrame, QMenu, QSizePolicy, QSpinBox, QFormLayout, QCheckBox, QSizeGrip, QComboBox, QDateEdit)
 from app import Library, DECODE_SLOTS, build_preview, build_full_image, decoder_init
 import keys
 import crashlog
@@ -33,6 +33,7 @@ from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel,
 import machine
 from cache_policy import prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
+from filmstrip import Filmstrip
 from window_frame import WindowFrame
 from version import APP_VERSION
 from update_ui import UpdateController
@@ -205,6 +206,7 @@ class Window(QMainWindow):
         for pool in (self.image_pool, self.thumb_pool, self.detail_pool): pool.setThreadPriority(QThread.Priority.LowPriority)   # the interface thread wins any CPU contention
         self.tasks = set(); self.cache = OrderedDict(); self.cache_size = {}; self.sources = {}; self.loading = set(); self.image_errors = {}
         self.thumb_cache = OrderedDict(); self.warming = set(); self.warmed = set(); self.thumb_wanted = deque(); self.thumb_loading = set()
+        self.sort_order='file';self.date_start=None;self.date_end=None;self.strip_revision=0;self.strip_loading=set()
         self.queue = []; self.view = 'pending'; self.busy = False; self.fetching = False; self.state_pending = False; self.state_data = None
         self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.queue_end = False; self.generation = 0; self.focus_loading = set()
         self.was_running = False; self.closed = False; self.closing = False; self.display_size = None; self.motions = []; self.last_motion = 0.0
@@ -333,20 +335,23 @@ class Window(QMainWindow):
             pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
-        actions = QHBoxLayout(); actions.setContentsMargins(0, 16, 0, 12); actions.addStretch()
-        self.actionbar = GlassDock(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(8, 4, 8, 4); row.setSpacing(4)
+        actions = QHBoxLayout(); actions.setContentsMargins(0, 10, 0, 8); actions.addStretch()
+        self.actionbar = GlassDock(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(6, 2, 6, 2); row.setSpacing(4)
         self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
         self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
         divider = QFrame(); divider.setObjectName('divider'); divider.setFixedSize(1, 20)
         for widget in (self.keep_button, self.delete_button, divider, self.restore_button, self.next_button): row.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
-        for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button): control.setFixedHeight(36)
+        for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button): control.setFixedHeight(30)
         self.actionbar.register((self.keep_button,self.delete_button,self.restore_button,self.next_button))
         actions.addWidget(self.actionbar); actions.addStretch(); column.addLayout(actions)
-        self.strip = QListWidget(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
+        self.strip = Filmstrip(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
-        self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(92)
-        self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(100)
+        self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.strip.itemClicked.connect(self.strip_select); column.addWidget(self.strip)
+        self.strip.icon_for=lambda pid:QIcon(self.thumbnail(pid)) if self.thumbnail(pid) is not None else self.placeholder
+        self.strip.horizontalScrollBar().valueChanged.connect(self.load_strip_thumbnails)
+        self.strip_note=QLabel('全部未筛选照片 · 拖动下方滚动条浏览');self.strip_note.setObjectName('caption');column.addWidget(self.strip_note)
         column.addSpacing(8); self.stack.addWidget(review)
         placeholder = QPixmap(104, 68); placeholder.fill(QColor(theme.ELEVATED)); self.placeholder = QIcon(placeholder)
         # The grid sizes every cell from its first item, so its placeholder must be full size.
@@ -384,6 +389,7 @@ class Window(QMainWindow):
         if getattr(self,'more_panel',None) and self.more_panel.isVisible(): self.more_panel.close(); return
         if getattr(self,'more_panel',None): self.more_panel.deleteLater()
         menu = self.more_panel = SettingsPanel(self,self.more_button)
+        ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(self.session_active and not self.busy);ordering.triggered.connect(self.edit_ordering);menu.addAction(ordering)
         rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
         rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
         menu.addAction('快捷键…').triggered.connect(self.edit_shortcuts)
@@ -574,6 +580,7 @@ class Window(QMainWindow):
             text = f"{counts.get('all', 0):,} 张照片 · {root}"
         else:
             text = '原生桌面版 ' + APP_VERSION
+        if self.date_start is not None and self.session_active:text+=' · 日期筛选已开启'
         self.subtitle.set_text(text)
 
     def refresh_chrome(self):
@@ -602,7 +609,7 @@ class Window(QMainWindow):
         if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 0)
         self.place_overlays(); self.load(); self.refresh_state(0)
 
-    def load(self, anchor=0):
+    def load(self, anchor=0, target_id=None):
         self.generation += 1; generation = self.generation; view = self.view; library = self.library
         # Previews that failed (a disconnected drive, say) are retried whenever the queue reloads.
         self.fetching = True; self.queue = []; self.image_errors.clear(); self.update_actions(); self.update_display_size()
@@ -619,7 +626,10 @@ class Window(QMainWindow):
             self.warmed.clear(); self.render(); self.prefetch()
         def failed(message):
             self.fetching = False; self.error(message)
-        self.submit(lambda: library.list_photos(view, anchor, 'next', 60 if view == 'deleted' else PAGE), done, failed)
+        self.refresh_strip()
+        options=self.navigation_options() if view!='deleted' else {}
+        target=target_id if target_id is not None else anchor+1 if anchor else 0
+        self.submit(lambda: library.list_photos(view,target,'next',60 if view=='deleted' else PAGE,inclusive=bool(anchor) or target_id is not None,**options),done,failed)
 
     def refill(self):
         horizon=min(self.warm_count,max(self.ahead_target,int(self.library.cache_limit*.4/400_000)))
@@ -633,7 +643,8 @@ class Window(QMainWindow):
             self.render(); self.prefetch()
         def failed(message):
             if generation == self.generation: self.fetching = False
-        self.submit(lambda: library.list_photos(view, anchor, 'next', PAGE), done, failed)
+        options=self.navigation_options()
+        self.submit(lambda: library.list_photos(view, anchor, 'next', PAGE,**options), done, failed)
 
     # ---- previews -----------------------------------------------------------
     def update_display_size(self):
@@ -723,7 +734,7 @@ class Window(QMainWindow):
             same = bool(p and pane.photo and pane.photo['id'] == pid)
             if same and (pane.detail or pane.zoom_animation): continue
             if not same or not p or pane.pixmap is not pixmap or (error and not pixmap and not pane.text):
-                message = '' if p or i else ('正在读取…' if self.fetching else ('全部筛选完毕' if self.view == 'pending' else '没有照片'))
+                message = '' if p or i else ('正在读取…' if self.fetching else ('所选日期范围内没有照片' if self.date_start is not None else '全部筛选完毕' if self.view == 'pending' else '没有照片'))
                 pane.show_photo(p, pixmap, error, message); pane.source_width = self.sources.get(pid, 0)
             self.caption(i, p)
         self.material_sources(); self.update_strip()
@@ -737,31 +748,51 @@ class Window(QMainWindow):
         text = detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
         self.details[index].set_text(text)
 
-    def strip_item(self, photo):
-        item = QListWidgetItem(); item.setData(ROLE, photo['id']); item.setToolTip(photo['relative'])
-        icon = self.thumbnail(photo['id']); item.setIcon(QIcon(icon) if icon else self.placeholder)
-        return item
+    def navigation_options(self):
+        return dict(sort=self.sort_order,start_ns=self.date_start,end_ns=self.date_end)
+
+    def refresh_strip(self):
+        self.strip_revision+=1;revision=self.strip_revision;library=self.library;view=self.view
+        options=self.navigation_options()
+        def done(ids):
+            if revision!=self.strip_revision or library is not self.library:return
+            self.strip.set_ids([pid for pid in ids if pid not in self.inflight]);self.update_strip()
+        self.submit(lambda:library.list_ids(view,**options),done)
 
     def update_strip(self):
-        want = [p for p in self.queue[:STRIP] if p['status'] != 1]; ids = [p['id'] for p in want]
-        have = [self.strip.item(i).data(ROLE) for i in range(self.strip.count())]
-        if have != ids:
-            keep = set(ids)
-            for i in reversed(range(len(have))):
-                if have[i] not in keep: self.strip.takeItem(i)
-            have = [x for x in have if x in keep]
-            if have == ids[:len(have)]:
-                for p in want[len(have):]: self.strip.addItem(self.strip_item(p))
-            else:
-                self.strip.clear()
-                for p in want: self.strip.addItem(self.strip_item(p))
-        for item_index in range(self.strip.count()): self.update_thumbnail(self.strip.item(item_index).data(ROLE))
-        current = 0 if want and self.queue and want[0] is self.queue[0] else -1
-        if self.strip.currentRow() != current: self.strip.setCurrentRow(current)
+        if self.view!='pending':
+            if self.strip.count():self.strip.clear()
+            return
+        if self.queue:
+            row=self.strip.index_of(self.queue[0]['id'])
+            if row>=0 and self.strip.currentRow()!=row:self.strip.setCurrentRow(row)
+        for row in self.strip.visible_rows():self.update_thumbnail(self.strip.item(row).data(ROLE))
+        self.strip_note.setText(f'未筛选 {self.strip.count():,} 张 · 拖动滚动条浏览全部照片 · '+{'file':'文件顺序','oldest':'文件日期：从旧到新','newest':'文件日期：从新到旧'}[self.sort_order])
+        self.load_strip_thumbnails()
+
+    def load_strip_thumbnails(self,*_):
+        if self.closed or self.importing or self.view!='pending':return
+        ids=[pid for pid in self.strip.visible_ids() if pid not in self.thumb_cache and pid not in self.cache and pid not in self.strip_loading and pid not in self.image_errors]
+        available=max(0,8-len(self.strip_loading));ids=ids[:available]
+        library=self.library
+        for pid in ids:
+            self.strip_loading.add(pid)
+            def loaded(result,pid=pid):
+                if library is not self.library:return
+                self.strip_loading.discard(pid);(image,data),tip=result
+                pixmap=QPixmap.fromImage(image);pixmap.setDevicePixelRatio(self.devicePixelRatioF());self.store_thumbnail(pid,pixmap)
+                self.strip.tips[pid]=tip;self.update_thumbnail(pid);self.load_strip_thumbnails()
+            def failed(message,pid=pid):
+                if library is not self.library:return
+                self.strip_loading.discard(pid);self.image_errors[pid]=message
+            def work(pid=pid):
+                photo=library.public(library.photo(pid));im=library.preview_image(pid,320)
+                im.thumbnail((104,68));return qimage(im),photo['relative']
+            self.submit(work,loaded,failed,self.thumb_pool)
 
     def store_thumbnail(self, pid, icon):
         self.thumb_cache[pid]=icon; self.thumb_cache.move_to_end(pid)
-        visible={p['id'] for p in self.queue[:STRIP]}
+        visible=set(self.strip.visible_ids())
         for old in list(self.thumb_cache):
             if len(self.thumb_cache)<=64: break
             if old not in visible: self.thumb_cache.pop(old)
@@ -775,14 +806,11 @@ class Window(QMainWindow):
         if icon is not None: self.thumb_cache.move_to_end(pid)
         return icon
 
-    def update_thumbnail(self, pid):
-        for i in range(self.strip.count()):
-            item=self.strip.item(i)
-            if item.data(ROLE)!=pid: continue
-            icon=self.thumbnail(pid)
-            if icon is not None: item.setIcon(QIcon(icon)); item.setText('')
-            elif pid in self.image_errors:
-                item.setText('预览失败'); item.setToolTip(self.image_errors[pid])
+    def update_thumbnail(self,pid):
+        row=self.strip.index_of(pid)
+        if row>=0:
+            self.thumbnail(pid);self.strip.photo_model.changed(row)
+        self.refresh_chrome()
 
     def update_actions(self):
         running = self.job_running(); reviewing = self.view != 'deleted'
@@ -868,7 +896,7 @@ class Window(QMainWindow):
             if self.queue and self.view != 'deleted' and not self.busy and not self.job_running(): self.nudge()
             return
         photo = self.queue[0]; pid = photo['id']; generation = self.generation; view = self.view; library = self.library
-        ghosts = self.begin_transition(); self.queue.pop(0); self.inflight.add(pid); self.adjust_counts(action, photo['status'])
+        ghosts = self.begin_transition(); self.queue.pop(0); self.inflight.add(pid); self.strip.remove_id(pid); self.adjust_counts(action, photo['status'])
         self.render(); self.play_transition(action, ghosts); self.prefetch(); self.refill()
         if action == 'delete':
             self.delete_streak += 1
@@ -881,7 +909,7 @@ class Window(QMainWindow):
             if library is self.library and self.state_data is not None: self.state_data['can_undo']=True
             if not self.toast.active(): self.delete_streak = 0
         def failed(message):
-            self.inflight.discard(pid)
+            self.inflight.discard(pid);self.refresh_strip()
             if generation == self.generation and self.view == view and all(p['id'] != pid for p in self.queue):
                 self.queue.insert(0, photo); self.render(); self.prefetch()
             self.delete_streak = 0; self.error(message)
@@ -897,6 +925,7 @@ class Window(QMainWindow):
         if self.busy: return
         pid = item.data(ROLE); index = next((i for i, p in enumerate(self.queue) if p['id'] == pid), None)
         if index: self.finish_motion(); self.queue = self.queue[index:]; self.render(); self.prefetch(); self.refill()
+        elif index is None:self.finish_motion();self.load(target_id=pid)
 
     def restore(self, photo_id=None, general=False):
         self.updates.touch()
@@ -909,13 +938,14 @@ class Window(QMainWindow):
             return result
         def done(result):
             if generation != self.generation: return
-            pid = result['id']; photo = result['photo']; self.delete_streak = 0
+            pid = result['id']; photo = result['photo']; self.delete_streak = 0;self.refresh_strip()
             if pid in self.deleted_items:
                 self.deleted_grid.takeItem(self.deleted_grid.row(self.deleted_items.pop(pid)))
                 self.deleted_rows = [p for p in self.deleted_rows if p['id'] != pid]
             if self.view != 'deleted':
                 self.queue = [p for p in self.queue if p['id'] != pid]; wanted = 1 if self.view == 'keep' else 0
-                if photo and photo['status'] == wanted:
+                within_dates=photo and (self.date_start is None or self.date_start<=photo['mtime']<self.date_end)
+                if photo and photo['status'] == wanted and within_dates:
                     self.finish_motion(); self.queue.insert(0, photo); self.render(); self.prefetch()
                     pane = self.photos[0]
                     if pane.item:
@@ -1017,6 +1047,37 @@ class Window(QMainWindow):
         pid = self.cursor_id; library = self.library
         if pid: self.submit(lambda: library.remember('cursor', pid))
 
+    def edit_ordering(self):
+        if not self.session_active or self.busy:return
+        dialog=QDialog(self);dialog.setWindowTitle('排序与日期筛选');dialog.setMinimumWidth(500)
+        layout=QVBoxLayout(dialog);form=QFormLayout();form.setVerticalSpacing(16)
+        sort=QComboBox();sort.addItem('文件顺序','file');sort.addItem('文件日期：从旧到新','oldest');sort.addItem('文件日期：从新到旧','newest');sort.setCurrentIndex(sort.findData(self.sort_order))
+        form.addRow('排序方式',sort)
+        enabled=QCheckBox('只显示指定日期范围');enabled.setChecked(self.date_start is not None);form.addRow(enabled)
+        from datetime import datetime
+        start=QDateEdit();end=QDateEdit()
+        for field in (start,end):field.setCalendarPopup(True);field.setDisplayFormat('yyyy-MM-dd');field.setMinimumHeight(36)
+        first=QDate.currentDate().addYears(-1);last=QDate.currentDate()
+        if self.date_start is not None:
+            date=datetime.fromtimestamp(self.date_start/1e9);first=QDate(date.year,date.month,date.day)
+            date=datetime.fromtimestamp((self.date_end-1)/1e9);last=QDate(date.year,date.month,date.day)
+        start.setDate(first);end.setDate(last);form.addRow('开始日期',start);form.addRow('结束日期',end)
+        def changed(value):start.setEnabled(value);end.setEnabled(value)
+        changed(enabled.isChecked());enabled.toggled.connect(changed)
+        layout.addLayout(form)
+        hint=QLabel('日期使用照片文件的修改时间。范围只影响未筛选／保留视图，不影响已删除列表和导出。');hint.setObjectName('caption');hint.setWordWrap(True);layout.addWidget(hint)
+        error=QLabel();error.setWordWrap(True);error.setStyleSheet('color:'+theme.RED);layout.addWidget(error)
+        row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
+        def apply():
+            if enabled.isChecked() and start.date()>end.date():error.setText('开始日期不能晚于结束日期。');return
+            self.sort_order=sort.currentData();self.date_start=self.date_end=None
+            if enabled.isChecked():
+                def timestamp(date):return int(datetime(date.year(),date.month(),date.day()).timestamp()*1e9)
+                self.date_start=timestamp(start.date());self.date_end=timestamp(end.date().addDays(1))
+            dialog.accept();self.reset_zoom();self.load()
+        row.addWidget(self.button('应用',apply,'primary'));layout.addLayout(row)
+        dialog.exec();dialog.deleteLater()
+
     # ---- folders --------------------------------------------------------------
     def choose_source(self):
         self.updates.touch()
@@ -1040,7 +1101,7 @@ class Window(QMainWindow):
                 self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
                 crashlog.event('workspace_ready',library=str(library.directory))
-                for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed): store.clear()
+                for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed,self.strip_loading): store.clear()
                 self.reset_zoom(); self.state_data = None; self.state_pending = False; self.counts = {}
                 self.cursor_timer.stop(); self.cursor_id = 0; self.view = 'pending'; self.segments.set_current('pending', False)
                 self.queue = []; self.render(); self.start_scan(library, folder)

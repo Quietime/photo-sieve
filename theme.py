@@ -8,10 +8,10 @@ from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from shiboken6 import isValid
 
-BG = '#25262A'
-ELEVATED = '#2D2E33'
-ELEVATED2 = '#393A40'
-ELEVATED3 = '#46474F'
+BG = '#202C40'
+ELEVATED = '#193654'
+ELEVATED2 = '#24476A'
+ELEVATED3 = '#305A82'
 SEPARATOR = '#4A4B53'
 LABEL = '#F5F5F7'
 SECONDARY = '#B0B2BB'

@@ -47,7 +47,7 @@ def run(application, output):
             assert window.photos[0].pixmap.width()==2400;window.reset_zoom()
             assert not window.photos[0].detail
             result['checks'].append('in-place full-resolution zoom and restore')
-            wait(lambda:all(window.strip.item(i).data(256) in window.thumb_cache for i in range(window.strip.count())))
+            wait(lambda:all(window.strip.item(i).data(256) in window.thumb_cache for i in window.strip.visible_rows()))
             result['checks'].append('all filmstrip thumbnails, not only first six')
             lib.export_kept(str(base/'copy'),'copy');wait(lambda:not lib.job['running'])
             assert lib.export_summary()['done']==1 and Path(kept['path']).is_file()

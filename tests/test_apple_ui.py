@@ -29,13 +29,12 @@ class ApplePrimitivesTest(unittest.TestCase):
         self.assertEqual((self.keep.symbol,self.keep.text(),self.keep.shortcut),('keep','保留','P'))
         self.assertIn('P / ↑',self.keep.toolTip());self.assertEqual(self.keep.accessibleName(),'保留')
         self.assertIn('P',self.keep.accessibleDescription())
-    def test_material_tracks_content_and_caches_unchanged_photos(self):
-        red=self.image('red');blue=self.image('blue')
-        self.dock.set_sources([red]);first=self.dock.texture.cacheKey()
-        self.dock.set_sources([red]);self.assertEqual(self.dock.texture.cacheKey(),first)
-        red_view=self.dock.grab().toImage().pixelColor(15,24)
-        self.dock.set_sources([blue]);blue_view=self.dock.grab().toImage().pixelColor(15,24)
-        self.assertGreater(red_view.red(),blue_view.red());self.assertGreater(blue_view.blue(),red_view.blue())
+    def test_surface_is_solid_and_never_tinted_by_the_current_photo(self):
+        self.dock.set_sources([self.image('red')]);first=self.dock.grab().toImage()
+        self.dock.set_sources([self.image('blue')]);second=self.dock.grab().toImage()
+        for point in ((15,24),(200,3),(200,44)):
+            self.assertEqual(first.pixelColor(*point),second.pixelColor(*point))
+        self.assertEqual(first.pixelColor(15,24),QColor(theme.ELEVATED))
     def test_opaque_fallback_removes_photo_tint(self):
         theme.REDUCED_TRANSPARENCY=True
         self.dock.set_sources([self.image('red')]);first=self.dock.grab().toImage().pixelColor(15,24)

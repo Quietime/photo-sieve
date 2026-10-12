@@ -15,11 +15,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSettings, Qt, QTimer, QDate
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QCheckBox,
-    QFileDialog as NativeFileDialog, QLabel, QLineEdit, QSpinBox)
+    QFileDialog as NativeFileDialog, QLabel, QLineEdit, QSpinBox, QComboBox, QDateEdit)
 from app import Library
 from desktop import STYLE, Window
 import keys
@@ -224,12 +224,45 @@ def run(output):
                 audit.modal('03_source_folder_selected', lambda: audit.click(window.open_button), import_folder)
                 audit.until(lambda: window.keep_button.isEnabled() and len(window.queue) == 30)
                 audit.until(lambda: all(window.strip.item(i).data(Qt.ItemDataRole.UserRole) in window.thumb_cache
-                    for i in range(window.strip.count())))
+                    for i in window.strip.visible_rows()))
                 audit.screenshot('04_pending_review', window)
                 audit.check('only_photos_imported', len(window.queue) == 30)
-                audit.check('all_visible_thumbnails_loaded', window.strip.count() == 16 and
-                    all(window.strip.item(i).data(Qt.ItemDataRole.UserRole) in window.thumb_cache for i in range(16)))
+                audit.check('all_visible_thumbnails_loaded', window.strip.count() == 30 and
+                    all(window.strip.item(i).data(Qt.ItemDataRole.UserRole) in window.thumb_cache for i in window.strip.visible_rows()))
 
+                bar=window.strip.horizontalScrollBar()
+                audit.check('filmstrip_indexes_all_photos_and_has_scrollbar',window.strip.count()==30 and bar.maximum()>0)
+                bar.setValue(bar.maximum());application.processEvents()
+                audit.until(lambda:all(pid in window.thumb_cache or pid in window.cache for pid in window.strip.visible_ids()))
+                audit.screenshot('04a_filmstrip_scrolled_to_end',window)
+                last=window.strip.item(window.strip.count()-1)
+                QTest.mouseClick(window.strip.viewport(),Qt.MouseButton.LeftButton,pos=window.strip.visualItemRect(last).center())
+                audit.until(lambda:window.queue and window.queue[0]['id']==last.data(Qt.ItemDataRole.UserRole))
+                audit.check('filmstrip_click_jumps_to_distant_photo',True)
+                window.load();audit.until(lambda:len(window.queue)==30 and window.keep_button.isEnabled())
+                def ordering(dialog):
+                    combo=dialog.findChild(QComboBox);dates=dialog.findChildren(QDateEdit);enabled=dialog.findChild(QCheckBox)
+                    enabled.setChecked(True);dates[0].setDate(QDate.currentDate().addDays(2));dates[1].setDate(QDate.currentDate())
+                    audit.click(audit.button(dialog,'应用'))
+                    audit.check('invalid_date_range_keeps_dialog_open',dialog.isVisible())
+                    audit.screenshot('04c_ordering_invalid_dates',dialog)
+                    dates[0].setDate(QDate.currentDate().addDays(-1));dates[1].setDate(QDate.currentDate().addDays(1))
+                    QTest.mouseClick(dates[0],Qt.MouseButton.LeftButton,pos=QPoint(dates[0].width()-10,dates[0].height()//2))
+                    application.processEvents()
+                    popup=QApplication.activePopupWidget()
+                    if popup:
+                        audit.screenshot('04d_date_calendar',popup);QTest.keyClick(popup,Qt.Key.Key_Escape)
+                    combo.setCurrentIndex(combo.findData('newest'));audit.click(audit.button(dialog,'应用'))
+                audit.modal('04b_ordering_and_date_filter',window.edit_ordering,ordering)
+                audit.until(lambda:len(window.queue)==30 and window.keep_button.isEnabled())
+                audit.check('date_order_applies_to_full_strip',window.sort_order=='newest' and window.strip.count()==30 and window.date_start is not None)
+                audit.screenshot('04e_date_sorted_review',window)
+                def reset_order(dialog):
+                    dialog.findChild(QCheckBox).setChecked(False);dialog.findChild(QComboBox).setCurrentIndex(0)
+                    audit.click(audit.button(dialog,'应用'))
+                audit.modal('04f_clear_date_filter',window.edit_ordering,reset_order)
+                audit.until(lambda:len(window.queue)==30 and window.keep_button.isEnabled())
+                audit.check('date_filter_can_be_cleared',window.date_start is None and window.sort_order=='file')
                 first = window.queue[0]['id']
                 audit.click(window.keep_button)
                 audit.until(lambda: not window.pending_ops and not window.inflight)

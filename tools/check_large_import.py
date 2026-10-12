@@ -87,6 +87,8 @@ def run(args):
                 report['checks']['true_total_and_completed_count']=True
                 report['checks']['no_decode_during_import']=True
                 report['checks']['progress_samples']=len(seen_progress)
+                until(lambda:window.strip.count()==args.photos)
+                report['checks']['full_virtual_filmstrip']=True
                 until(lambda:window.photos[0].pixmap is not None and window.photos[1].pixmap is not None)
                 assert len(window.queue)<=2400 and window.preload_count==1200
                 assert window.ahead_target<=1200

@@ -119,12 +119,12 @@ def run(args):
             # A cached full preview must regenerate its strip tile without touching the original.
             from unittest.mock import patch
             window.thumb_cache.clear()
-            for i in range(window.strip.count()): window.strip.item(i).setIcon(window.placeholder)
+            for i in window.strip.visible_rows(): window.strip.item(i).setIcon(window.placeholder)
             begin=time.perf_counter()
             with patch.object(library,'preview_image',side_effect=AssertionError('Unexpected original decode')):
                 window.update_strip()
-            assert all(window.strip.item(i).data(Qt.ItemDataRole.UserRole) in window.thumb_cache for i in range(window.strip.count()))
-            report['checks']['thumbnail_recovery']={'tiles':window.strip.count(),'elapsed_ms':round((time.perf_counter()-begin)*1000,3),'original_decodes':0}
+            assert all(window.strip.item(i).data(Qt.ItemDataRole.UserRole) in window.thumb_cache for i in window.strip.visible_rows())
+            report['checks']['thumbnail_recovery']={'tiles':len(window.strip.visible_rows()),'total_indexed':window.strip.count(),'elapsed_ms':round((time.perf_counter()-begin)*1000,3),'original_decodes':0}
 
             initial = [p['id'] for p in window.queue[:80]]; handler=[]; backlog=0; begin=time.perf_counter()
             for i in range(80):

@@ -52,20 +52,20 @@ def run(screenshot=None):
         w.scan(str(root));ready(w);assert len(w.queue)==80 and w.stack.currentIndex()==0
         first=w.queue[0]['id'];second=w.queue[1]['id']
         # Decoder processes finish in any order; every filmstrip entry gets its own thumbnail.
-        until(lambda:w.strip.count()==16 and all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count())))
+        until(lambda:w.strip.count()==80 and all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in w.strip.visible_rows()))
         assert w.strip.item(15).icon().isNull() is False and w.strip.currentRow()==0
         # The ready buffer fills to every queued photo here (80 < the 100-200 target), then stays within its bound.
         assert 100<=w.ahead_target<=200 or w.ahead_target==machine.PROFILE.buffer(w.display_size.width()*w.display_size.height()*4+160*110*4)
         until(lambda:all(p['id'] in w.cache for p in w.queue[:w.ahead_target]),30)
         # Regression: small previews may be evicted even though pane previews are still ready.
         w.thumb_cache.clear()
-        for i in range(w.strip.count()): w.strip.item(i).setIcon(w.placeholder)
+        for i in w.strip.visible_rows(): w.strip.item(i).setIcon(w.placeholder)
         with patch.object(lib,'preview_image',side_effect=AssertionError('A cached pane must rebuild the thumbnail without decoding the original')):
             w.update_strip()
-            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count()))
+            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in w.strip.visible_rows())
             for i in range(150): w.store_thumbnail(10000+i,w.cache[first])
             assert len(w.thumb_cache)<=64
-            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count()))
+            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in w.strip.visible_rows())
         w.show_menu(); panel=w.more_panel; original_size=panel.size()
         application.processEvents(); panel_size=panel.size(); w.activateWindow(); application.processEvents()
         assert panel.isVisible() and panel.size()==panel_size,'Focus loss does not dismiss or shrink the settings sheet'
@@ -165,7 +165,7 @@ def run(screenshot=None):
         settle(w);w.poll();until(lambda:w.state_data['counts']['deleted']==45)
         assert sorted(p['id'] for p in lib.list_photos('deleted',limit=100))==sorted(expected)
         assert len(w.queue)>0;assert len(w.cache)<=w.cache_limit;assert len(w.thumb_cache)<=64
-        until(lambda:all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count())))
+        until(lambda:all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in w.strip.visible_rows()))
         if screenshot:QTest.qWait(400);w.grab().save(str(screenshot))
         # Dropping a folder onto the window opens it.
         other=base/'other-photos';other.mkdir()
