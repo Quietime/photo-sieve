@@ -2,7 +2,7 @@
 Like Lightroom or Photo Mechanic, every action takes a main key and an optional second one (↑ or P to keep, say)."""
 import json
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QTimer
 from PySide6.QtGui import QKeySequence
 from ui_shell import QDialog
 from PySide6.QtWidgets import  QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QPushButton, QVBoxLayout
@@ -114,7 +114,10 @@ class ShortcutDialog(QDialog):
         names = {action: name for action, name, _, _ in ACTIONS}
         missing = []  # every action can be button-only
         for (action, slot), field in self.fields.items():
-            edge = '#FF453A' if chosen[action][slot] in clashes else 'transparent'
+            line=field.findChild(QLineEdit); line.setPlaceholderText('未设置')
+            QTimer.singleShot(0,line,lambda line=line:line.setPlaceholderText('未设置'))
+            actual=normal(field.keySequence().toString(QKeySequence.SequenceFormat.PortableText))
+            edge = '#FF453A' if actual in clashes else 'transparent'
             field.setStyleSheet(f'QLineEdit {{ background:#2C2C2E; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}'
                                 'QLineEdit:focus { border-color:#0A84FF; }' if edge == 'transparent' else
                                 f'QLineEdit {{ background:#2C2C2E; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}')

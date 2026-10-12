@@ -8,6 +8,25 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 import theme
 from theme import animate
 from apple_ui import GlassSurface
+from pathlib import Path
+from PySide6.QtGui import QPixmap
+
+class WelcomePage(QWidget):
+    """Static branded welcome image; no slideshow, original-photo load or animation."""
+    def __init__(self):
+        super().__init__(); self.background=QPixmap(str(Path(__file__).parent/'assets'/'welcome-background.png'))
+        # Separate drawing anchors keep circle, title and the two fine-print lines on one exact axis.
+        self.parts=[QRectF(667,235,338,339),QRectF(641,781,391,30),QRectF(693,817,283,8),QRectF(636,829,400,8)]
+    def paintEvent(self,event):
+        painter=QPainter(self); painter.fillRect(self.rect(),QColor('#000000'))
+        if not self.background.isNull():
+            scale=min(self.width()/self.background.width(),max(1,self.height()-100)/self.background.height())
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            for part in self.parts:
+                margin_y=6 if part.height()>100 else 2
+                source=part.adjusted(-6,-margin_y,6,margin_y)
+                target=QRectF(self.width()/2-source.width()*scale/2,source.top()*scale,source.width()*scale,source.height()*scale)
+                painter.drawPixmap(target,self.background,source)
 
 
 class PhotoView(QGraphicsView):
@@ -159,7 +178,6 @@ class PhotoView(QGraphicsView):
         self.apply_pending(); self.zoom_changed.emit(); event.accept()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Escape: self.escape_requested.emit(); event.accept(); return
         super().keyPressEvent(event)
 
 

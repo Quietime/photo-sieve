@@ -27,7 +27,7 @@ def until(fn, seconds=15):
     raise AssertionError('timed out')
 
 def ready(window):
-    until(lambda:window.keep_button.isEnabled())
+    until(lambda:window.delete_button.isEnabled())
 
 def settle(window):
     until(lambda:not window.pending_ops and not window.inflight)
@@ -38,10 +38,15 @@ def key(window,k,modifier=Qt.KeyboardModifier.NoModifier):
 def run(screenshot=None):
     with tempfile.TemporaryDirectory() as t:
         base=Path(t);root=base/'中文照片';root.mkdir()
+        from PySide6.QtCore import QSettings
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat,QSettings.Scope.UserScope,str(base/'preferences'))
         for i in range(80):
             Image.new('RGB',(3200,1800) if i<2 else (600,400),(i*3%255,i*7%255,i*11%255)).save(root/f'{i:04}.jpg')
         lib=Library(base/'data')
-        w=Window(lib,decoders=Decoders(2));w.apply_shortcuts(keys.defaults());w.show();until(lambda:w.state_data is not None and not w.fetching)
+        preferences=QSettings(str(base/'test-preferences.ini'),QSettings.Format.IniFormat)
+        with patch('desktop.QSettings',return_value=preferences): w=Window(lib,decoders=Decoders(2))
+        w.apply_shortcuts(keys.defaults());w.show();until(lambda:w.state_data is not None and not w.fetching)
         assert w.stack.currentIndex()==2,'A library without a folder opens on the empty state'
         assert all(s.autoRepeat() for s in w.shortcuts[:4]),'Held ↑ ↓ → ← follow the keyboard repeat rate'
         w.scan(str(root));ready(w);assert len(w.queue)==80 and w.stack.currentIndex()==0

@@ -29,3 +29,5 @@ Application rebuild instructions are included in source/README.md,
 source/build_windows.bat and source/photo-sieve.spec.
 The application does not restrict reverse engineering for debugging modifications
 of the dynamically linked LGPL components.
+
+User-designated Quietime welcome artwork (assets/welcome-background.png): generated as a faithful visual reference recreation of the user-provided brand image, not a pixel copy. Quietime branding remains reserved to its owner; redistribution here is authorized by the user.

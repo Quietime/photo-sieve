@@ -13,7 +13,10 @@ def open_workspace(root, folder, previous=None, cache_mb=None):
     database=target/'library.sqlite3'
     if not database.exists():
         legacy=Path.home()/'.photo-sieve'
-        candidates=[Path(previous)] if previous else []
+        candidates=[]
+        if previous:
+            old=Path(previous).resolve(); candidates += [old,old/'libraries'/workspace_key(folder)]
+            if old.parent.name=='libraries': candidates.append(old.parent/workspace_key(folder))
         candidates += [legacy,legacy/'libraries'/workspace_key(folder),Path(root)]
         for candidate in candidates:
             source=candidate/'library.sqlite3'

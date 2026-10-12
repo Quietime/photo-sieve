@@ -106,6 +106,8 @@ QDialog {{ background:{ELEVATED}; }}
 QDialog QWidget {{ background:transparent; }}
 QDialog QPushButton {{ background:{ELEVATED3}; }}
 QDialog QPushButton#primary {{ background:{BLUE}; }}
+QSpinBox, QComboBox, QLineEdit {{ background:{ELEVATED2}; border:1px solid {SEPARATOR}; border-radius:9px; padding:6px 10px; min-height:22px; }}
+QSpinBox:focus, QComboBox:focus, QLineEdit:focus {{ border-color:{BLUE}; }}
 QScrollArea {{ border:0; }}
 QToolTip {{ background:{ELEVATED2}; color:{LABEL}; border:1px solid {SEPARATOR}; border-radius:6px; padding:4px 8px; }}
 QMessageBox {{ background:{ELEVATED}; }}

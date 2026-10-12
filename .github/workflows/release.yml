@@ -32,6 +32,18 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_update_ui.py
+      - name: Verify actual native Windows window frame and snapping support
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_windows_chrome.py
+      - name: Open and screenshot every application interface
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_all_screens.py --output ui-screenshots-ci
+      - name: Audit paging, review performance and cache limits
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/check_performance.py --output performance-ci.json
       - name: Build native EXE
         run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
       - name: Create update package and checksums
@@ -67,6 +79,10 @@ jobs:
           path: |
             release/*
             frozen-diagnostics-ci.json
+            windows-chrome-ci.json
+            performance-ci.json
+            ui-screenshots-ci/*
+            ui-screenshots-windows/*
           retention-days: 14
       - name: Publish a new version to GitHub Releases
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

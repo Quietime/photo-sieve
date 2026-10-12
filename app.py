@@ -17,6 +17,7 @@ import time
 from PIL import Image, ImageFile, ImageOps, TiffImagePlugin
 
 import machine
+from cache_policy import INDEX_SCHEMA
 
 try:
     from pillow_heif import register_heif_opener
@@ -62,6 +63,7 @@ class Library:
         self.job_lock = threading.Lock()
         self.prune_lock = threading.Lock()
         self.last_prune = time.monotonic()
+        self.cache_indexed = set(); self.cache_sizes={}; self.cache_bytes=0; self.cache_changed=None
         self.job = {'revision': secrets.token_hex(8), 'running': False, 'kind': '', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
         self.offload = None
@@ -90,6 +92,11 @@ class Library:
                     target TEXT, size INTEGER, mtime INTEGER, result TEXT DEFAULT 'pending', error TEXT);
                 CREATE INDEX IF NOT EXISTS export_batch_files ON export_files(batch_id,id);
             ''')
+            db.execute(INDEX_SCHEMA)
+            # New empty workspaces need no legacy-cache migration. Existing ones migrate once in maintenance.
+            if not db.execute("SELECT 1 FROM meta WHERE key='cache_index_version'").fetchone() and next(self.cache.glob('*.jpg'),None) is None:
+                db.execute("INSERT INTO meta VALUES ('cache_index_version','1')")
+            self.cache_indexed={row[0] for row in db.execute('SELECT filename FROM cache_index')}
             for table, column, declaration in [('history', 'action', "TEXT DEFAULT 'mark'"),
                                                 ('history', 'backup', 'TEXT'), ('trash_log', 'backup', 'TEXT')]:
                 if column not in {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}:
@@ -117,7 +124,7 @@ class Library:
                         db.execute('UPDATE photos SET present=0 WHERE id=?', (row['photo_id'],))
             db.execute("UPDATE export_files SET result='failed',error='上次任务被中断，请检查目标文件后再重试' WHERE result IN ('pending','working')")
             db.execute('UPDATE export_batches SET completed_at=? WHERE completed_at IS NULL', (time.time(),))
-        self.prune_cache()
+        self.recount_cache(); self.prune_cache()
         root = self.meta('root')
         if root:
             # A sleeping external disk can take seconds to answer; the window does not wait for it.
@@ -144,9 +151,10 @@ class Library:
             counts = {row['status']: row['n'] for row in db.execute('SELECT status,COUNT(*) n FROM photos WHERE present=1 GROUP BY status')}
             deleted = db.execute('SELECT COUNT(*) FROM photos WHERE ' + self.query('deleted')).fetchone()[0]
             meta = dict(db.execute("SELECT key,value FROM meta WHERE key IN ('root','cursor')").fetchall())
+            can_undo=bool(db.execute('SELECT 1 FROM history LIMIT 1').fetchone())
         return {'root': meta.get('root', ''), 'cursor': int(meta.get('cursor') or 0),
                 'counts': {'all': sum(counts.values()), 'pending': counts.get(0, 0), 'keep': counts.get(1, 0), 'deleted': deleted},
-                'job': {**self.job, 'errors': list(self.job['errors'])}, 'data_dir': str(self.directory)}
+                'job': {**self.job, 'errors': list(self.job['errors'])}, 'data_dir': str(self.directory), 'can_undo':can_undo}
 
     def meta(self, key):
         with self.connect() as db:
@@ -328,6 +336,19 @@ class Library:
                     db.execute('UPDATE photos SET status=? WHERE id=?', (h['before'], h['photo_id']))
                     return {'id': h['photo_id'], 'status': h['before']}
 
+    def restore_deleted(self, ids=None):
+        selected=None if ids is None else set(ids)
+        def work():
+            with self.connect() as db:
+                rows=db.execute("SELECT photos.id,photos.path FROM photos WHERE "+self.query('deleted')+' ORDER BY id').fetchall()
+            rows=[row for row in rows if selected is None or row['id'] in selected]; self.job['total']=len(rows)
+            for row in rows:
+                try:
+                    with self.file_locks[row['id']%len(self.file_locks)]: self._undo(only_delete=True,photo_id=row['id'])
+                except Exception as exc: self.warn(row['path']+'：'+str(exc))
+                self.job['done']+=1
+        self.start_job('恢复所选照片',work)
+
     def export_kept(self, destination, mode='copy'):
         if mode not in ('copy', 'move'):
             raise LibraryError(400, '请选择复制或移动')
@@ -503,30 +524,41 @@ class Library:
             for path in self.cache.glob('*.jpg'):
                 if path.is_file() and not path.is_symlink():
                     path.unlink(); removed += 1
+            with self.connect() as db:
+                db.execute('DELETE FROM cache_index')
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('cache_index_version','1')")
+            self.cache_indexed.clear(); delta=-self.cache_bytes; self.cache_sizes.clear(); self.cache_bytes=0
+        if delta and self.cache_changed: self.cache_changed(delta)
         return removed
 
     def cleanup_processed_cache(self, grace=120):
         """Expire old previews for kept/deleted/missing photos; undo records remain intact."""
-        cutoff=time.time()-grace
-        existing={p.name for p in self.cache.glob('*.jpg')}
-        if not existing: return 0
-        with self.connect() as db:
-            rows=db.execute('SELECT id,path,size,mtime FROM photos WHERE status=1 OR present=0').fetchall()
-        removed=0
-        for row in rows:
-            names=[]
-            for edge in (0,320,1600):
-                names.append(self.cache_path(Path(row['path']),row['size'],row['mtime'],edge).name)
-                if edge: names.append(hashlib.sha256(f"{row['path']}|{row['size']}|{row['mtime']}|{edge}".encode()).hexdigest()+'.jpg')
-            with self.file_locks[row['id'] % len(self.file_locks)], self.cache_lock:
-                for name in names:
-                    if name not in existing: continue
+        from cache_policy import cleanup_indexed_cache
+        with self.prune_lock:
+            return cleanup_indexed_cache(self.database,self.cache,grace,self.file_locks,self.cache_lock,self.cache_indexed)
+
+    def register_preview_cache(self, row, edge):
+        """Record actual derived files once, including files produced by decoder processes."""
+        entries=[]
+        for value in {320,1600,edge}:
+            names=[self.cache_path(Path(row['path']),row['size'],row['mtime'],value).name]
+            if value: names.append(hashlib.sha256(f"{row['path']}|{row['size']}|{row['mtime']}|{value}".encode()).hexdigest()+'.jpg')
+            for name in names:
+                if name not in self.cache_indexed or name not in self.cache_sizes:
                     path=self.cache/name
-                    try:
-                        if not path.is_symlink() and path.stat().st_mtime<=cutoff:
-                            path.unlink(); removed+=1
-                    except FileNotFoundError: pass
-        return removed
+                    if path.is_file() and not path.is_symlink(): entries.append((name,row['id'],row['size'],row['mtime'],value))
+        if entries:
+            with self.cache_lock:
+                with self.connect() as db: db.executemany('INSERT OR IGNORE INTO cache_index VALUES (?,?,?,?,?)',entries)
+                self.cache_indexed.update(entry[0] for entry in entries)
+                delta=0
+                for name,*_ in entries:
+                    try: size=(self.cache/name).stat().st_size
+                    except FileNotFoundError: continue
+                    delta+=size-self.cache_sizes.get(name,0); self.cache_sizes[name]=size
+                self.cache_bytes+=delta
+            if delta and self.cache_changed: self.cache_changed(delta)
+            self.schedule_prune()
 
     def purge_deleted(self, ids=None):
         """Permanently remove only tracked reversible-deletion backups after UI confirmation."""
@@ -558,36 +590,32 @@ class Library:
                 self.job['done'] += 1
         self.start_job('彻底删除照片', work)
 
-    def prune_cache(self):
-        # Enumerating a large cache must not lock out all preview reads.
-        files = []
+    def recount_cache(self):
+        sizes={}
         for path in self.cache.glob('*.jpg'):
             try:
-                st = path.stat()
-                files.append((st.st_mtime, st.st_size, path))
-            except FileNotFoundError:
-                pass
-        total = sum(item[1] for item in files)
-        if total > self.cache_limit:
-            for _, size, path in sorted(files):
-                with self.cache_lock:
-                    path.unlink(missing_ok=True)
-                total -= size
-                if total <= self.cache_limit * .85:
-                    break
+                if path.is_file() and not path.is_symlink(): sizes[path.name]=path.stat().st_size
+            except FileNotFoundError: pass
+        with self.cache_lock:
+            self.cache_sizes=sizes; self.cache_bytes=sum(sizes.values())
+            self.cache_indexed.intersection_update(sizes)
+        return self.cache_bytes
+
+    def prune_cache(self):
+        from cache_policy import prune_workspaces
+        removed,total=prune_workspaces(self.directory,self.cache,self.cache_limit,self.cache_lock,include_projects=False)
+        previous=self.cache_bytes; self.recount_cache(); delta=self.cache_bytes-previous
+        if delta and self.cache_changed: self.cache_changed(delta)
+        return removed
 
     def schedule_prune(self):
-        if time.monotonic() - self.last_prune < 60 or not self.prune_lock.acquire(blocking=False):
-            return
-        self.last_prune = time.monotonic()
+        # New preview files update the byte ledger, so reaching a limit triggers a worker immediately.
+        if self.cache_bytes<self.cache_limit or not self.prune_lock.acquire(blocking=False): return
         def work():
-            try:
-                self.prune_cache()
-            except OSError:
-                pass
-            finally:
-                self.prune_lock.release()
-        threading.Thread(target=work, daemon=True).start()
+            try: self.prune_cache()
+            except OSError: pass
+            finally: self.prune_lock.release()
+        threading.Thread(target=work,daemon=True).start()
 
     def cache_path(self, source, size, mtime, edge):
         return cache_file(self.cache, source, size, mtime, edge)
@@ -596,9 +624,7 @@ class Library:
         with self.cache_lock:
             if target.exists():
                 payload = target.read_bytes()
-                # Avoid a write on every disk cache hit; occasional touches suffice for eviction.
-                if time.time() - target.stat().st_mtime > 60:
-                    os.utime(target, None)
+                # Generation order stays stable: reading never changes the cache timestamp.
                 return payload
         return None
 
@@ -679,6 +705,8 @@ class Library:
                 return image if as_image else payload
         except Exception as exc:
             raise LibraryError(422, f'无法预览：{exc}。HEIC 需要 pillow-heif；RAW 需要 rawpy。')
+        finally:
+            self.register_preview_cache(row,edge)
 
     def gate(self):
         """The read gate when the library's photos are on a spinning disk."""

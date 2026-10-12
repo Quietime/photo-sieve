@@ -94,10 +94,11 @@ class AppleButton(QPushButton):
         if not self.isEnabled():color=QColor(theme.TERTIARY)
         metrics=self.fontMetrics();text_width=metrics.horizontalAdvance(self.text())
         badge_width=max(22,metrics.horizontalAdvance(self.shortcut)+12) if self.shortcut else 0
+        symbol_only=bool(self.symbol and not self.text() and not self.shortcut)
         content=text_width+(24 if self.symbol and self.symbol!='more' else 0)+(badge_width+10 if self.shortcut else 0)
         x=(self.width()-content)/2
         if self.symbol:
-            if self.symbol=='more':icon(painter,'more',QRectF(self.width()/2-9,self.height()/2-9,18,18),color)
+            if symbol_only:icon(painter,self.symbol,QRectF(self.width()/2-9,self.height()/2-9,18,18),color)
             else:icon(painter,self.symbol,QRectF(x,self.height()/2-9,18,18),color);x+=24
         if self.symbol!='more':
             painter.setPen(color);painter.drawText(QRectF(x,0,text_width+2,self.height()),Qt.AlignmentFlag.AlignVCenter,self.text());x+=text_width+10
