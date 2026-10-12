@@ -1,5 +1,7 @@
 """Design tokens, stylesheet and motion curves (Apple dark system colours)."""
 import time
+import os
+import ctypes
 import traceback
 
 from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
@@ -20,6 +22,40 @@ BLUE_PRESSED = '#0066CC'
 GREEN = '#30D158'
 RED = '#FF453A'
 FONT = '"SF Pro Text","PingFang SC","Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans CJK SC",sans-serif'
+
+# Shared interaction tokens, with native Windows accessibility preferences.
+MOTION_FAST = 160
+MOTION_NORMAL = 240
+HOVER_SCALE = .025
+PRESS_SCALE = .98
+REDUCED_MOTION = False
+REDUCED_TRANSPARENCY = False
+HIGH_CONTRAST = False
+
+
+def accessibility_defaults():
+    motion = transparency = contrast = False
+    if os.name == 'nt':
+        try:
+            enabled = ctypes.c_int(1)
+            if ctypes.windll.user32.SystemParametersInfoW(0x1042,0,ctypes.byref(enabled),0):motion = not bool(enabled.value)
+            class HighContrast(ctypes.Structure):
+                _fields_ = [('cbSize',ctypes.c_uint),('dwFlags',ctypes.c_uint),('scheme',ctypes.c_wchar_p)]
+            value = HighContrast(); value.cbSize = ctypes.sizeof(value)
+            if ctypes.windll.user32.SystemParametersInfoW(0x42,value.cbSize,ctypes.byref(value),0):contrast = bool(value.dwFlags & 1)
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+                transparency = not bool(winreg.QueryValueEx(key,'EnableTransparency')[0])
+        except (OSError,AttributeError):pass
+    return motion, transparency, contrast
+
+
+def configure_accessibility(settings):
+    global REDUCED_MOTION, REDUCED_TRANSPARENCY, HIGH_CONTRAST
+    motion, transparency, HIGH_CONTRAST = accessibility_defaults()
+    REDUCED_MOTION = motion or settings.value('reduced_motion',False,type=bool)
+    REDUCED_TRANSPARENCY = transparency or HIGH_CONTRAST or settings.value('reduced_transparency',False,type=bool)
+
 
 STYLE = f'''
 QWidget {{ background:{BG}; color:{LABEL}; font-family:{FONT}; font-size:14px; }}
@@ -47,7 +83,7 @@ QPushButton#keep {{ background:transparent; color:{GREEN}; border-radius:17px; p
 QPushButton#delete {{ background:transparent; color:{RED}; border-radius:17px; padding:8px 18px; font-size:14px; font-weight:600; }}
 QPushButton#keep:hover, QPushButton#delete:hover {{ background:{ELEVATED3}; }}
 QPushButton#keep:disabled, QPushButton#delete:disabled {{ color:{TERTIARY}; background:transparent; }}
-QFrame#actionbar {{ background:{ELEVATED}; border-radius:22px; }}
+QFrame#actionbar {{ background:transparent; border-radius:22px; }}
 QFrame#actionbar QWidget {{ background:transparent; }}
 QFrame#divider {{ background:{SEPARATOR}; }}
 QFrame#sheet {{ background:{ELEVATED}; border-radius:18px; }}
@@ -85,6 +121,18 @@ def bezier(x1, y1, x2, y2):
 # apple.com default ease, and the snappy deceleration used by iOS sheets and cards.
 EASE = bezier(.25, .1, .25, 1)
 SNAPPY = bezier(.32, .72, 0, 1)
+
+
+class SpringCurve:
+    """Critically damped spring: physical deceleration without decorative overshoot."""
+    def valueForProgress(self, progress):
+        import math
+        stiffness = 8.0
+        end = 1-(1+stiffness)*math.exp(-stiffness)
+        return (1-(1+stiffness*progress)*math.exp(-stiffness*progress))/end
+
+
+SPRING = SpringCurve()
 
 
 class Motion(QObject):
@@ -180,6 +228,10 @@ def animate(owner, duration, step, curve=SNAPPY, done=None, start=0.0, end=1.0):
     motion = Motion(owner, duration, step, curve, start, end)
     if done:
         motion.finished.connect(done)
-    motion.apply(0.0)
-    clock().add(motion, owner)
+    if REDUCED_MOTION:
+        motion.apply(1.0)
+        QTimer.singleShot(0, motion.complete)
+    else:
+        motion.apply(0.0)
+        clock().add(motion, owner)
     return motion

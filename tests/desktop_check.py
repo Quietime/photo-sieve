@@ -106,9 +106,9 @@ def run(screenshot=None):
         w.switch('pending');ready(w)
         # Keep view available, but kept entries never enter the filmstrip.
         # Keys follow the user's settings: here P keeps, and the button shows it.
-        chosen=keys.defaults();chosen['keep']=['P',''];w.apply_shortcuts(chosen);assert w.keep_button.text().startswith('P')
+        chosen=keys.defaults();chosen['keep']=['P',''];w.apply_shortcuts(chosen);assert w.keep_button.text()=='保留' and w.keep_button.shortcut=='P'
         kept=w.queue[0]['id'];key(w,Qt.Key.Key_P);settle(w);assert lib.photo(kept)['status']==1,'A custom key keeps the photo'
-        w.apply_shortcuts(keys.defaults());assert w.keep_button.text().startswith('↑')
+        w.apply_shortcuts(keys.defaults());assert w.keep_button.text()=='保留' and w.keep_button.shortcut=='↑'
         w.switch('keep');ready(w);assert w.strip.count()==0
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.

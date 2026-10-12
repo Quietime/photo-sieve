@@ -1,4 +1,4 @@
-# 照片快筛 · 原生桌面版 3.1.1
+# 照片快筛 · 原生桌面版 3.2.0
 
 适用于 Windows 10 / 11 64 位，使用 Qt Widgets 直接显示双图，不使用浏览器、WebView 或网页服务器。JPG、PNG、TIFF、HEIC 和多种相机 RAW 可以在同一资料库内筛选。为每天约十万张照片的筛选量设计：SQLite 索引、分页队列、独立解码进程、后台预读和有限内存缓存，十万张照片不会一次加载进内存。支持本机硬盘、移动硬盘和可访问的 NAS 路径。
 
@@ -160,3 +160,13 @@ APP 目录需要当前用户可写，建议解压到本机普通文件夹。更�
 ### 3.1.1 界面对齐参考
 
 参考 [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) 中的 Apple 与 Linear 规范：统一 24 px 左右边距、基于 4/8 px 的间距、顶部 32 px 控件高度和底部操作条 36 px 控件高度。双图等宽，文件名和说明行共用基线；保持黑色画布和有限强调色，让照片本身保持视觉优先级。
+
+## 3.2 原生 Apple 交互与材质
+
+- 操作条与分段导航采用局部磨砂材质，轻微拾取当前照片颜色、细边缘高光；图像画布保持清晰。Windows 原生 Qt 不使用网页 WebGL 折射，采用轻量内容取色作为材质回退。
+- 保留、删除、恢复、下一张使用固定线条图标，快捷键在独立标签中显示；修改按键不改变动作图标。备用键在悬停提示中显示。
+- 按钮靠近响应采用高斯距离衰减，邻近按钮渐进响应；按下轻微压缩，松开用无夸张反弹的临界阻尼弹簧返回。菜单从触发位置快速淡入。
+- “⋯”菜单可启用“减少动态效果”和“减少透明效果”；同时尊重 Windows 系统动画、透明度及高对比度偏好。Tab / Shift+Tab 导航控件，空格激活按钮，分段导航聚焦后左右键及 Home/End 切换视图。
+- 复用 `apple_ui.py` 中的 AppleButton、GlassSurface、GlassDock、GlassPopover；视觉/动效参数集中在 theme.py。材质只使用缓存的小缩略图，不做全屏截图或全屏模糊，没有空闲持续动画。
+
+设计参考：[Apple Materials](https://developer.apple.com/design/human-interface-guidelines/materials)、[Motion](https://developer.apple.com/design/human-interface-guidelines/motion)、[Pointing Devices](https://developer.apple.com/design/human-interface-guidelines/pointing-devices)，以及用户提供规范中的 Liquid Glass / Dock 项目。以上用于交互和设计原则参考；应用仍为 Windows 原生 Qt Widgets。

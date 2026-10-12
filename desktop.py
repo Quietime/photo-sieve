@@ -31,6 +31,7 @@ import machine
 from version import APP_VERSION
 from update_ui import UpdateController
 import theme
+from apple_ui import AppleButton, GlassDock, GlassPopover
 from theme import STYLE, animate
 from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine
 
@@ -157,6 +158,7 @@ class Window(QMainWindow):
         self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
         self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.burst = False
         self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
+        theme.configure_accessibility(QSettings('PhotoSieve', 'PhotoSieve'))
         self.build(); self.update_actions()
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
@@ -174,7 +176,8 @@ class Window(QMainWindow):
                 shortcut = QShortcut(QKeySequence(key), self); shortcut.setAutoRepeat(repeat); shortcut.activated.connect(handlers[action]); self.shortcuts.append(shortcut)
         for button, action, text in ((self.keep_button, 'keep', '保留'), (self.delete_button, 'delete', '删除'),
                                      (self.restore_button, 'restore', '恢复'), (self.next_button, 'next', '下一张')):
-            button.setText(f'{keys.first(chosen, action)}  {text}'.strip())
+            button.setText(text); button.symbol=action; button.variant='dock'
+            button.set_shortcut(keys.first(chosen, action), ' / '.join(keys.label(key) for key in chosen[action] if key))
         self.deleted_note.setText(f'删除的照片在原文件夹的 .photo-sieve-trash 中，仍占用空间。双击或按 {self.key("restore")} 恢复。')
 
     def key(self, action):
@@ -213,7 +216,7 @@ class Window(QMainWindow):
         self.toast.show_message(message, 'error', 4200)
 
     def button(self, text, fn, name=None):
-        b = QPushButton(text); b.clicked.connect(fn); b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b = AppleButton(text, variant='primary' if name=='primary' else 'neutral'); b.clicked.connect(fn)
         if name: b.setObjectName(name)
         return b
 
@@ -228,9 +231,9 @@ class Window(QMainWindow):
         self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
         right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
-        self.open_button = self.button('打开文件夹…', self.choose_source); tools.addWidget(self.open_button)
-        self.export_button = self.button('导出', self.export_dialog, 'primary'); tools.addWidget(self.export_button)
-        self.more_button = self.button('⋯', self.show_menu, 'icon'); tools.addWidget(self.more_button)
+        self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
+        self.export_button = self.button('导出', self.export_dialog, 'primary'); self.export_button.symbol='export'; tools.addWidget(self.export_button)
+        self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
         for control in (self.open_button, self.export_button, self.more_button): control.setFixedHeight(32)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
@@ -250,12 +253,13 @@ class Window(QMainWindow):
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
         actions = QHBoxLayout(); actions.setContentsMargins(0, 16, 0, 12); actions.addStretch()
-        self.actionbar = QFrame(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(8, 4, 8, 4); row.setSpacing(4)
+        self.actionbar = GlassDock(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(8, 4, 8, 4); row.setSpacing(4)
         self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
         self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
         divider = QFrame(); divider.setObjectName('divider'); divider.setFixedSize(1, 20)
         for widget in (self.keep_button, self.delete_button, divider, self.restore_button, self.next_button): row.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
         for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button): control.setFixedHeight(36)
+        self.actionbar.register((self.keep_button,self.delete_button,self.restore_button,self.next_button))
         actions.addWidget(self.actionbar); actions.addStretch(); column.addLayout(actions)
         self.strip = QListWidget(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
@@ -290,7 +294,7 @@ class Window(QMainWindow):
 
     def show_menu(self):
         self.updates.touch()
-        menu = QMenu(self); menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        menu = GlassPopover(self); menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
         rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
@@ -304,8 +308,22 @@ class Window(QMainWindow):
         gpu.setChecked(QSettings('PhotoSieve', 'PhotoSieve').value('gpu_compositing', True, type=bool)); gpu.toggled.connect(self.set_gpu); menu.addAction(gpu)
         fps = QAction('显示帧率', menu); fps.setCheckable(True); fps.setChecked(self.fps_label is not None); fps.toggled.connect(self.show_fps); menu.addAction(fps)
         menu.addSeparator()
+        reduced = QAction('减少动态效果', menu); reduced.setCheckable(True); reduced.setChecked(theme.REDUCED_MOTION)
+        reduced.toggled.connect(lambda enabled:self.set_accessibility('reduced_motion',enabled)); menu.addAction(reduced)
+        opaque = QAction('减少透明效果', menu); opaque.setCheckable(True); opaque.setChecked(theme.REDUCED_TRANSPARENCY)
+        opaque.toggled.connect(lambda enabled:self.set_accessibility('reduced_transparency',enabled)); menu.addAction(opaque)
+        menu.addSeparator()
         for line in (self.machine_status(), self.updates.status or '版本 ' + APP_VERSION): menu.addAction(line).setEnabled(False)
         menu.exec(self.more_button.mapToGlobal(QPoint(self.more_button.width() - menu.sizeHint().width(), self.more_button.height() + 6)))
+
+    def set_accessibility(self, name, enabled):
+        settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue(name,bool(enabled));settings.sync()
+        theme.configure_accessibility(settings);self.finish_motion();self.actionbar.update();self.segments.update()
+        for control in self.actionbar.controls:control.set_response(0.);control.update()
+
+    def material_sources(self):
+        sources=[self.thumb_cache.get(p['id']) for p in self.queue[:2]]
+        self.actionbar.set_sources(sources);self.segments.set_sources(sources)
 
     def machine_status(self):
         return (f'{machine.PROFILE.describe()} · 解码 {self.workers} · 预读 {self.ahead_target} · '
@@ -486,7 +504,7 @@ class Window(QMainWindow):
                 if pane.photo and pane.photo['id'] == pid and not pane.detail and not pane.zoom_animation:
                     fresh = pane.pixmap is None; pane.show_photo(pane.photo, pixmap); pane.source_width = source[0]
                     if fresh and pane.item and time.monotonic() - self.last_motion > BURST: self.fade(pane, 0, 1, 160)
-            self.update_thumbnail(pid); self.update_actions(); self.prefetch()
+            self.update_thumbnail(pid); self.material_sources(); self.update_actions(); self.prefetch()
         def failed(message):
             if library is not self.library: return
             self.loading.discard(pid); self.image_errors[pid] = message
@@ -535,7 +553,7 @@ class Window(QMainWindow):
                 message = '' if p or i else ('正在读取…' if self.fetching else ('全部筛选完毕' if self.view == 'pending' else '没有照片'))
                 pane.show_photo(p, pixmap, error, message); pane.source_width = self.sources.get(pid, 0)
             self.caption(i, p)
-        self.update_strip()
+        self.material_sources(); self.update_strip()
         if self.queue: self.cursor_id = self.queue[0]['id']; self.cursor_timer.start(400)
         self.update_actions()
 
@@ -610,7 +628,7 @@ class Window(QMainWindow):
     def begin_transition(self):
         """Snapshot both panes before the queue moves; held keys get instant swaps instead."""
         now = time.monotonic(); burst = self.burst = now - self.last_motion < BURST; self.last_motion = now; self.finish_motion()
-        if burst or not self.isVisible(): return None
+        if burst or theme.REDUCED_MOTION or not self.isVisible(): return None
         return self.ghost(self.photos[0]), self.ghost(self.photos[1])
 
     def play_transition(self, kind, ghosts):
@@ -637,6 +655,7 @@ class Window(QMainWindow):
 
     def nudge(self):
         """iOS-style refusal shake when the current preview is not ready yet."""
+        if theme.REDUCED_MOTION: return
         now = time.monotonic()
         if now - self.last_nudge < .6: return
         self.last_nudge = now; pane = self.photos[0]; item = pane.item or pane.text

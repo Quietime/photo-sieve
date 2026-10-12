@@ -1,12 +1,13 @@
 """Custom widgets: photo pane with animated in-place zoom, transition ghosts, toast, segmented control."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QPointF, QRect, QRectF, QSize, QTimer
+from PySide6.QtCore import Qt, Signal, QPointF, QRect, QRectF, QSize, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QTransform
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QLabel, QSizePolicy, QWidget
 
 import theme
 from theme import animate
+from apple_ui import GlassSurface
 
 
 class PhotoView(QGraphicsView):
@@ -251,13 +252,14 @@ class Toast(QWidget):
         painter.setPen(QColor(theme.LABEL)); painter.drawText(QRectF(30, 0, rect.width() - 44, rect.height()), Qt.AlignmentFlag.AlignVCenter, self.message)
 
 
-class Segmented(QWidget):
+class Segmented(GlassSurface):
     """iOS-style segmented control with a sliding selection thumb and live counts."""
     changed = Signal(str)
 
     def __init__(self, items):
         super().__init__(); self.items = items; self.counts = {}; self.index = 0; self.position = 0.0; self.animation = None; self.width_cache = 0
         self.setFixedHeight(32); self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setAccessibleName('筛选视图：未筛选、保留、已删除')
         font = QFont(self.font()); font.setPixelSize(13); self.setFont(font)
 
     def label(self, i):
@@ -287,24 +289,39 @@ class Segmented(QWidget):
         def finished(): self.animation = None
         self.animation = animate(self, 250, step, theme.EASE, finished, self.position, index)
 
+    def event(self, event):
+        if event.type()==QEvent.Type.ShortcutOverride and event.key() in (Qt.Key.Key_Left,Qt.Key.Key_Right,Qt.Key.Key_Home,Qt.Key.Key_End):
+            event.accept();return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        key=event.key()
+        if key in (Qt.Key.Key_Left,Qt.Key.Key_Right,Qt.Key.Key_Home,Qt.Key.Key_End):
+            index=0 if key==Qt.Key.Key_Home else len(self.items)-1 if key==Qt.Key.Key_End else max(0,min(len(self.items)-1,self.index+(1 if key==Qt.Key.Key_Right else -1)))
+            if index!=self.index:self.changed.emit(self.items[index][0])
+            event.accept();return
+        super().keyPressEvent(event)
+
     def mousePressEvent(self, event):
         index = int((event.position().x() - 2) // self.segment_width())
         if 0 <= index < len(self.items) and index != self.index: self.changed.emit(self.items[index][0])
 
     def paintEvent(self, event):
         painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(theme.ELEVATED)); painter.drawRoundedRect(QRectF(self.rect()), 9, 9)
-        width = self.segment_width(); painter.setBrush(QColor('#48484A'))
-        painter.drawRoundedRect(QRectF(2 + self.position * width, 2, width, self.height() - 4), 7, 7)
+        painter.end();super().paintEvent(event);painter.begin(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing);painter.setPen(Qt.PenStyle.NoPen)
+        width = self.segment_width(); painter.setBrush(QColor('#45474D' if not theme.HIGH_CONTRAST else '#FFFFFF'))
+        painter.drawRoundedRect(QRectF(2 + self.position * width, 2, width, self.height() - 4), 14, 14)
         metrics = self.fontMetrics()
         for i in range(len(self.items)):
             text, count = self.label(i); font = QFont(self.font()); font.setWeight(QFont.Weight.DemiBold if i == self.index else QFont.Weight.Normal)
             painter.setFont(font); metrics = painter.fontMetrics()
             total = metrics.horizontalAdvance(text) + (metrics.horizontalAdvance('  ' + count) if count else 0)
             x = 2 + i * width + (width - total) / 2; box = QRectF(x, 0, total + 4, self.height())
-            painter.setPen(QColor(theme.LABEL)); painter.drawText(box, Qt.AlignmentFlag.AlignVCenter, text)
+            painter.setPen(QColor('#000000' if theme.HIGH_CONTRAST and i==self.index else theme.LABEL)); painter.drawText(box, Qt.AlignmentFlag.AlignVCenter, text)
             if count:
-                painter.setPen(QColor(theme.SECONDARY)); painter.drawText(box.adjusted(metrics.horizontalAdvance(text + '  '), 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, count)
+                painter.setPen(QColor('#000000' if theme.HIGH_CONTRAST and i==self.index else '#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY)); painter.drawText(box.adjusted(metrics.horizontalAdvance(text + '  '), 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, count)
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.BLUE));painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),15,15)
 
 
 class ProgressLine(QWidget):
