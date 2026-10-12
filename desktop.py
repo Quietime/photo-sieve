@@ -145,6 +145,7 @@ class Window(QMainWindow):
     def __init__(self, library, check_updates=True, decoders=None, start_empty=False, prompt_on_close=False, data_root=None):
         super().__init__(); self.library = library; self.decoders = decoders; library.offload = decoders; self.setWindowTitle('照片快筛'); self.resize(1480, 960); self.setAcceptDrops(True)
         self.session_active = not start_empty; self.prompt_on_close = prompt_on_close; self.close_choice = None
+        library.start_session()
         self.data_root=Path(data_root) if data_root else Path.home()/'.photo-sieve'
         self.managed_workspaces=data_root is not None
         self.previous_library=QSettings('PhotoSieve','PhotoSieve').value('library','')
@@ -971,6 +972,7 @@ class Window(QMainWindow):
             self.busy = True; self.update_actions(); self.toast.show_message('正在打开此文件夹的筛选记录…', 'info')
             def changed(library):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
+                self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed): store.clear()
                 self.reset_zoom(); self.state_data = None; self.state_pending = False; self.busy = False; self.counts = {}
@@ -1150,10 +1152,12 @@ class Window(QMainWindow):
         for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()
         if self.decoders: self.decoders.close()
         if self.cursor_id: self.library.remember('cursor', self.cursor_id if self.close_choice!='forget' else 0)
+        self.library.stop_session()
         if self.uninstall_requested:
             try: subprocess.Popen([str(self.uninstaller_path())],cwd=self.uninstaller_path().parent)
             except OSError as exc:
                 self.closed=False; self.closing=False; self.uninstall_requested=False
+                self.library.start_session()
                 self.updates.timer.start(1000); self.maintenance_timer.start(60000); self.poll(); self.prefetch()
                 self.error('无法打开卸载向导：'+str(exc)); event.ignore(); return
         event.accept()

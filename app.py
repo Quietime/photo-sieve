@@ -64,6 +64,7 @@ class Library:
         self.prune_lock = threading.Lock()
         self.last_prune = time.monotonic()
         self.cache_indexed = set(); self.cache_sizes={}; self.cache_bytes=0; self.cache_changed=None
+        self.session_lock=threading.Lock(); self.session_users=0; self.session_connection=None
         self.job = {'revision': secrets.token_hex(8), 'running': False, 'kind': '', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
         self.offload = None
@@ -133,6 +134,20 @@ class Library:
     def detect_disk(self, root):
         if os.path.isdir(root):
             self.rotational = machine.seek_penalty(root)
+
+    def start_session(self):
+        """Keep WAL/SHM alive during GUI review; Windows otherwise recreates them for each short query."""
+        with self.session_lock:
+            if self.session_connection is None:
+                self.session_connection=sqlite3.connect(self.database,timeout=30,check_same_thread=False)
+                self.session_connection.execute('PRAGMA journal_mode=WAL')
+            self.session_users+=1
+
+    def stop_session(self):
+        with self.session_lock:
+            self.session_users=max(0,self.session_users-1)
+            if self.session_users==0 and self.session_connection is not None:
+                self.session_connection.close(); self.session_connection=None
 
     @contextmanager
     def connect(self):

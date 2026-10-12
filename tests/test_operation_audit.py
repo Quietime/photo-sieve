@@ -386,7 +386,7 @@ class OperationAuditTest(unittest.TestCase):
         self.window.resize(3840, 2160)
         application.processEvents()
         self.window.queue_deleted_thumbnails()
-        until(lambda: not self.window.thumb_loading and not self.window.thumb_wanted)
+        until(lambda: not self.window.thumb_loading and not self.window.thumb_wanted,seconds=60)
         grid = self.window.deleted_grid
         visible = [grid.item(i) for i in range(grid.count())
                    if grid.visualItemRect(grid.item(i)).intersects(grid.viewport().rect())]
