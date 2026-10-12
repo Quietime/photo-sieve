@@ -14,6 +14,7 @@ import threading
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import Library, LibraryError
 from desktop import Window, Decoders, STYLE
+import keys
 import machine
 
 application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
@@ -40,7 +41,7 @@ def run(screenshot=None):
         for i in range(80):
             Image.new('RGB',(3200,1800) if i<2 else (600,400),(i*3%255,i*7%255,i*11%255)).save(root/f'{i:04}.jpg')
         lib=Library(base/'data')
-        w=Window(lib,decoders=Decoders(2));w.show();until(lambda:w.state_data is not None and not w.fetching)
+        w=Window(lib,decoders=Decoders(2));w.apply_shortcuts(keys.defaults());w.show();until(lambda:w.state_data is not None and not w.fetching)
         assert w.stack.currentIndex()==2,'A library without a folder opens on the empty state'
         assert all(s.autoRepeat() for s in w.shortcuts[:4]),'Held ↑ ↓ → ← follow the keyboard repeat rate'
         w.scan(str(root));ready(w);assert len(w.queue)==80 and w.stack.currentIndex()==0
@@ -104,7 +105,11 @@ def run(screenshot=None):
         w.restore(photo_id=second);until(lambda:not w.deleted_rows and w.deleted_grid.count()==0);settle(w)
         w.switch('pending');ready(w)
         # Keep view available, but kept entries never enter the filmstrip.
-        key(w,Qt.Key.Key_Up);settle(w);w.switch('keep');ready(w);assert w.strip.count()==0
+        # Keys follow the user's settings: here P keeps, and the button shows it.
+        chosen=keys.defaults();chosen['keep']=['P',''];w.apply_shortcuts(chosen);assert w.keep_button.text().startswith('P')
+        kept=w.queue[0]['id'];key(w,Qt.Key.Key_P);settle(w);assert lib.photo(kept)['status']==1,'A custom key keeps the photo'
+        w.apply_shortcuts(keys.defaults());assert w.keep_button.text().startswith('↑')
+        w.switch('keep');ready(w);assert w.strip.count()==0
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
         # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.

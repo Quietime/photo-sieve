@@ -31,7 +31,7 @@ TRASH_DIRECTORY = '.photo-sieve-trash'
 # Pillow re-takes the GIL after every block it reads; with 64 KB blocks a 20 MB photo decoding beside
 # other threads waits on the GIL hundreds of times (10x slower). Larger blocks avoid that convoy.
 ImageFile.MAXBLOCK = 4 * 1024 * 1024
-# Previews decode in parallel, scaled to this computer's cores (8P+16E i9-14900HX: 12 decoders).
+# Previews decode in parallel, scaled to this computer's cores (a 24-core 8P+16E laptop gets 12 decoders).
 DECODE_SLOTS = machine.PROFILE.decoders()
 # Set in decoder processes: limits how many read a spinning disk at once, so its head is not thrashed.
 READ_GATE = None

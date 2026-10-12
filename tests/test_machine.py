@@ -29,7 +29,7 @@ class MachineTest(unittest.TestCase):
             parse_core_records(cache_record())
 
     def test_decoders_scale_with_cores_and_memory(self):
-        self.assertEqual(Profile(32, 24, 8, 16, 64 * GB).decoders(), 12)   # i9-14900HX
+        self.assertEqual(Profile(32, 24, 8, 16, 64 * GB).decoders(), 12)   # 8P+16E laptop
         self.assertEqual(Profile(16, 8, 8, 0, 16 * GB).decoders(), 6)
         self.assertEqual(Profile(4, 4, 4, 0, 16 * GB).decoders(), 3)
         self.assertEqual(Profile(8, 8, 8, 0, 2 * GB).decoders(), 2)        # memory bound

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
     QFrame, QMenu, QSizePolicy)
 from app import Library, DECODE_SLOTS, build_preview, decoder_init
+import keys
 import machine
 from version import APP_VERSION
 from update_ui import UpdateController
@@ -158,13 +159,33 @@ class Window(QMainWindow):
         self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
         self.build(); self.update_actions()
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
-        self.shortcuts = []
-        # ↑ ↓ → follow the keyboard repeat rate when held (about 30 per second on Windows).
-        for key, fn, repeat in [('Up', lambda: self.act('keep'), True), ('Down', lambda: self.act('delete'), True),
-                                ('Right', self.next_photo, True), ('Left', lambda: self.restore(), True),
-                                ('Ctrl+Z', lambda: self.restore(general=True), False), ('Z', self.focus_left, False), ('Esc', self.reset_zoom, False)]:
-            shortcut = QShortcut(QKeySequence(key), self); shortcut.setAutoRepeat(repeat); shortcut.activated.connect(fn); self.shortcuts.append(shortcut)
+        self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
+
+    def apply_shortcuts(self, chosen):
+        """Bind the user's keys (see keys.ACTIONS); held keys follow the keyboard repeat rate."""
+        for shortcut in self.shortcuts: shortcut.setEnabled(False); shortcut.deleteLater()
+        self.shortcuts = []; self.chosen_keys = chosen
+        handlers = {'keep': lambda: self.act('keep'), 'delete': lambda: self.act('delete'), 'next': self.next_photo,
+                    'restore': lambda: self.restore(), 'undo': lambda: self.restore(general=True), 'zoom': self.focus_left, 'unzoom': self.reset_zoom}
+        for action, _, _, repeat in keys.ACTIONS:
+            for key in chosen[action]:
+                if not key: continue
+                shortcut = QShortcut(QKeySequence(key), self); shortcut.setAutoRepeat(repeat); shortcut.activated.connect(handlers[action]); self.shortcuts.append(shortcut)
+        for button, action, text in ((self.keep_button, 'keep', '保留'), (self.delete_button, 'delete', '删除'),
+                                     (self.restore_button, 'restore', '恢复'), (self.next_button, 'next', '下一张')):
+            button.setText(f'{keys.first(chosen, action)}  {text}'.strip())
+        self.deleted_note.setText(f'删除的照片在原文件夹的 .photo-sieve-trash 中，仍占用空间。双击或按 {self.key("restore")} 恢复。')
+
+    def key(self, action):
+        return keys.first(self.chosen_keys, action) or '快捷键'
+
+    def edit_shortcuts(self):
+        self.updates.touch()
+        dialog = keys.ShortcutDialog(self, self.chosen_keys)
+        def saved(chosen):
+            keys.save(QSettings('PhotoSieve', 'PhotoSieve'), chosen); self.apply_shortcuts(chosen); self.toast.show_message('快捷键已更新', 'info')
+        dialog.saved.connect(saved); dialog.exec()
 
     # ---- infrastructure -------------------------------------------------
     def submit(self, fn, ok=lambda _: None, fail=None, pool=None, priority=0):
@@ -271,6 +292,7 @@ class Window(QMainWindow):
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
         rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
+        menu.addAction('快捷键…', self.edit_shortcuts)
         menu.addSeparator(); menu.addAction('检查更新', lambda: self.updates.check())
         automatic = QAction('启动时检查更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic); menu.addAction(automatic)
@@ -633,7 +655,8 @@ class Window(QMainWindow):
         self.render(); self.play_transition(action, ghosts); self.prefetch(); self.refill()
         if action == 'delete':
             self.delete_streak += 1
-            self.toast.defer('已移到暂存 · ← 恢复' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · ← 恢复', 'delete'); self.refresh_chrome()
+            back = f'{self.key("restore")} 恢复'
+            self.toast.defer(f'已移到暂存 · {back}' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · {back}', 'delete'); self.refresh_chrome()
         elif self.delete_streak and not self.toast.active():
             self.delete_streak = 0
         def done(result):
@@ -711,7 +734,7 @@ class Window(QMainWindow):
         if pane.detail:
             pane.unzoom(lambda: self.reset_pane(pane)); self.caption(self.photos.index(pane), photo); return
         self.finish_motion(); pane.zoom_at(point)
-        self.caption(self.photos.index(pane), photo, '正在读取原始分辨率… 再点一次或 Esc 还原'); self.load_focus(photo)
+        self.caption(self.photos.index(pane), photo, f'正在读取原始分辨率… 再点一次或 {self.key("unzoom")} 还原'); self.load_focus(photo)
 
     def pump_focus(self):
         for pane in self.photos:
@@ -730,7 +753,7 @@ class Window(QMainWindow):
                 if pane.detail and pane.photo and pane.photo['id'] == pid:
                     if pixmap is None: pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(self.devicePixelRatioF())
                     pane.install_full_image(pixmap)
-                    self.caption(index, photo, f'100% · {image.width()} × {image.height()} · 拖动查看，再点一次或 Esc 还原')
+                    self.caption(index, photo, f'100% · {image.width()} × {image.height()} · 拖动查看，再点一次或 {self.key("unzoom")} 还原')
             self.pump_focus()
         def failed(message):
             if library is not self.library: return
@@ -845,7 +868,7 @@ class Window(QMainWindow):
             folder = QFileDialog.getExistingDirectory(dialog, '选择目标文件夹', chosen['path'])
             if folder: chosen['path'] = folder; show_target()
         row.addWidget(target, 1); row.addWidget(self.button('选择…', choose)); layout.addLayout(row); show_target()
-        note = QLabel('复制：原片仍在原处。移动：原片转到目标文件夹，不能用 ← 撤回。\n目标中已有的同名文件会跳过，不会覆盖。'); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
+        note = QLabel(f'复制：原片仍在原处。移动：原片转到目标文件夹，不能用 {self.key("restore")} 撤回。\n目标中已有的同名文件会跳过，不会覆盖。'); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
         problem = QLabel(); problem.setStyleSheet(f'color:{theme.RED}; font-size:12px;'); problem.setWordWrap(True); problem.hide(); layout.addWidget(problem)
         if summary:
             result = QLabel(f"上次：成功 {summary['done']:,} / {summary['total']:,}，失败 {summary['failed']:,}"); result.setObjectName('caption'); layout.addWidget(result)
