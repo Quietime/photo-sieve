@@ -42,6 +42,22 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_all_screens.py --output ui-screenshots-ci
+      - name: Verify folder picker avoids RAW shell extensions
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_folder_icons.py --output folder-icons-ci.json
+      - name: Verify 10 RAW import and full-resolution isolated decoding
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_large_import.py --photos 10 --output large-import-10-ci.json
+      - name: Verify 16000 RAW import, real progress and bounded preloading
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_large_import.py --photos 16000 --output large-import-16000-ci.json
+      - name: Verify native D3D11 compositor with RAW import and zoom
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_large_import.py --photos 10 --mode gpu --output large-import-gpu-ci.json
       - name: Retain interface diagnostics even if a check fails
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,6 +66,10 @@ jobs:
           path: |
             windows-chrome-ci.json
             ui-screenshots-ci/*
+            folder-icons-ci.json
+            large-import-*-ci.*
+            large-import-*-ci-*.png
+            large-import-*-ci-logs/**
           if-no-files-found: ignore
           retention-days: 14
       - name: Audit paging, review performance and cache limits

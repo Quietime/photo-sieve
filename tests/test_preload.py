@@ -8,6 +8,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
 from app import Library
 from desktop import Window
+import machine
 
 application=QApplication.instance() or QApplication([])
 
@@ -18,8 +19,9 @@ class PreloadTest(unittest.TestCase):
             library=Library(base/'records'); library.remember('root',photos)
             with library.connect() as db:
                 db.executemany('INSERT INTO photos(path,size,mtime) VALUES (?,1,1)',[(str(photos/f'{i:05}.jpg'),) for i in range(2400)])
-            # Verify paging independently of image decoding; metadata rows have no original image files.
-            with patch.object(Window,'request_image',return_value=None):
+            # Isolate metadata paging from decoding and the separate safety-budget policy.
+            # These rows have no originals and allocate no decoded photo memory.
+            with patch.object(Window,'request_image',return_value=None),patch.object(machine.Profile,'preview_capacity',return_value=2500):
                 window=Window(library,check_updates=False); window.preload_count=2500; window.warm_count=0
                 window.show(); window.display_size=None; window.update_display_size()
                 deadline=time.monotonic()+10

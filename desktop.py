@@ -26,8 +26,9 @@ from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySeque
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
     QFrame, QMenu, QSizePolicy, QSpinBox, QFormLayout, QCheckBox, QSizeGrip)
-from app import Library, DECODE_SLOTS, build_preview, decoder_init
+from app import Library, DECODE_SLOTS, build_preview, build_full_image, decoder_init
 import keys
+import crashlog
 from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel, app_icon, CacheSpinBox
 import machine
 from cache_policy import prune_workspaces, expire_inactive_workspaces
@@ -38,7 +39,7 @@ from update_ui import UpdateController
 import theme
 from apple_ui import AppleButton, GlassDock, GlassPopover
 from theme import STYLE, animate
-from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage
+from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage, ImportPage
 
 PAGE = 1200         # rows per queue page; ids are indexed, so a page costs a few milliseconds
 REFILL = 800        # fetch the next page while this many photos remain
@@ -88,13 +89,19 @@ def display_image(image, width, height, thumb):
 class Decoders:
     """Originals decode in separate processes. They share no GIL with the interface, so it stays smooth while
     keys are held, and a decoder crash on a damaged file ends only that process, not the app.
-    If processes cannot start at all (a blocked spawn, for example), decoding quietly returns to threads."""
+    If processes cannot start, the app shows an error and never retries native decoding in its own process."""
     def __init__(self, workers=DECODE_SLOTS):
         self.workers = workers; self.pool = self.gate = None; self.lock = threading.Lock(); self.working = False; self.unavailable = False
         self.context = multiprocessing.get_context('spawn')
 
     def __call__(self, *job):
-        if self.unavailable: return False
+        return self.run(build_preview,*job)
+
+    def full_image(self,source,rotational=False):
+        return self.run(build_full_image,source,rotational)
+
+    def run(self,function,*job):
+        if self.unavailable:raise ValueError('安全解码进程不可用，请查看运行日志后重新启动应用')
         pool = None
         try:
             with self.lock:
@@ -105,16 +112,21 @@ class Decoders:
                     self.gate = self.context.BoundedSemaphore(2)
                     self.pool = ProcessPoolExecutor(self.workers, self.context, decoder_init, (self.gate,))
                 pool = self.pool
-            pool.submit(build_preview, *job).result(); self.working = True; return True
+            result=pool.submit(function, *job).result(); self.working = True
+            return result if function is build_full_image else True
         except ValueError:
             raise   # this photo could not be decoded; the reason is shown on it
         except BrokenProcessPool:
+            crashlog.LOGGER.exception('Isolated decoder exited: %s',job[0] if job else '')
             with self.lock:
                 if self.pool is pool: self.pool = None
-            if self.working: raise ValueError('解码进程意外退出，照片可能已损坏') from None
-            self.unavailable = True; return False
-        except Exception:
-            self.unavailable = True; return False
+            # Retrying a native failure in the APP process defeats the isolation,
+            # especially when the very first RAW crashes before working becomes True.
+            raise ValueError('照片解码进程意外退出，已隔离此照片；请查看日志') from None
+        except Exception as exc:
+            crashlog.LOGGER.exception('Could not run isolated decoder: %s',job[0] if job else '')
+            self.unavailable = True
+            raise ValueError(f'无法运行安全解码进程：{exc}') from None
 
     def close(self):
         with self.lock:
@@ -134,7 +146,9 @@ class Work(QRunnable):
 
     def run(self):
         try: self.signals.ok.emit(self.fn())
-        except Exception as e: self.signals.fail.emit(str(getattr(e, 'detail', str(e))))
+        except Exception as e:
+            crashlog.LOGGER.exception('Background task failed')
+            self.signals.fail.emit(str(getattr(e, 'detail', str(e))))
 
 
 class Window(QMainWindow):
@@ -153,7 +167,7 @@ class Window(QMainWindow):
         settings=QSettings('PhotoSieve','PhotoSieve')
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
-        self.cache_clearing=False
+        self.cache_clearing=False;self.importing=False;self.import_revision=None
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.op_pool = QThreadPool(self); self.op_pool.setMaxThreadCount(1)   # file and record changes run strictly in order
         # Image threads mostly wait for decoder processes; only a few at a time do interface-side decoding.
@@ -273,7 +287,7 @@ class Window(QMainWindow):
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
         titles.addWidget(self.title); titles.addWidget(self.subtitle); top.addWidget(left, 1)
         self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
-        right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
         self.export_button = self.button('导出', self.export_dialog, 'primary'); self.export_button.symbol='export'; tools.addWidget(self.export_button)
@@ -340,7 +354,9 @@ class Window(QMainWindow):
         start = self.button('打开文件夹…', self.choose_source, 'primary'); start.setProperty('large', True)
         lead.setAlignment(Qt.AlignmentFlag.AlignHCenter); hero.addWidget(lead)
         hero.addWidget(start, 0, Qt.AlignmentFlag.AlignHCenter); self.stack.addWidget(empty)
+        self.import_page=ImportPage();self.stack.addWidget(self.import_page)
         self.toast = Toast(root)
+        self.toast.positioner=self.place_overlays
         grip_row=QHBoxLayout(); grip_row.setContentsMargins(0,0,2,2); grip_row.addStretch(); grip_row.addWidget(QSizeGrip(self)); outer.addLayout(grip_row)
 
     def show_menu(self):
@@ -360,7 +376,7 @@ class Window(QMainWindow):
         if self.updates.staged: menu.addAction('立即安装更新并重启').triggered.connect(lambda: self.updates.install())
         menu.addSeparator()
         gpu = QAction('GPU 合成（重启后生效）', menu); gpu.setCheckable(True); gpu.setEnabled(os.name == 'nt')
-        gpu.setChecked(QSettings('PhotoSieve', 'PhotoSieve').value('gpu_compositing', True, type=bool)); gpu.toggled.connect(self.set_gpu); menu.addAction(gpu)
+        gpu.setChecked(QSettings('PhotoSieve', 'PhotoSieve').value('gpu_compositing', False, type=bool)); gpu.toggled.connect(self.set_gpu); menu.addAction(gpu)
         fps = QAction('显示帧率', menu); fps.setCheckable(True); fps.setChecked(self.fps_label is not None); fps.toggled.connect(self.show_fps); menu.addAction(fps)
         menu.addSeparator()
         reduced = QAction('减少动态效果', menu); reduced.setCheckable(True); reduced.setChecked(theme.REDUCED_MOTION)
@@ -369,8 +385,7 @@ class Window(QMainWindow):
         opaque.toggled.connect(lambda enabled:self.set_accessibility('reduced_transparency',enabled)); menu.addAction(opaque)
         menu.addSeparator()
         for line in (self.machine_status(), self.updates.status or '版本 ' + APP_VERSION): menu.addStatus(line)
-        menu.addSeparator(); uninstall=menu.addAction('卸载照片快筛…'); uninstall.triggered.connect(self.uninstall_app)
-        uninstall.setEnabled(self.uninstaller_path().is_file() and not self.busy and not self.job_running())
+        menu.addSeparator();menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
         menu.exec()
 
     def set_accessibility(self, name, enabled):
@@ -386,11 +401,13 @@ class Window(QMainWindow):
         warm=CacheSpinBox(); warm.setRange(0,50000); warm.setValue(self.warm_count)
         disk=CacheSpinBox(); disk.setRange(64,10240); disk.setSuffix(' MB'); disk.setValue(self.library.cache_limit//(1024*1024))
         for field in (ahead,warm,disk): field.setMinimumHeight(38); field.setMinimumWidth(240)
-        form.addRow('内存预加载照片数',ahead); form.addRow('后台磁盘预读照片数',warm); form.addRow('磁盘缓存上限',disk); layout.addLayout(form)
+        form.addRow('内存预加载照片数',ahead); form.addRow('后台磁盘预读照片数',warm); form.addRow('磁盘缓存上限',disk)
+        form_box=QWidget();form_box.setLayout(form);form_box.setMinimumHeight(3*38+2*16);layout.addWidget(form_box)
         note=QLabel(); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
         def estimate():
             size=self.display_size or QSize(800,600); count=ahead.value() or machine.PROFILE.buffer(size.width()*size.height()*4)
-            note.setText(f'预计预览内存约 {(count+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。手动预加载至少 16 张。\n达到设置的缓存限额后，立即按生成时间从旧到新删除最旧的 70% 预览文件。全部工作文件夹共用 10 GB 总限额。读取照片不会改变缓存生成时间。照片和筛选记录不会被清理。')
+            effective=machine.PROFILE.preview_capacity(max(16,count),size.width()*size.height()*4+160*110*4,COMPOSITING['gpu'])
+            note.setText(f'当前窗口预计实际预加载 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。大照片会按安全内存预算调整，避免内存过量。\n达到设置的缓存限额后，立即按生成时间从旧到新删除最旧的 70% 预览文件。全部工作文件夹共用 10 GB 总限额。读取照片不会改变缓存生成时间。照片和筛选记录不会被清理。')
         ahead.valueChanged.connect(estimate); estimate()
         layout.addWidget(self.button('清理当前文件夹的预览缓存',lambda:(dialog.accept(),self.clear_cache())))
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
@@ -453,7 +470,11 @@ class Window(QMainWindow):
 
     def place_overlays(self):
         root = self.centralWidget()
+        root.layout().activate()
         if self.stack.currentIndex() == 0: bottom = self.actionbar.mapTo(root, QPoint(0, 0)).y() - 14
+        elif self.stack.currentIndex()==2:
+            bottom=self.stack.mapTo(root,QPoint(0,0)).y()+round(max(0,self.stack.height()-100)*.74)
+        elif self.stack.currentIndex()==3:bottom=self.stack.mapTo(root,QPoint(0,0)).y()+60
         else: bottom = root.height() - 70
         self.toast.place(bottom)
 
@@ -488,6 +509,18 @@ class Window(QMainWindow):
             first = self.state_data is None; old = self.state_data; self.state_data = state; job = state['job']; running = job['running']
             if not self.pending_ops: self.counts = dict(state['counts'])
             self.show_counts()
+            if self.importing:
+                if self.import_revision is None or job['revision']!=self.import_revision:
+                    self.timer.start(180);self.update_actions();return
+                self.import_page.set_progress(job.get('phase','正在打开照片文件夹'),job['done'],job['total'],state['root'],job.get('found',0))
+                if running:
+                    self.timer.start(180);self.progress.set_progress(job['done'],job['total']);self.was_running=True;self.update_actions();return
+                self.importing=False;self.busy=False;self.stack.setCurrentIndex(0);self.place_overlays()
+                self.toast.hide();self.load(anchor=max(0,state['cursor']-1))
+                self.timer.stop();self.progress.set_progress(0,0,False)
+                self.was_running=False;self.update_actions()
+                if job['errors'] or job['message']!='已完成':self.error(job['message']+f' · {len(job["errors"])} 项失败')
+                return
             if running:
                 if not self.timer.isActive(): self.timer.start(900)
                 self.progress.set_progress(job['done'], job['total'])
@@ -585,7 +618,9 @@ class Window(QMainWindow):
         if old is None or abs(size.width() - old.width()) > old.width() * .06 or abs(size.height() - old.height()) > old.height() * .06:
             self.display_size = size
             # Pane-sized RGB32 preview plus its strip thumbnail.
-            self.ahead_target = max(STRIP,self.preload_count) if self.preload_count else machine.PROFILE.buffer(size.width() * size.height() * 4 + 160 * 110 * 4)
+            pixel_bytes=size.width()*size.height()*4+160*110*4
+            requested=max(STRIP,self.preload_count) if self.preload_count else machine.PROFILE.buffer(pixel_bytes)
+            self.ahead_target=machine.PROFILE.preview_capacity(requested,pixel_bytes,COMPOSITING['gpu'])
             self.cache_limit = self.ahead_target + BEHIND
             return old is not None
         return False
@@ -629,7 +664,7 @@ class Window(QMainWindow):
             self.cache.pop(old); self.cache_size.pop(old,None); self.sources.pop(old,None)
 
     def prefetch(self):
-        if not self.session_active or self.cache_clearing or self.view == 'deleted' or self.display_size is None: return
+        if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.display_size is None: return
         self.refill()  # custom horizons can exceed the first 1,200 metadata rows
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
         for index, photo in enumerate(self.queue[:self.ahead_target]):
@@ -646,6 +681,7 @@ class Window(QMainWindow):
             if pid in self.warming or pid in self.warmed or pid in self.cache: continue
             self.warming.add(pid)
             def settled(_, pid=pid):
+                if library is not self.library:return
                 self.warming.discard(pid); self.warmed.add(pid); self.prefetch()
             self.submit(lambda pid=pid: library.preview(pid, 1600) and None, settled, settled, self.image_pool, -10)
 
@@ -967,19 +1003,21 @@ class Window(QMainWindow):
         if folder is None: self.choose_source(); return
         if self.busy: return
         folder = str(folder); self.session_active=True; self.state_data=None; current = self.library.meta('root')
+        self.busy=True;self.importing=True;self.import_revision=None;self.update_actions();self.toast.hide()
+        self.import_page.set_progress('正在打开筛选记录',folder=folder);self.stack.setCurrentIndex(3);self.place_overlays()
+        crashlog.event('opening_folder',folder=folder,preload_requested=self.preload_count)
         if (current and Path(current).resolve() != Path(folder).resolve()) or (self.managed_workspaces and (not current or not self.library.directory.is_relative_to(self.data_root.resolve()))):
             newdir = self.data_root / 'libraries' / hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
-            self.busy = True; self.update_actions(); self.toast.show_message('正在打开此文件夹的筛选记录…', 'info')
             def changed(library):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
                 self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed): store.clear()
-                self.reset_zoom(); self.state_data = None; self.state_pending = False; self.busy = False; self.counts = {}
+                self.reset_zoom(); self.state_data = None; self.state_pending = False; self.counts = {}
                 self.cursor_timer.stop(); self.cursor_id = 0; self.view = 'pending'; self.segments.set_current('pending', False)
-                self.stack.setCurrentIndex(0); self.queue = []; self.render(); self.start_scan(library, folder)
+                self.queue = []; self.render(); self.start_scan(library, folder)
             def failed(message):
-                self.busy = False; self.update_actions(); self.error(message)
+                self.busy = False;self.importing=False;self.stack.setCurrentIndex(2);self.update_actions();self.error(message)
             cache_mb=QSettings('PhotoSieve','PhotoSieve').value('cache_mb',self.library.cache_limit//1024**2,type=int)
             self.submit(lambda: open_workspace(self.data_root,folder,self.previous_library,cache_mb) if self.managed_workspaces else Library(newdir,cache_mb), changed, failed)
             return
@@ -987,9 +1025,15 @@ class Window(QMainWindow):
 
     def start_scan(self, library, folder):
         def started(_):
-            if self.stack.currentIndex() == 2: self.stack.setCurrentIndex(0); self.place_overlays()
-            self.poll(); self.timer.start(900)
-        self.submit(lambda: library.scan(folder), started)
+            self.import_revision=library.job['revision']
+            self.poll(); self.timer.start(180)
+        def failed(message):
+            self.importing=False;self.busy=False;self.stack.setCurrentIndex(2);self.update_actions();self.error(message)
+        self.submit(lambda: library.scan(folder), started,failed)
+
+    def open_logs(self):
+        directory=crashlog.SESSION.root if crashlog.SESSION else self.data_root/'logs'
+        directory.mkdir(parents=True,exist_ok=True);self.open_folder(directory)
 
     def dragEnterEvent(self, event):
         urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
@@ -1177,7 +1221,7 @@ def configure_compositing(settings, windows=os.name == 'nt'):
     if settings.value('gpu_pending', False, type=bool):
         settings.setValue('gpu_compositing', False); settings.setValue('gpu_fell_back', True)
     settings.setValue('gpu_pending', False)
-    if settings.value('gpu_compositing', True, type=bool):
+    if settings.value('gpu_compositing', False, type=bool):
         os.environ.update(QT_WIDGETS_RHI='1', QT_WIDGETS_RHI_BACKEND='d3d11', PHOTOSIEVE_RHI_AUTO='1')
         settings.setValue('gpu_pending', True); COMPOSITING['gpu'] = True
     settings.sync()
@@ -1198,7 +1242,8 @@ def main():
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Quietime.PhotoSieve')
     if not args.self_test_output: configure_compositing(settings)
-    machine.interface_qos(); machine.fine_timer()
+    machine.interface_qos(); machine.fine_timer();crashlog.install_qt_handler()
+    crashlog.event('starting_interface',gpu=COMPOSITING['gpu'],profile=machine.PROFILE.describe())
     application = QApplication(sys.argv[:1]); application.setStyleSheet(STYLE); application.setWindowIcon(app_icon())
     if args.self_test_output:
         from diagnostics import run
@@ -1220,12 +1265,15 @@ def main():
                 if existing and Path(existing).resolve() != Path(args.folder).resolve():
                     directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
             library = Library(directory, args.cache_mb or settings.value('cache_mb',0,type=int)); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory)
-            screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60)); window.show()
+            screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
+            window.move(screen.center()-window.rect().center());window.show()
+            crashlog.event('waiting_for_folder',gpu=COMPOSITING['gpu'])
             if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
-            if COMPOSITING['gpu']: QTimer.singleShot(3000, lambda: settings.setValue('gpu_pending', False))   # the GPU-composed window is healthy
+            # Keep gpu_pending until normal exit: an import/render crash can occur
+            # well after the first three seconds of an apparently healthy startup.
             if settings.value('gpu_fell_back', False, type=bool):
                 settings.setValue('gpu_fell_back', False)
-                QTimer.singleShot(800, lambda: window.toast.show_message('上次以 GPU 合成启动未成功，已改用 CPU 合成；可在 ⋯ 中重新开启', 'error', 5000))
+                QTimer.singleShot(800, lambda: window.toast.show_message('上次应用异常退出，已使用 CPU 合成；可在 ⋯ 中重新开启 GPU', 'error', 5000))
         except Exception:
             QMessageBox.critical(None, '无法启动照片快筛', traceback.format_exc()); return 1
         return application.exec()

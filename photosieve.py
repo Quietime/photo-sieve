@@ -5,5 +5,17 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
-    from desktop import main
-    sys.exit(main())
+    if len(sys.argv)==4 and sys.argv[1]=='--crash-watch':
+        from crashlog import watch_process
+        sys.exit(watch_process(int(sys.argv[2]),sys.argv[3]))
+    import crashlog
+    normal=not any(argument in sys.argv for argument in ('--apply-update','--self-test-output'))
+    if normal:crashlog.boot()
+    try:
+        from desktop import main
+        code=main()
+    except BaseException:
+        crashlog.LOGGER.exception('Application terminated by an exception');crashlog.finish(1)
+        raise
+    else:
+        crashlog.finish(code);sys.exit(code)

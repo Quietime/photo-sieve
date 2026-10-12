@@ -18,3 +18,7 @@ helper-error.txt
 
 tools/key_probe.py
 workspaces/
+*-ci-logs/
+folder-icons-ci.json
+large-import-*-ci.*
+large-import-*-ci-*.png

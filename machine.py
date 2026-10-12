@@ -45,6 +45,12 @@ class Profile:
         cores = f'{self.physical} 核（{self.performance}P+{self.efficiency}E）' if self.efficiency else f'{self.physical} 核'
         return f'{cores} · {self.memory / GB:.0f} GB 内存'
 
+    def preview_capacity(self,requested,preview_bytes,gpu=False):
+        """Bound custom preload by physical RAM and renderer headroom."""
+        budget=min(self.memory*.10,2*GB) if self.memory else 512*MB
+        if gpu:budget=min(budget,512*MB)
+        return max(16,min(requested,int(budget//max(1,preview_bytes))))
+
 
 def _windows_cores():
     """Count cores and their efficiency classes with GetLogicalProcessorInformationEx(RelationProcessorCore)."""

@@ -25,12 +25,16 @@ class CompositingTest(unittest.TestCase):
             desktop.configure_compositing(self.settings, windows=True)
             return {k: os.environ.get(k) for k in ('QT_WIDGETS_RHI', 'QT_WIDGETS_RHI_BACKEND')}, desktop.COMPOSITING['gpu']
 
-    def test_on_by_default_with_direct3d(self):
+    def test_default_is_stable_cpu_and_explicit_gpu_uses_direct3d(self):
+        environment,gpu=self.configure()
+        self.assertFalse(gpu);self.assertIsNone(environment['QT_WIDGETS_RHI'])
+        self.settings.setValue('gpu_compositing',True)
         environment, gpu = self.configure()
         self.assertEqual(environment, {'QT_WIDGETS_RHI': '1', 'QT_WIDGETS_RHI_BACKEND': 'd3d11'}); self.assertTrue(gpu)
         self.assertTrue(self.settings.value('gpu_pending', type=bool))
 
     def test_a_launch_that_never_became_healthy_turns_it_off(self):
+        self.settings.setValue('gpu_compositing',True)
         self.configure()                                    # crashed before the window was healthy: pending stays set
         environment, gpu = self.configure()
         self.assertEqual(environment['QT_WIDGETS_RHI'], None); self.assertFalse(gpu)

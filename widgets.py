@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QPointF, QRect, QRectF, QSize, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QTransform
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QLabel, QSizePolicy, QWidget
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QLabel, QSizePolicy, QWidget, QVBoxLayout, QProgressBar
 
 import theme
 from theme import animate
@@ -28,6 +28,31 @@ class WelcomePage(QWidget):
                 target=QRectF(self.width()/2-source.width()*scale/2,source.top()*scale,source.width()*scale,source.height()*scale)
                 painter.drawPixmap(target,self.background,source)
 
+
+class ImportPage(QWidget):
+    """Import messages have their own page, separate from welcome controls."""
+    def __init__(self):
+        super().__init__()
+        column=QVBoxLayout(self);column.setContentsMargins(48,32,48,48);column.setSpacing(20);column.addStretch()
+        self.title=QLabel('正在打开照片文件夹');self.title.setObjectName('heading');self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.folder=QLabel();self.folder.setObjectName('caption');self.folder.setWordWrap(True);self.folder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.bar=QProgressBar();self.bar.setFixedHeight(18);self.bar.setTextVisible(False)
+        self.bar.setStyleSheet('QProgressBar { background:#2C2C2E; border:0; border-radius:8px; } QProgressBar::chunk { background:#0A84FF; border-radius:8px; }')
+        self.count=QLabel();self.count.setObjectName('lead');self.count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint=QLabel('导入完成后开始显示照片');hint.setObjectName('caption');hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for widget in (self.title,self.folder,self.bar,self.count,hint):
+            widget.setMinimumWidth(360);widget.setMaximumWidth(720);column.addWidget(widget,0,Qt.AlignmentFlag.AlignHCenter)
+        self.folder.setMinimumHeight(44)
+        self.bar.setMinimumWidth(360);column.addStretch()
+    def set_progress(self,phase,done=0,total=0,folder='',found=0):
+        self.title.setText(phase)
+        if folder:self.folder.setText(folder)
+        if total:
+            self.bar.setRange(0,total);self.bar.setValue(min(done,total))
+            self.count.setText(f'{done:,} / {total:,} 张 · {min(100,done/total*100):.0f}%')
+        else:
+            self.bar.setRange(0,0)
+            self.count.setText(f'已找到 {found:,} 张照片' if found else '正在准备…')
 
 class PhotoView(QGraphicsView):
     clicked = Signal(object, object)
@@ -239,6 +264,8 @@ class Toast(QWidget):
         return self.isVisible() or self.pending is not None
 
     def show_message(self, message, kind='info', duration=1400):
+        positioner=getattr(self,'positioner',None)
+        if positioner:positioner()
         self.pending = None
         changed = (message, kind) != (self.message, self.kind); self.message = message; self.kind = kind
         if changed: self.reposition(); self.update()

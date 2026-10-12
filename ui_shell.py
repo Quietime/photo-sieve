@@ -5,7 +5,25 @@ from PySide6.QtGui import QIcon, QPainter, QPainterPath, QColor, QPen, QRegion
 from PySide6.QtWidgets import (QDialog as QtDialog, QMessageBox as QtMessageBox,
     QFileDialog as QtFileDialog, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QCheckBox, QSizeGrip, QFrame, QScrollArea, QApplication,
-    QSpinBox, QStyle, QStyleOptionSpinBox)
+    QSpinBox, QStyle, QStyleOptionSpinBox, QFileIconProvider)
+
+class FolderIconProvider(QFileIconProvider):
+    """Never ask Windows shell/RAW extensions to inspect actual photo files."""
+    def __init__(self):
+        super().__init__()
+        style=QApplication.style()
+        self.folder=style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        self.file=style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        self.computer=style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self.drive=style.standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
+    def icon(self,value):
+        if isinstance(value,QFileIconProvider.IconType):
+            if value==self.IconType.Computer:return self.computer
+            if value==self.IconType.Drive:return self.drive
+            return self.folder if value in (self.IconType.Folder,self.IconType.Network) else self.file
+        if value.isRoot():return self.drive
+        return self.folder if value.isDir() else self.file
+    def type(self,info):return '文件夹' if info.isDir() else '文件'
 
 def app_icon():
     return QIcon(str(Path(__file__).parent / 'assets' / 'photosieve.ico'))
@@ -122,11 +140,19 @@ class QMessageBox(QtMessageBox):
 
 class RoundedFileDialog(QtFileDialog):
     def __init__(self,parent,title,start):
-        super().__init__(parent,title,start); self.setOption(QtFileDialog.Option.DontUseNativeDialog); rounded_init(self)
+        super().__init__(parent); self.setOption(QtFileDialog.Option.DontUseNativeDialog); rounded_init(self)
+        self.generic_icons=FolderIconProvider();self.setIconProvider(self.generic_icons)
+        self.setWindowTitle(title)
+        if start:self.setDirectory(start)
         for key,text in [(QtFileDialog.DialogLabel.LookIn,'位置：'),(QtFileDialog.DialogLabel.FileName,'文件夹：'),
                          (QtFileDialog.DialogLabel.FileType,'文件类型：'),(QtFileDialog.DialogLabel.Accept,'选择'),(QtFileDialog.DialogLabel.Reject,'取消')]: self.setLabelText(key,text)
         self.chrome=TitleBar(self,title)
         self.layout().setContentsMargins(24,64,24,24); self.layout().setSpacing(12)
+        screen=parent.screen() if parent else QApplication.primaryScreen()
+        area=screen.availableGeometry()
+        self.setMinimumSize(min(800,area.width()-32),min(560,area.height()-32))
+        self.resize(min(1120,round(area.width()*.8)),min(760,round(area.height()*.8)))
+        self.move(area.center()-self.rect().center())
     def paintEvent(self,event): rounded_paint(self)
     def resizeEvent(self,event):
         super().resizeEvent(event); rounded_resize(self)

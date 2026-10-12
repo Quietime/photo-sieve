@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QCheckBox,
@@ -184,6 +184,19 @@ def run(output):
                 audit.screenshot('01a_window_chrome_icons', window.window_chrome)
                 audit.check('startup_empty', window.stack.currentIndex() == 2 and not window.queue)
                 audit.check('main_icon_present', not window.windowIcon().isNull())
+                window.toast.show_message('启动状态提示 · 不覆盖选择文件夹控件','info')
+                audit.screenshot('01c_welcome_toast_layout',window)
+                welcome=window.stack.widget(2)
+                for control in welcome.findChildren(QAbstractButton)+welcome.findChildren(QLabel):
+                    position=control.mapTo(window.centralWidget(),QPoint(0,0))
+                    rect=control.rect().translated(position)
+                    audit.check('welcome_status_clear_of_'+control.text(),not rect.intersects(window.toast.geometry()))
+                scale=min(welcome.width()/welcome.background.width(),max(1,welcome.height()-100)/welcome.background.height())
+                origin=welcome.mapTo(window.centralWidget(),QPoint(0,0))
+                for index,part in enumerate(welcome.parts):
+                    visible=QRectF(welcome.width()/2-part.width()*scale/2+origin.x(),part.top()*scale+origin.y(),part.width()*scale,part.height()*scale)
+                    audit.check('welcome_status_clear_of_brand_'+str(index),not visible.intersects(QRectF(window.toast.geometry())))
+                window.toast.hide()
                 audit.click(audit.button(window.window_chrome, '最小化'))
                 audit.check('minimize_button_operates', window.isMinimized())
                 window.showNormal()
@@ -367,17 +380,11 @@ def run(output):
                 panel.close()
                 window.updates.staged = None
 
-                if hasattr(window, 'uninstaller_path'):
-                    fake_uninstaller = base / 'never-run-uninstaller.exe'
-                    fake_uninstaller.write_bytes(b'UI TEST: NEVER EXECUTE')
-                    with patch.object(window, 'uninstaller_path', return_value=fake_uninstaller), \
-                         patch('desktop.subprocess.Popen', side_effect=AssertionError('UI audit must not run an uninstaller')):
-                        panel = audit.open_menu(window, '16c_installed_app_menu')
-                        audit.modal('16d_uninstall_confirmation',
-                            lambda: audit.click(audit.button(panel, '卸载照片快筛…')),
-                            lambda dialog: audit.click(audit.button(dialog, '取消')))
-                    audit.check('cancel_uninstall_keeps_app_open', window.isVisible() and not window.closed and
-                        not getattr(window, 'uninstall_requested', False))
+                panel = audit.open_menu(window, '16c_logs_menu')
+                audit.check('uninstall_not_in_app_menu',not any('卸载' in button.text() for button in panel.findChildren(QAbstractButton)))
+                with patch.object(window,'open_folder') as opened:
+                    audit.click(audit.button(panel,'打开日志文件夹'))
+                    audit.check('logs_folder_accessible',opened.called)
 
                 audit.segment(window, 0)
                 audit.until(lambda: window.keep_button.isEnabled() and window.photos[0].pixmap is not None)

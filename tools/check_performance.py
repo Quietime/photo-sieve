@@ -166,7 +166,8 @@ def run(args):
 
             # Metadata paging and the configurable horizon also work beyond the first 1,200 rows.
             # Tiny already-decoded images isolate paging/RAM scheduling from original-file access.
-            with patch.object(library,'preview_image',side_effect=lambda *_:Image.new('RGB',(16,16),(64,128,192))):
+            with patch.object(library,'preview_image',side_effect=lambda *_:Image.new('RGB',(16,16),(64,128,192))), \
+                 patch.object(machine.Profile,'preview_capacity',side_effect=lambda requested,*_:requested):
                 window.preload_count=1500; window.display_size=None; window.update_display_size()
                 window.cache.clear(); window.cache_size.clear(); window.thumb_cache.clear(); window.prefetch()
                 until(lambda:len(window.cache)>=1500 and not window.loading and not window.fetching)

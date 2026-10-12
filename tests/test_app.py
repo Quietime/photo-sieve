@@ -459,8 +459,8 @@ class LibraryTest(unittest.TestCase):
                 self.assertEqual(self.lib.preview_image(photos[0]['id'], 1600).size, (1600, 800))
                 self.assertEqual(Image.open(io.BytesIO(self.lib.preview(photos[2]['id'], 320))).size, (229, 320))
             self.assertFails(422, self.lib.preview, photos[3]['id'], 1600)
-        self.lib.offload = lambda *job: False   # decoder processes unavailable: decode in this thread instead
-        self.assertEqual(self.lib.preview_image(photos[1]['id'], 1600).size, (1600, 800))
+        self.lib.offload = lambda *job: False   # Unsafe thread fallback is never allowed after a failed isolated decode.
+        self.assertFails(422,self.lib.preview_image,photos[1]['id'],1600)
         self.lib.offload = None
 
     def test_a_crashed_decoder_pool_starts_over_with_a_fresh_read_gate(self):

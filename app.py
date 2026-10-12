@@ -13,6 +13,8 @@ import shutil
 import sqlite3
 import threading
 import time
+import tempfile
+import crashlog
 
 from PIL import Image, ImageFile, ImageOps, TiffImagePlugin
 
@@ -186,13 +188,16 @@ class Library:
                 raise LibraryError(409, '正在执行任务，请等待完成。')
             self.job = {'revision': secrets.token_hex(8), 'running': True, 'kind': kind, 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         def work():
+            crashlog.event('job_started',job=kind,library=str(self.directory))
             try:
                 action()
                 self.job['message'] = '已完成'
             except Exception as exc:
+                crashlog.LOGGER.exception('Library job failed: %s',kind)
                 self.job['message'] = f'任务未完成：{exc}'
             finally:
                 self.job['running'] = False
+                crashlog.event('job_finished',job=kind,result=self.job['message'],errors=len(self.job['errors']))
         threading.Thread(target=work, daemon=True).start()
 
     def warn(self, value):
@@ -229,24 +234,41 @@ class Library:
                     error=CASE WHEN photos.size=excluded.size AND photos.mtime=excluded.mtime THEN photos.error ELSE NULL END,
                     size=excluded.size,mtime=excluded.mtime,present=1,seen=excluded.seen''', batch)
             batch.clear()
-        for base, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
-            dirs[:] = sorted(d for d in dirs if d.casefold() != TRASH_DIRECTORY.casefold() and not (Path(base) / d).is_symlink()
-                             and (Path(base) / d).resolve() != self.directory
-                             and (Path(base) / d).resolve() not in excluded)
-            for name in sorted(names):
-                path = Path(base) / name
-                if path.suffix.lower() not in EXTENSIONS or path.is_symlink():
-                    continue
+        self.job.update(phase='查找照片',found=0,done=0,total=0)
+        visited={root.resolve()}
+        # Disk-backed inventory gives a real total without retaining every filename
+        # in RAM; no RAW is opened until discovery and all index batches finish.
+        with tempfile.TemporaryFile(mode='w+t',encoding='utf-8',dir=self.directory,prefix='scan-') as manifest:
+            for base, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+                children=[]
+                for name in sorted(dirs):
+                    path=Path(base)/name
+                    try:
+                        resolved=path.resolve()
+                        if name.casefold()==TRASH_DIRECTORY.casefold() or path.is_symlink() or resolved==self.directory or resolved in excluded or resolved in visited:continue
+                        visited.add(resolved);children.append(name)
+                    except OSError as exc:walk_error(exc)
+                dirs[:]=children
+                for name in sorted(names):
+                    path=Path(base)/name
+                    if path.suffix.lower() not in EXTENSIONS or path.is_symlink():continue
+                    manifest.write(json.dumps(str(path),ensure_ascii=False)+'\n')
+                    self.job['found']+=1
+                    crashlog.progress(stage='discovering_photos',found=self.job['found'],folder=str(root))
+            self.job.update(phase='导入照片',total=self.job['found'],done=0)
+            manifest.seek(0)
+            for line in manifest:
+                path=Path(json.loads(line))
                 try:
                     stat = path.stat()
                     batch.append((str(path), stat.st_size, stat.st_mtime_ns, generation))
-                    self.job['done'] += 1
                 except OSError as exc:
-                    walk_errors.append(exc)
-                    self.warn(exc)
-                if len(batch) >= 500:
-                    flush()
+                    walk_errors.append(exc);self.warn(exc)
+                self.job['done']+=1
+                crashlog.progress(stage='importing_photos',done=self.job['done'],total=self.job['total'],file=str(path))
+                if len(batch)>=500:flush()
         flush()
+        self.job['phase']='完成导入'
         # An inaccessible branch must not make its photos disappear from the library.
         if not walk_errors:
             with self.connect() as db:
@@ -688,17 +710,17 @@ class Library:
             if cached is not None:
                 return Image.open(io.BytesIO(cached)) if as_image else cached
             # A decoder process does the work when available; this thread keeps the photo's lock, so a delete still waits.
-            if (self.offload and (edge == 1600 or edge == 320 and not self.cache_path(original, stat.st_size, stat.st_mtime_ns, 1600).exists())
-                    and self.offload(str(source), str(original), stat.st_size, stat.st_mtime_ns, str(self.cache), bool(self.rotational))):
+            existing = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, 1600) if edge == 320 else None
+            if self.offload and edge in (320,1600) and existing is None:
+                if not self.offload(str(source), str(original), stat.st_size, stat.st_mtime_ns, str(self.cache), bool(self.rotational)):
+                    raise ValueError('安全解码进程未完成预览，拒绝在应用进程重试原片')
                 cached = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, edge)
-                if cached is None:
-                    raise ValueError('预览未能写入缓存')
+                if cached is None:raise ValueError('预览未能写入缓存，请重试')
                 self.schedule_prune()
                 return Image.open(io.BytesIO(cached)) if as_image else cached
             with self.decode_slots:
                 # Reuse an existing preview for thumbnails rather than reopening the original.
                 larger = self.cache_path(original, stat.st_size, stat.st_mtime_ns, 1600)
-                existing = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, 1600) if edge == 320 else None
                 if existing is not None:
                     with Image.open(io.BytesIO(existing)) as im:
                         image = self.shrink(self.upright(im), 320)
@@ -708,7 +730,9 @@ class Library:
                     self.save_cache(larger, image)
                     image = self.shrink(image, 320)
                 else:
-                    image = self.decode(source, edge, self.gate() if edge else None)
+                    image = (self.offload.full_image(str(source),bool(self.rotational))
+                        if edge==0 and self.offload and hasattr(self.offload,'full_image')
+                        else self.decode(source, edge, self.gate() if edge else None))
                     # A JPEG, original or embedded in a RAW, decodes about as fast as a cached copy would, so 100% zoom
                     # skips the 20 MB re-encode. Only a slow sensor decode is kept (a PNG's text could also say 'sensor').
                     if edge == 0 and as_image and not (source.suffix.lower() in RAW and image.info.get('sensor') is True):
@@ -913,14 +937,27 @@ def lower_priority():
 
 def decoder_init(gate=None):
     global READ_GATE
-    READ_GATE = gate; lower_priority()
+    READ_GATE = gate; lower_priority();crashlog.decoder_init()
+
+def build_full_image(source,rotational=False):
+    """Full-resolution originals stay in isolated processes, including RAW zoom."""
+    crashlog.LOGGER.info('Full-resolution decode: %s',source)
+    try:
+        image=Library.decode(Path(source),0,READ_GATE if rotational else None)
+        image.load()
+        return image
+    except Exception as exc:
+        crashlog.LOGGER.exception('Full-resolution decode failed: %s',source)
+        raise ValueError(str(exc)) from None
 
 
 def build_preview(source, original, size, mtime, cache, rotational=False):
     """Decoder-process entry: decode an original once and store its 1600 and 320 previews in the disk cache."""
     try:
+        crashlog.LOGGER.info('Preview decode: %s',source)
         image = Library.decode(Path(source), 1600, READ_GATE if rotational else None)
         Library.save_cache(cache_file(cache, original, size, mtime, 1600), image)
         Library.save_cache(cache_file(cache, original, size, mtime, 320), Library.shrink(image, 320))
     except Exception as exc:
+        crashlog.LOGGER.exception('Preview decode failed: %s',source)
         raise ValueError(str(exc)) from None   # a plain exception always survives the trip back to the app
