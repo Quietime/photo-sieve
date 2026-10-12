@@ -27,5 +27,13 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
+if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
+ .build-venv\Scripts\python.exe -c "from zipfile import ZipFile; ZipFile('release/PhotoSieve-Windows-x64.zip').extractall('dist/install-payload')"
+ for /f %%V in ('.build-venv\Scripts\python.exe -c "from version import APP_VERSION; print(APP_VERSION)"') do "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" /DAppVersion=%%V installer.iss
+ if errorlevel 1 exit /b 1
+ echo 安装程序：release\PhotoSieve-Setup-Windows-x64.exe
+) else (
+ echo 如需生成安装程序，请安装 Inno Setup 6：https://jrsoftware.org/isdl.php
+)
 echo 完成：release\PhotoSieve-Windows-x64.zip 和更新清单
 pause

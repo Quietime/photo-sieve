@@ -17,3 +17,4 @@ frozen-diagnostics*.json
 helper-error.txt
 
 tools/key_probe.py
+workspaces/

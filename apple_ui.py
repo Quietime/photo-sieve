@@ -30,6 +30,10 @@ def icon(painter, name, box, color):
     elif name=='export':
         path.moveTo(9,12);path.lineTo(9,2);path.moveTo(5,6);path.lineTo(9,2);path.lineTo(13,6)
         path.moveTo(3,10);path.lineTo(3,15);path.lineTo(15,15);path.lineTo(15,10)
+    elif name=='minimize':path.moveTo(4,9);path.lineTo(14,9)
+    elif name=='maximize':path.addRect(QRectF(4,4,10,10))
+    elif name=='close':
+        path.moveTo(4,4);path.lineTo(14,14);path.moveTo(14,4);path.lineTo(4,14)
     else:
         for x in (4,9,14):painter.drawEllipse(QPointF(x,9),.7,.7)
     painter.drawPath(path);painter.restore()

@@ -8,7 +8,8 @@ import ctypes
 import os
 from PySide6.QtCore import QObject, Signal, QTimer, QSettings, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
+from ui_shell import QMessageBox
 from version import APP_VERSION
 import updater
 
@@ -99,7 +100,8 @@ class UpdateController(QObject):
     def tick(self):
         w=self.window
         if w.closed or self.asking or self.installing:return
-        if QApplication.activeModalWidget() or QApplication.activePopupWidget():
+        panel=getattr(w,'more_panel',None)
+        if QApplication.activeModalWidget() or QApplication.activePopupWidget() or (panel is not None and panel.isVisible()):
             self.touch();return   # an export dialog, folder picker or menu is open: wait until it closes and review pauses
         if self.offer and not self.running and not w.busy and self.idle_seconds()>=ASK_IDLE:self.offer_now()
         elif self.staged and self.idle_seconds()>=INSTALL_IDLE:self.install()

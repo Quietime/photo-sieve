@@ -31,7 +31,7 @@ class PhotoView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        self.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)   # the photo sits on its caption
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)   # the photo sits on its caption
 
     def stop_zoom(self):
         if self.zoom_animation:

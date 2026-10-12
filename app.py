@@ -54,7 +54,7 @@ class Library:
         self.cache = self.directory / 'cache'
         self.cache.mkdir(exist_ok=True)
         self.database = self.directory / 'library.sqlite3'
-        self.cache_limit = cache_mb * 1024 * 1024
+        self.cache_limit = min(cache_mb * 1024 * 1024, 10 * 1024**3)
         self.cache_lock = threading.Lock()
         self.decode_slots = threading.Semaphore(DECODE_SLOTS)
         # Per-photo locks; enough buckets that a delete never waits on a decode of a nearby photo.
@@ -495,6 +495,68 @@ class Library:
                            (photo_id, row['status'], row['status'], row['size'], row['mtime'], str(backup)))
                 db.execute("UPDATE trash_log SET result='staged' WHERE id=?", (entry,))
             return {'id': photo_id, 'path': str(path), 'backup': str(backup), 'staged': True}
+
+    def clear_preview_cache(self):
+        """Only derived JPEG previews; never the database, originals or deletion backups."""
+        removed = 0
+        with self.prune_lock, self.cache_lock:
+            for path in self.cache.glob('*.jpg'):
+                if path.is_file() and not path.is_symlink():
+                    path.unlink(); removed += 1
+        return removed
+
+    def cleanup_processed_cache(self, grace=120):
+        """Expire old previews for kept/deleted/missing photos; undo records remain intact."""
+        cutoff=time.time()-grace
+        existing={p.name for p in self.cache.glob('*.jpg')}
+        if not existing: return 0
+        with self.connect() as db:
+            rows=db.execute('SELECT id,path,size,mtime FROM photos WHERE status=1 OR present=0').fetchall()
+        removed=0
+        for row in rows:
+            names=[]
+            for edge in (0,320,1600):
+                names.append(self.cache_path(Path(row['path']),row['size'],row['mtime'],edge).name)
+                if edge: names.append(hashlib.sha256(f"{row['path']}|{row['size']}|{row['mtime']}|{edge}".encode()).hexdigest()+'.jpg')
+            with self.file_locks[row['id'] % len(self.file_locks)], self.cache_lock:
+                for name in names:
+                    if name not in existing: continue
+                    path=self.cache/name
+                    try:
+                        if not path.is_symlink() and path.stat().st_mtime<=cutoff:
+                            path.unlink(); removed+=1
+                    except FileNotFoundError: pass
+        return removed
+
+    def purge_deleted(self, ids=None):
+        """Permanently remove only tracked reversible-deletion backups after UI confirmation."""
+        selected = None if ids is None else set(ids)
+        def work():
+            with self.connect() as db:
+                rows = db.execute("SELECT photos.*,history.backup FROM photos JOIN history ON history.photo_id=photos.id WHERE photos.present=0 AND history.action='trash' ORDER BY photos.id").fetchall()
+            rows = [r for r in rows if selected is None or r['id'] in selected]
+            self.job['total'] = len(rows)
+            root = Path(self.meta('root')).resolve()
+            for row in rows:
+                try:
+                    with self.file_locks[row['id'] % len(self.file_locks)]:
+                        backup = Path(row['backup']); original = Path(row['path'])
+                        if (backup.is_symlink() or backup.parent.is_symlink() or
+                            backup.parent != original.parent / TRASH_DIRECTORY or
+                            not backup.resolve().is_relative_to(root)):
+                            raise ValueError('暂存路径已改变，拒绝彻底删除')
+                        if backup.exists():
+                            stat = backup.stat()
+                            if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['mtime']):
+                                raise ValueError('暂存照片已改变，请先检查文件')
+                            backup.unlink()
+                        with self.connect() as db:
+                            db.execute("DELETE FROM history WHERE photo_id=? AND action='trash'", (row['id'],))
+                            db.execute("UPDATE trash_log SET result='purged' WHERE backup=?", (str(backup),))
+                except Exception as exc:
+                    self.warn(exc)
+                self.job['done'] += 1
+        self.start_job('彻底删除照片', work)
 
     def prune_cache(self):
         # Enumerating a large cache must not lock out all preview reads.

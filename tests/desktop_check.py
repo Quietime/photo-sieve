@@ -13,7 +13,7 @@ from unittest.mock import patch
 import threading
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import Library, LibraryError
-from desktop import Window, Decoders, STYLE
+from desktop import Window, Decoders, STYLE, QFileDialog
 import keys
 import machine
 
@@ -52,6 +52,25 @@ def run(screenshot=None):
         # The ready buffer fills to every queued photo here (80 < the 100-200 target), then stays within its bound.
         assert 100<=w.ahead_target<=200 or w.ahead_target==machine.PROFILE.buffer(w.display_size.width()*w.display_size.height()*4+160*110*4)
         until(lambda:all(p['id'] in w.cache for p in w.queue[:w.ahead_target]),30)
+        # Regression: small previews may be evicted even though pane previews are still ready.
+        w.thumb_cache.clear()
+        for i in range(w.strip.count()): w.strip.item(i).setIcon(w.placeholder)
+        with patch.object(lib,'preview_image',side_effect=AssertionError('A cached pane must rebuild the thumbnail without decoding the original')):
+            w.update_strip()
+            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count()))
+            for i in range(150): w.store_thumbnail(10000+i,w.cache[first])
+            assert len(w.thumb_cache)<=64
+            assert all(w.strip.item(i).data(Qt.ItemDataRole.UserRole) in w.thumb_cache for i in range(w.strip.count()))
+        w.show_menu(); panel=w.more_panel; original_size=panel.size()
+        application.processEvents(); panel_size=panel.size(); w.activateWindow(); application.processEvents()
+        assert panel.isVisible() and panel.size()==panel_size,'Focus loss does not dismiss or shrink the settings sheet'
+        panel.close()
+        unbound={action:['',''] for action,_,_,_ in keys.ACTIONS}; w.apply_shortcuts(unbound)
+        assert not w.shortcuts and w.keep_button.text()=='保留' and w.keep_button.shortcut==''
+        w.apply_shortcuts(keys.defaults())
+        w.preload_count=350; w.display_size=None; w.update_display_size(); assert w.ahead_target==350
+        w.preload_count=0; w.display_size=None; w.update_display_size()
+        assert w.windowFlags() & Qt.WindowType.FramelessWindowHint and not w.windowIcon().isNull()
         size=w.photos[0].viewport().size();shown=w.photos[0].pixmap.deviceIndependentSize()
         assert shown.width()<=size.width()+1 and shown.height()<=size.height()+1,'Previews are decoded for the pane size'
         assert w.photos[0].transform().m11()==1,'A pane-sized preview draws without resampling'
@@ -150,7 +169,7 @@ def run(screenshot=None):
         with patch.object(w,'scan') as scan:
             w.dropEvent(QDropEvent(QPointF(20,20),Qt.DropAction.CopyAction,mime,Qt.MouseButton.NoButton,Qt.KeyboardModifier.NoModifier))
             scan.assert_called_once_with(str(other))
-        with patch('desktop.Library',side_effect=lambda directory:Library(base/'other-data')),patch('desktop.QSettings'):
+        with patch('desktop.Library',side_effect=lambda directory,*args:Library(base/'other-data')),patch('desktop.QSettings'):
             w.scan(str(other));until(lambda:w.library is not lib and not w.library.job['running'] and not w.fetching and len(w.queue)==3)
         assert lib.state()['counts']['deleted']==45 and w.library.state()['counts']['pending']==3
         w.resize(1280,720);application.processEvents();assert w.width()<=1280 and w.height()<=720
@@ -166,6 +185,11 @@ def run(screenshot=None):
         restored=reopened.undo(only_delete=True);assert restored['restored']
         reopened_window=Window(reopened);reopened_window.show();ready(reopened_window);assert reopened_window.stack.currentIndex()==0
         assert reopened.state()['counts']['deleted']==44;reopened_window.close()
+        blank=Window(reopened,check_updates=False,start_empty=True); blank.show()
+        until(lambda:blank.state_data is not None)
+        assert blank.stack.currentIndex()==2 and not blank.queue and not blank.loading
+        assert not any(pane.pixmap for pane in blank.photos),'Startup leaves all photos hidden until a folder is chosen'
+        blank.close()
         print('Native checks passed: animated zoom, arrows, held-key flow, failure rollback, persistent deletion, restore, kept strip, copy/move, drop, bounded cache.')
 
 if __name__=='__main__':

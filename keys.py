@@ -4,7 +4,8 @@ import json
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from ui_shell import QDialog
+from PySide6.QtWidgets import  QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 # id, label, default keys, repeats while held (↑ ↓ → ← follow the keyboard repeat rate, about 30 per second on Windows)
 ACTIONS = [
@@ -78,7 +79,7 @@ class ShortcutDialog(QDialog):
         super().__init__(parent); self.setWindowTitle('快捷键'); self.setModal(True); self.setMinimumWidth(520)
         layout = QVBoxLayout(self); layout.setContentsMargins(24, 22, 24, 20); layout.setSpacing(12)
         title = QLabel('快捷键'); title.setObjectName('heading'); layout.addWidget(title)
-        hint = QLabel('点一下输入框，再按下想用的键。每个操作可以设两个键，例如保留用 ↑ 或 P、删除用 ↓ 或 X。')
+        hint = QLabel('点一下输入框，再按下想用的键。每个操作可以设两个键，也可以全部留空，仅用按钮。恢复最近删除仅恢复删除；撤回上一步也可撤回保留。')
         hint.setObjectName('caption'); hint.setWordWrap(True); layout.addWidget(hint)
         grid = QGridLayout(); grid.setHorizontalSpacing(10); grid.setVerticalSpacing(8)
         for column, text in ((1, '按键'), (2, '备用按键')):
@@ -111,7 +112,7 @@ class ShortcutDialog(QDialog):
     def check(self, *_):
         chosen = self.chosen(); clashes = conflicts(chosen)
         names = {action: name for action, name, _, _ in ACTIONS}
-        missing = [names[action] for action, _, _, _ in ACTIONS[:4] if not any(chosen[action])]
+        missing = []  # every action can be button-only
         for (action, slot), field in self.fields.items():
             edge = '#FF453A' if chosen[action][slot] in clashes else 'transparent'
             field.setStyleSheet(f'QLineEdit {{ background:#2C2C2E; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}'

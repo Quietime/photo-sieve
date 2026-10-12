@@ -49,7 +49,7 @@ class ShortcutTest(unittest.TestCase):
         dialog.accept_keys()
         self.assertEqual(saved[0]['keep'], ['P', '']); self.assertEqual(saved[0]['delete'], ['Down', 'X'])
         dialog = keys.ShortcutDialog(None, saved[0]); dialog.fields['keep', 0].clear()
-        self.assertFalse(dialog.save_button.isEnabled(), 'Keep must keep at least one key')
+        self.assertTrue(dialog.save_button.isEnabled(), 'Actions can be button-only')
         dialog.reset(); self.assertEqual(dialog.chosen(), keys.defaults())
 
 

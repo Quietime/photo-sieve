@@ -36,6 +36,21 @@ jobs:
         run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
       - name: Create update package and checksums
         run: python package_release.py
+      - name: Build Windows installer with selectable installation folder
+        shell: pwsh
+        run: |
+          python -c "from zipfile import ZipFile; ZipFile('release/PhotoSieve-Windows-x64.zip').extractall('dist/install-payload')"
+          $version = python -c 'from version import APP_VERSION; print(APP_VERSION)'
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' } }
+          & $iscc "/DAppVersion=$version" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+          $hash = (Get-FileHash release/PhotoSieve-Setup-Windows-x64.exe -Algorithm SHA256).Hash.ToLower()
+          Add-Content release/SHA256SUMS.txt "$hash  PhotoSieve-Setup-Windows-x64.exe"
+      - name: Verify installation at a chosen path and workspace preservation
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/check_installer.py
       - name: Verify packaged APP
         env:
           QT_QPA_PLATFORM: offscreen
@@ -67,5 +82,5 @@ jobs:
             Write-Output "Version $tag already published. Bump APP_VERSION to release the next update."
             exit 0
           }
-          gh release create $tag release/PhotoSieve-Windows-x64.zip release/update.json release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
+          gh release create $tag release/PhotoSieve-Windows-x64.zip release/PhotoSieve-Setup-Windows-x64.exe release/update.json release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }

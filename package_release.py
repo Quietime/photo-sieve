@@ -10,7 +10,7 @@ from version import APP_VERSION, UPDATE_REPOSITORY, UPDATE_ASSET
 ROOT=Path(__file__).resolve().parent
 # A public download: only the project's own source files, never whatever else sits in the build folder
 # (photos, RAWs, libraries, screenshots, notes). The list comes from git; anything else is refused.
-SOURCE_TYPES={'.py','.md','.txt','.bat','.sh','.spec','.yml','.yaml','.gitattributes','.gitignore',''}
+SOURCE_TYPES={'.py','.md','.txt','.bat','.sh','.spec','.iss','.yml','.yaml','.gitattributes','.gitignore',''}
 PRIVATE_TYPES={'.jpg','.jpeg','.png','.gif','.bmp','.tif','.tiff','.webp','.heic','.heif','.avif','.arw','.cr2','.cr3','.nef',
                '.nrw','.dng','.raf','.rw2','.orf','.pef','.srw','.sqlite3','.db','.log','.json','.ini','.zip','.pdf','.docx','.xlsx'}
 
@@ -23,6 +23,7 @@ def tracked():
 
 def public(name):
     path=PurePosixPath(name)
+    if path.parts[-2:] == ('assets','photosieve.ico'): return True
     return path.suffix.lower() not in PRIVATE_TYPES and (path.suffix.lower() in SOURCE_TYPES or path.name in {'LICENSE'})
 
 def sources():
