@@ -1,18 +1,35 @@
 """Build a distributable ZIP and authenticated-update metadata for GitHub Releases."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import hashlib
 import json
+import subprocess
 import sys
 from zipfile import ZipFile, ZIP_DEFLATED
 from version import APP_VERSION, UPDATE_REPOSITORY, UPDATE_ASSET
 
 ROOT=Path(__file__).resolve().parent
-EXCLUDE={'build','dist','release','__pycache__','.venv','.build-venv','.git','third_party_licenses'}
+# A public download: only the project's own source files, never whatever else sits in the build folder
+# (photos, RAWs, libraries, screenshots, notes). The list comes from git; anything else is refused.
+SOURCE_TYPES={'.py','.md','.txt','.bat','.sh','.spec','.yml','.yaml','.gitattributes','.gitignore',''}
+PRIVATE_TYPES={'.jpg','.jpeg','.png','.gif','.bmp','.tif','.tiff','.webp','.heic','.heif','.avif','.arw','.cr2','.cr3','.nef',
+               '.nrw','.dng','.raf','.rw2','.orf','.pef','.srw','.sqlite3','.db','.log','.json','.ini','.zip','.pdf','.docx','.xlsx'}
+
+def tracked():
+    try:
+        out=subprocess.run(['git','ls-files','-z'],cwd=ROOT,capture_output=True,check=True).stdout
+    except (OSError,subprocess.CalledProcessError):
+        raise SystemExit('打包需要在 git 仓库中进行，以确保只包含项目源文件。')
+    return [ROOT/name for name in out.decode('utf-8').split('\0') if name]
+
+def public(name):
+    path=PurePosixPath(name)
+    return path.suffix.lower() not in PRIVATE_TYPES and (path.suffix.lower() in SOURCE_TYPES or path.name in {'LICENSE'})
+
 def sources():
-    for p in sorted(ROOT.rglob('*')):
-        parts=p.relative_to(ROOT).parts
-        if any(x in EXCLUDE for x in parts) or not p.is_file():continue
-        if p.suffix in {'.log','.pyc','.zip','.sqlite3','.png'} or p.name.startswith('frozen-diagnostics') or p.name in {'key_probe.py','update.json','SHA256SUMS.txt'}:continue
+    for p in sorted(tracked()):
+        relative=p.relative_to(ROOT).as_posix()
+        if relative.startswith('third_party_licenses/') or not p.is_file():continue
+        if not public(relative):raise SystemExit('拒绝打包非源码文件：'+relative)
         yield p
 
 def package(destination):
@@ -31,6 +48,8 @@ def package(destination):
     with ZipFile(destination) as archive:
         assert archive.testzip() is None
         names=archive.namelist();assert 'PhotoSieve/PhotoSieve.exe' in names
+        own=[n for n in names if not n.startswith(('PhotoSieve/_internal/','PhotoSieve/third_party_licenses/'))]
+        assert all(public(n) or n in {'PhotoSieve/PhotoSieve.exe','PhotoSieve/installed-files.json'} for n in own),'安装包含非源码文件'
         assert not any('webengine' in n.lower() or 'chromium' in n.lower() for n in names)
     digest=hashlib.sha256(destination.read_bytes()).hexdigest()
     metadata={'version':APP_VERSION,'repository':UPDATE_REPOSITORY,'asset':destination.name,'size':destination.stat().st_size,'sha256':digest}

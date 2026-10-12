@@ -1,515 +1,979 @@
 """Native Qt desktop photo review. No webview, browser, HTTP server or ports."""
 from __future__ import annotations
 import argparse
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+import hashlib
+import math
+import multiprocessing
+import os
 from pathlib import Path
 import sys
+import threading
+import time
 import traceback
 
-from PySide6.QtCore import Qt, Signal, QObject, QRunnable, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings
-from PySide6.QtGui import QImage, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QPainter, QColor
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
-    QAbstractItemView, QStackedWidget, QGraphicsView, QGraphicsScene, QDialog, QProgressBar,
-    QScrollArea, QFrame)
-from app import Library
+from PIL import Image
+
+# Worker threads run some Python between C calls; a short switch interval keeps the interface thread's
+# waits for the GIL near 1 ms instead of 5 ms while previews decode in the background.
+sys.setswitchinterval(.001)
+
+from PySide6.QtCore import Qt, Signal, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect
+from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
+    QFrame, QMenu, QSizePolicy)
+from app import Library, DECODE_SLOTS, build_preview, decoder_init
+import keys
+import machine
 from version import APP_VERSION
 from update_ui import UpdateController
+import theme
+from theme import STYLE, animate
+from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine
 
-STYLE = '''
-QWidget { background:#121821; color:#dce5f4; font-family:"Microsoft YaHei UI","Noto Sans CJK SC",sans-serif; font-size:14px; }
-QLabel {background:transparent;}
-QFrame#sidebar {background:#1a222f; border-radius:12px;} QLabel#title {font-size:23px; font-weight:700;color:#fff;}
-QLabel#muted {color:#99a9c0;} QLineEdit {padding:9px; border:1px solid #364356;border-radius:7px;background:#101620;}
-QPushButton {background:#253348;border:1px solid #35465e;border-radius:7px;padding:10px;text-align:left;}
-QPushButton:hover {background:#334a6b;} QPushButton:disabled {color:#64758c;background:#1b2636;}
-QPushButton:checked {background:#315887;border-color:#628be8;} QPushButton#primary {background:#4978e8;border:0;}
-QPushButton#danger {background:#60333a;border-color:#8d4855;}
-QGraphicsView {background:#090e15;border:1px solid #293649;border-radius:8px;}
-QListWidget {background:#101620;border:1px solid #2b3c51;border-radius:8px;}
-QListWidget::item {padding:5px;} QListWidget::item:selected {background:#2d4c76;border-radius:6px;}
-QProgressBar {border:1px solid #35465e;border-radius:5px;text-align:center;min-height:20px;}
-QProgressBar::chunk {background:#487be7;} QScrollBar:vertical {width:12px;background:#162231;}
-QScrollBar::handle:vertical {background:#3c506e;min-height:25px;} QFrame#card {background:#1a2635;border:1px solid #364356;border-radius:9px;}
-'''
+PAGE = 1200         # rows per queue page; ids are indexed, so a page costs a few milliseconds
+REFILL = 800        # fetch the next page while this many photos remain
+WARM = 1200         # further photos whose disk preview is prepared in the background, within the cache budget
+BEHIND = 20         # previews kept for photos already passed, for ← and Ctrl+Z
+# Decoded, pane-sized previews kept ready ahead: 100 to 200 depending on pane size and memory (machine.Profile.buffer).
+BURST = .22         # actions closer together than this skip the transition animation
+STRIP = 16
+ROLE = Qt.ItemDataRole.UserRole
+
+
+def qimage(im):
+    """An opaque QImage over a pane-sized image's pixels, converted by Pillow with the GIL released.
+    RGB32 needs an opaque 0xFF fourth byte (Pillow's BGRX pads with 0, which composites as transparent).
+    No copy here: the bytes travel with the image and QPixmap.fromImage copies once on the interface thread."""
+    data = im.convert('RGBA').tobytes('raw', 'BGRA')
+    return QImage(data, im.width, im.height, im.width * 4, QImage.Format.Format_RGB32), data
+
+
+def full_qimage(im, rows=128):
+    """The original for 100% zoom. QImage.fromData, or converting the whole image at once, would hold the GIL for over
+    half a second at 61 MP and freeze the interface. Pillow decodes with the GIL released; then each strip is copied
+    out in Pillow's own RGBX layout and painted in by Qt, so the interface thread runs in between (a few ms at most)."""
+    if im.mode != 'RGB': im = im.convert('RGB')
+    width, height = im.size
+    image = QImage(width, height, QImage.Format.Format_RGB32); painter = QPainter(image)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+    for top in range(0, height, rows):
+        strip = im.crop((0, top, width, min(height, top + rows))); pixels = strip.tobytes('raw', 'RGBX')
+        painter.drawImage(0, top, QImage(pixels, width, strip.height, width * 4, QImage.Format.Format_RGBX8888))
+    painter.end()
+    return image
+
+
+def display_image(image, width, height, thumb):
+    """Worker-side preview sized for the pane. Pillow releases the GIL while it decodes and resamples,
+    so the interface thread keeps running; Qt's scaler would hold the GIL throughout."""
+    source = image.size; image.draft('RGB', (width, height))
+    if image.mode != 'RGB': image = image.convert('RGB')
+    def fit(im, w, h):
+        scale = min(w / im.width, h / im.height)
+        return im if scale >= 1 else im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.Resampling.BILINEAR, reducing_gap=2.0)
+    shown = fit(image, width, height)
+    return qimage(shown), qimage(fit(shown, *thumb)), source
+
+
+class Decoders:
+    """Originals decode in separate processes. They share no GIL with the interface, so it stays smooth while
+    keys are held, and a decoder crash on a damaged file ends only that process, not the app.
+    If processes cannot start at all (a blocked spawn, for example), decoding quietly returns to threads."""
+    def __init__(self, workers=DECODE_SLOTS):
+        self.workers = workers; self.pool = self.gate = None; self.lock = threading.Lock(); self.working = False; self.unavailable = False
+        self.context = multiprocessing.get_context('spawn')
+
+    def __call__(self, *job):
+        if self.unavailable: return False
+        pool = None
+        try:
+            with self.lock:
+                if self.pool is None:
+                    # Shared by every decoder process: at most two read a spinning disk at once. A process that dies
+                    # inside it never gives its slot back (and a broken pool terminates the rest), so each pool gets
+                    # a fresh one; otherwise the next pool would wait on the old one forever.
+                    self.gate = self.context.BoundedSemaphore(2)
+                    self.pool = ProcessPoolExecutor(self.workers, self.context, decoder_init, (self.gate,))
+                pool = self.pool
+            pool.submit(build_preview, *job).result(); self.working = True; return True
+        except ValueError:
+            raise   # this photo could not be decoded; the reason is shown on it
+        except BrokenProcessPool:
+            with self.lock:
+                if self.pool is pool: self.pool = None
+            if self.working: raise ValueError('解码进程意外退出，照片可能已损坏') from None
+            self.unavailable = True; return False
+        except Exception:
+            self.unavailable = True; return False
+
+    def close(self):
+        with self.lock:
+            pool, self.pool = self.pool, None
+        # Wait for the processes to exit, so an update never finds program files still in use.
+        if pool: pool.shutdown(wait=True, cancel_futures=True)
+
 
 class Result(QObject):
     ok = Signal(object)
     fail = Signal(str)
 
+
 class Work(QRunnable):
     def __init__(self, fn):
         super().__init__(); self.fn = fn; self.signals = Result()
+
     def run(self):
         try: self.signals.ok.emit(self.fn())
         except Exception as e: self.signals.fail.emit(str(getattr(e, 'detail', str(e))))
 
-class PhotoView(QGraphicsView):
-    clicked = Signal(object, object)
-    next_requested = Signal()
-    escape_requested = Signal()
-    def __init__(self):
-        super().__init__(); self.setScene(QGraphicsScene(self)); self.detail = False
-        self.photo = None; self.pixmap = None; self.press = None; self.full_resolution = False
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    def show_photo(self, photo, pixmap=None, error=''):
-        self.detail = False; self.full_resolution = False; self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.photo = photo; self.pixmap = pixmap; self.scene().clear(); self.resetTransform()
-        if pixmap:
-            item=self.scene().addPixmap(pixmap); self.scene().setSceneRect(item.boundingRect())
-            self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        else:
-            item = self.scene().addText(error or ('正在读取…' if photo else '没有照片'))
-            item.setDefaultTextColor(Qt.GlobalColor.gray); self.scene().setSceneRect(item.boundingRect())
-            self.centerOn(item)
-    def zoom_at(self, point=None):
-        self.detail=True; self.resetTransform(); self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        # One image pixel per screen pixel, including Windows display scaling.
-        self.scale(1/self.devicePixelRatioF(),1/self.devicePixelRatioF())
-        rect=self.sceneRect(); x,y=point or (.5,.5)
-        self.centerOn(rect.left()+x*rect.width(),rect.top()+y*rect.height())
-    def install_full_image(self, pixmap):
-        # Preserve the area reached by dragging while the original file was decoding.
-        rect=self.sceneRect(); center=self.mapToScene(self.viewport().rect().center())
-        point=((center.x()-rect.left())/max(1,rect.width()),(center.y()-rect.top())/max(1,rect.height()))
-        self.pixmap=pixmap; self.scene().clear(); item=self.scene().addPixmap(pixmap)
-        self.scene().setSceneRect(item.boundingRect()); self.full_resolution=True; self.zoom_at(point)
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.pixmap and not self.detail:self.fitInView(self.sceneRect(),Qt.AspectRatioMode.KeepAspectRatio)
-    def mousePressEvent(self, event):
-        self.press = event.position()
-        if event.button() == Qt.MouseButton.RightButton:
-            self.next_requested.emit(); event.accept(); return
-        super().mousePressEvent(event)
-    def mouseReleaseEvent(self, event):
-        # Finish Qt's drag before toggling; a drag must not count as a click.
-        click=event.button()==Qt.MouseButton.LeftButton and self.press is not None and (event.position()-self.press).manhattanLength()<5
-        point=self.mapToScene(event.position().toPoint());rect=self.sceneRect()
-        fraction=((point.x()-rect.left())/max(1,rect.width()),(point.y()-rect.top())/max(1,rect.height()))
-        super().mouseReleaseEvent(event)
-        if click and self.photo:self.clicked.emit(self.photo,fraction)
-    def keyPressEvent(self,event):
-        if event.key()==Qt.Key.Key_Escape:self.escape_requested.emit();event.accept();return
-        super().keyPressEvent(event)
 
 class Window(QMainWindow):
-    def __init__(self, library, check_updates=True):
-        super().__init__(); self.library=library; self.setWindowTitle('照片快筛 · 原生桌面版 '+APP_VERSION); self.resize(1480,960)
-        self.pool=QThreadPool(self); self.pool.setMaxThreadCount(2)
-        self.image_pool=QThreadPool(self); self.image_pool.setMaxThreadCount(2)
-        self.thumb_pool=QThreadPool(self); self.thumb_pool.setMaxThreadCount(1)
-        self.detail_pool=QThreadPool(self); self.detail_pool.setMaxThreadCount(1)
-        self.tasks=set(); self.cache=OrderedDict(); self.loading=set(); self.image_errors={}
-        self.thumb_cache=OrderedDict(); self.thumb_loading=set(); self.thumb_errors={}
-        self.queue=[]; self.view='pending'; self.busy=False; self.fetching=False; self.state_pending=False
-        self.state_data=None; self.generation=0; self.focus_loading=set(); self.was_running=False; self.closed=False
-        self.cursor_id=0; self.cursor_timer=QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
-        self.deleted_rows=[]; self.deleted_cards={}; self.deleted_more=False
+    VIEWS = [('pending', '未筛选'), ('keep', '保留'), ('deleted', '已删除')]
+    fps_label = None   # Qt sends events before __init__ finishes
+
+    def __init__(self, library, check_updates=True, decoders=None):
+        super().__init__(); self.library = library; self.decoders = decoders; library.offload = decoders; self.setWindowTitle('照片快筛'); self.resize(1480, 960); self.setAcceptDrops(True)
+        self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
+        self.op_pool = QThreadPool(self); self.op_pool.setMaxThreadCount(1)   # file and record changes run strictly in order
+        # Image threads mostly wait for decoder processes; only a few at a time do interface-side decoding.
+        self.workers = decoders.workers if decoders else DECODE_SLOTS; self.in_flight = self.workers + 4
+        self.image_pool = QThreadPool(self); self.image_pool.setMaxThreadCount(self.in_flight)
+        self.display_gate = threading.Semaphore(machine.PROFILE.interface_threads())
+        self.ahead_target = 24; self.cache_limit = 24 + BEHIND; self.frames = 0
+        self.thumb_pool = QThreadPool(self); self.thumb_pool.setMaxThreadCount(2)
+        self.detail_pool = QThreadPool(self); self.detail_pool.setMaxThreadCount(1)
+        for pool in (self.image_pool, self.thumb_pool, self.detail_pool): pool.setThreadPriority(QThread.Priority.LowPriority)   # the interface thread wins any CPU contention
+        self.tasks = set(); self.cache = OrderedDict(); self.cache_size = {}; self.sources = {}; self.loading = set(); self.image_errors = {}
+        self.thumb_cache = OrderedDict(); self.warming = set(); self.warmed = set(); self.thumb_wanted = deque(); self.thumb_loading = set()
+        self.queue = []; self.view = 'pending'; self.busy = False; self.fetching = False; self.state_pending = False; self.state_data = None
+        self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.queue_end = False; self.generation = 0; self.focus_loading = set()
+        self.was_running = False; self.closed = False; self.closing = False; self.display_size = None; self.motions = []; self.last_motion = 0.0
+        self.last_nudge = 0.0; self.delete_streak = 0; self.deleted_rows = []; self.deleted_items = {}; self.deleted_more = False
+        self.cursor_id = 0; self.cursor_timer = QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
+        self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
+        self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.burst = False
+        self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
         self.build(); self.update_actions()
-        self.updates=UpdateController(self,check_on_start=check_updates);self.updates.report_previous()
-        self.shortcuts=[]
-        for key,fn in [('Up',lambda:self.act('keep')),('Down',lambda:self.act('delete')),('Right',self.next_photo),
-                       ('Left',lambda:self.restore()),('Ctrl+Z',lambda:self.restore(general=True)),('Z',self.focus_left),('Esc',self.reset_zoom)]:
-            shortcut=QShortcut(QKeySequence(key),self); shortcut.setAutoRepeat(False); shortcut.activated.connect(lambda fn=fn:fn() if not isinstance(QApplication.focusWidget(),QLineEdit) else None);self.shortcuts.append(shortcut)
-        self.timer=QTimer(self);self.timer.timeout.connect(self.poll);self.timer.start(900);self.poll()
-    def submit(self, fn, ok=lambda _:None, fail=None, pool=None, priority=0):
-        task=Work(fn); self.tasks.add(task)
+        self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
+        self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
+        self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
+
+    def apply_shortcuts(self, chosen):
+        """Bind the user's keys (see keys.ACTIONS); held keys follow the keyboard repeat rate."""
+        for shortcut in self.shortcuts: shortcut.setEnabled(False); shortcut.deleteLater()
+        self.shortcuts = []; self.chosen_keys = chosen
+        handlers = {'keep': lambda: self.act('keep'), 'delete': lambda: self.act('delete'), 'next': self.next_photo,
+                    'restore': lambda: self.restore(), 'undo': lambda: self.restore(general=True), 'zoom': self.focus_left, 'unzoom': self.reset_zoom}
+        for action, _, _, repeat in keys.ACTIONS:
+            for key in chosen[action]:
+                if not key: continue
+                shortcut = QShortcut(QKeySequence(key), self); shortcut.setAutoRepeat(repeat); shortcut.activated.connect(handlers[action]); self.shortcuts.append(shortcut)
+        for button, action, text in ((self.keep_button, 'keep', '保留'), (self.delete_button, 'delete', '删除'),
+                                     (self.restore_button, 'restore', '恢复'), (self.next_button, 'next', '下一张')):
+            button.setText(f'{keys.first(chosen, action)}  {text}'.strip())
+        self.deleted_note.setText(f'删除的照片在原文件夹的 .photo-sieve-trash 中，仍占用空间。双击或按 {self.key("restore")} 恢复。')
+
+    def key(self, action):
+        return keys.first(self.chosen_keys, action) or '快捷键'
+
+    def edit_shortcuts(self):
+        self.updates.touch()
+        dialog = keys.ShortcutDialog(self, self.chosen_keys)
+        def saved(chosen):
+            keys.save(QSettings('PhotoSieve', 'PhotoSieve'), chosen); self.apply_shortcuts(chosen); self.toast.show_message('快捷键已更新', 'info')
+        dialog.saved.connect(saved); dialog.exec()
+
+    # ---- infrastructure -------------------------------------------------
+    def submit(self, fn, ok=lambda _: None, fail=None, pool=None, priority=0):
+        if self.closed: return   # late timers must not start work after the pools were drained
+        task = Work(fn); self.tasks.add(task)
         def success(value):
             try:
-                if not self.closed:ok(value)
-            finally:self.tasks.discard(task)
+                if not self.closed: ok(value)
+            finally: self.tasks.discard(task)
         def failure(message):
             try:
-                if not self.closed:(fail or self.error)(message)
-            finally:self.tasks.discard(task)
-        task.signals.ok.connect(success);task.signals.fail.connect(failure);(pool or self.pool).start(task,priority)
-    def error(self,message):
-        self.statusBar().showMessage(message,12000); QMessageBox.warning(self,'照片快筛',message)
-    def button(self,text,fn,primary=False):
-        b=QPushButton(text);b.clicked.connect(fn)
-        if primary:b.setObjectName('primary')
+                if not self.closed: (fail or self.error)(message)
+            finally: self.tasks.discard(task)
+        task.signals.ok.connect(success); task.signals.fail.connect(failure); (pool or self.pool).start(task, priority)
+
+    def op(self, fn, done, failed):
+        self.pending_ops += 1
+        def ok(value):
+            self.pending_ops -= 1; done(value); self.refresh_state(400)
+        def bad(message):
+            self.pending_ops -= 1; failed(message); self.refresh_state(0)
+        self.submit(fn, ok, bad, self.op_pool)
+
+    def error(self, message):
+        self.toast.show_message(message, 'error', 4200)
+
+    def button(self, text, fn, name=None):
+        b = QPushButton(text); b.clicked.connect(fn); b.setCursor(Qt.CursorShape.PointingHandCursor)
+        if name: b.setObjectName(name)
         return b
+
+    # ---- layout ---------------------------------------------------------
     def build(self):
-        root=QWidget();self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(14,14,14,14)
-        sidebar=QFrame();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(250);side=QVBoxLayout(sidebar);side.setSpacing(12)
-        title=QLabel('照片快筛');title.setObjectName('title');side.addWidget(title)
-        label=QLabel('原生桌面 · 筛选记录自动保存');label.setObjectName('muted');side.addWidget(label)
-        side.addWidget(QLabel('照片文件夹'));self.folder=QLineEdit();self.folder.setPlaceholderText('选择文件夹或粘贴路径');side.addWidget(self.folder)
-        side.addWidget(self.button('选择文件夹…',self.choose_source));self.scan_button=self.button('扫描 / 更新目录',self.scan,True);side.addWidget(self.scan_button)
-        self.nav={}
-        for name,text in [('pending','未筛选'),('keep','保留'),('deleted','已删除 · 可恢复'),('all','全部未删除'),('duplicates','完全重复'),('errors','预览异常')]:
-            b=self.button(text,lambda checked=False,n=name:self.switch(n));b.setCheckable(True);b.setChecked(name==self.view);side.addWidget(b);self.nav[name]=(b,text)
-        side.addWidget(self.button('检查完全重复文件',lambda:self.submit(self.library.duplicates,lambda _:self.poll())))
-        side.addStretch();side.addWidget(QLabel('↑ 保留    ↓ 删除左图\n← 恢复删除    → 下一张\nCtrl+Z 撤回    单击图片检查对焦'))
-        side.addWidget(self.button('复制 / 移动保留照片…',self.export_dialog,True));side.addWidget(self.button('打开筛选记录文件夹',lambda:self.open_folder(str(self.library.directory))))
-        side.addWidget(self.button('检查更新',lambda:self.updates.check()))
-        side.addWidget(self.button('更新设置…',lambda:self.updates.configure()))
-        self.update_label=QLabel('版本 '+APP_VERSION);self.update_label.setWordWrap(True);side.addWidget(self.update_label)
-        self.install_update_button=self.button('立即安装更新并重启',lambda:self.updates.install());self.install_update_button.hide();side.addWidget(self.install_update_button)
-        side_scroll=QScrollArea();side_scroll.setFixedWidth(270);side_scroll.setFrameShape(QFrame.Shape.NoFrame);side_scroll.setWidgetResizable(True);side_scroll.setWidget(sidebar);outer.addWidget(side_scroll)
-        content=QVBoxLayout();outer.addLayout(content,1)
-        heading=QHBoxLayout();self.heading=QLabel('未筛选');self.heading.setObjectName('title');heading.addWidget(self.heading);heading.addStretch()
-        self.prev_button=self.button('上一张',self.previous_photo);self.next_button=self.button('下一张 → / 右键',self.next_photo);heading.addWidget(self.prev_button);heading.addWidget(self.next_button);content.addLayout(heading)
-        self.progress=QProgressBar();self.progress.hide();content.addWidget(self.progress)
-        self.message=QLabel('正在读取筛选记录…');self.message.setWordWrap(True);self.message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);content.addWidget(self.message)
-        latest=QHBoxLayout();self.last_deleted=QLabel('删除会移入原文件夹下的 .photo-sieve-trash，可按 ← 恢复');self.last_deleted.setWordWrap(True);self.last_deleted.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);latest.addWidget(self.last_deleted,1)
-        self.restore_button=self.button('恢复最近删除 ←',lambda:self.restore());latest.addWidget(self.restore_button)
-        self.trash_location=self.button('打开删除位置',self.open_last_trash);latest.addWidget(self.trash_location);content.addLayout(latest)
-        self.stack=QStackedWidget();content.addWidget(self.stack,1)
-        review=QWidget();review_layout=QVBoxLayout(review);review_layout.setContentsMargins(0,0,0,0);pair=QHBoxLayout()
-        self.photos=[];self.captions=[]
-        for index,title in enumerate(['当前照片 · ↑ 保留 / ↓ 删除','下一张 · 用于比较']):
-            column=QVBoxLayout();column.addWidget(QLabel(title));photo=PhotoView();photo.clicked.connect(self.focus);photo.next_requested.connect(self.next_photo);photo.escape_requested.connect(self.reset_zoom);column.addWidget(photo,1)
-            caption=QLabel();caption.setWordWrap(True);caption.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);column.addWidget(caption);pair.addLayout(column,1);self.photos.append(photo);self.captions.append(caption)
-        review_layout.addLayout(pair,1)
-        actions=QHBoxLayout();self.keep_button=self.button('↑ 保留左图',lambda:self.act('keep'),True);self.delete_button=self.button('↓ 删除左图',lambda:self.act('delete'));self.delete_button.setObjectName('danger')
-        actions.addWidget(self.keep_button);actions.addWidget(self.delete_button);actions.addStretch();actions.addWidget(QLabel('下方仅显示未保留的照片'));review_layout.addLayout(actions)
-        self.strip=QListWidget();self.strip.setViewMode(QListWidget.ViewMode.IconMode);self.strip.setFlow(QListWidget.Flow.LeftToRight);self.strip.setWrapping(False)
-        self.strip.setGridSize(QSize(150,112));self.strip.setUniformItemSizes(True);self.strip.setIconSize(QSize(124,80));self.strip.setFixedHeight(125);self.strip.setResizeMode(QListWidget.ResizeMode.Adjust);self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.strip.itemClicked.connect(self.strip_select);review_layout.addWidget(self.strip)
-        self.stack.addWidget(review)
-        deleted=QWidget();dl=QVBoxLayout(deleted);notice=QLabel('文件尚未永久删除，仍占用硬盘空间。每张卡片显示原位置和实际暂存位置，可单独恢复。');notice.setWordWrap(True);dl.addWidget(notice)
-        self.deleted_focus=PhotoView();self.deleted_focus.setFixedHeight(350);self.deleted_focus.hide();self.deleted_focus.clicked.connect(self.focus);self.deleted_focus.escape_requested.connect(self.reset_zoom);dl.addWidget(self.deleted_focus)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);self.deleted_container=QWidget();self.deleted_layout=QVBoxLayout(self.deleted_container);self.deleted_layout.setAlignment(Qt.AlignmentFlag.AlignTop);scroll.setWidget(self.deleted_container);dl.addWidget(scroll,1)
-        self.more_button=self.button('加载更多已删除照片',self.load_more_deleted);dl.addWidget(self.more_button);self.stack.addWidget(deleted)
+        root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        bar = QWidget(); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(22, 10, 16, 10); top.setSpacing(10)
+        left = QWidget(); titles = QVBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(1)
+        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
+        titles.addWidget(self.title); titles.addWidget(self.subtitle); top.addWidget(left, 1)
+        self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
+        right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
+        self.open_button = self.button('打开文件夹…', self.choose_source); tools.addWidget(self.open_button)
+        self.export_button = self.button('导出', self.export_dialog, 'primary'); tools.addWidget(self.export_button)
+        self.more_button = self.button('⋯', self.show_menu, 'icon'); tools.addWidget(self.more_button)
+        self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
+        self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
+        top.addWidget(right, 1); outer.addWidget(bar)
+        self.progress = ProgressLine(); outer.addWidget(self.progress)
+        self.stack = QStackedWidget(); outer.addWidget(self.stack, 1)
+
+        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(20, 10, 20, 0); column.setSpacing(0)
+        pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
+        for index in range(2):
+            pane = QVBoxLayout(); pane.setSpacing(2); photo = PhotoView()
+            photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
+            photo.resized.connect(lambda: self.resize_timer.start(160)); pane.addWidget(photo, 1)
+            name = Elided('name'); name.setFixedHeight(22); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+            detail = Elided('caption'); detail.setFixedHeight(18); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 1)
+            self.photos.append(photo); self.names.append(name); self.details.append(detail)
+        column.addLayout(pair, 1)
+        actions = QHBoxLayout(); actions.setContentsMargins(0, 12, 0, 10); actions.addStretch()
+        self.actionbar = QFrame(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(6, 5, 6, 5); row.setSpacing(2)
+        self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
+        self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
+        divider = QFrame(); divider.setObjectName('divider'); divider.setFixedSize(1, 20)
+        for widget in (self.keep_button, self.delete_button, divider, self.restore_button, self.next_button): row.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions.addWidget(self.actionbar); actions.addStretch(); column.addLayout(actions)
+        self.strip = QListWidget(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
+        self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
+        self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(92)
+        self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.strip.itemClicked.connect(self.strip_select); column.addWidget(self.strip)
+        column.addSpacing(8); self.stack.addWidget(review)
+        placeholder = QPixmap(104, 68); placeholder.fill(QColor(theme.ELEVATED)); self.placeholder = QIcon(placeholder)
+        # The grid sizes every cell from its first item, so its placeholder must be full size.
+        tile = QPixmap(176, 118); tile.fill(QColor(theme.ELEVATED)); self.tile = QIcon(tile)
+
+        deleted = QWidget(); grid_layout = QVBoxLayout(deleted); grid_layout.setContentsMargins(20, 12, 20, 14); grid_layout.setSpacing(10)
+        self.deleted_grid = QListWidget(); self.deleted_grid.setViewMode(QListWidget.ViewMode.IconMode); self.deleted_grid.setWrapping(True)
+        self.deleted_grid.setResizeMode(QListWidget.ResizeMode.Adjust); self.deleted_grid.setMovement(QListWidget.Movement.Static)
+        self.deleted_grid.setUniformItemSizes(True); self.deleted_grid.setIconSize(QSize(176, 118)); self.deleted_grid.setGridSize(QSize(196, 158))
+        self.deleted_grid.setTextElideMode(Qt.TextElideMode.ElideMiddle); self.deleted_grid.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.deleted_grid.itemDoubleClicked.connect(lambda item: self.restore(photo_id=item.data(ROLE)))
+        self.deleted_grid.itemSelectionChanged.connect(self.update_actions)
+        self.deleted_grid.verticalScrollBar().valueChanged.connect(self.maybe_more_deleted); grid_layout.addWidget(self.deleted_grid, 1)
+        footer = QHBoxLayout(); self.deleted_note = QLabel('删除的照片在原文件夹的 .photo-sieve-trash 中，仍占用空间。双击或按 ← 恢复。')
+        self.deleted_note.setObjectName('caption'); footer.addWidget(self.deleted_note, 1)
+        self.restore_selected = self.button('恢复所选', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
+        self.stack.addWidget(deleted)
+
+        empty = QWidget(); hero = QVBoxLayout(empty); hero.addStretch(3)
+        heading = QLabel('选择照片文件夹'); heading.setObjectName('hero'); lead = QLabel('拖入文件夹，或点击下方按钮。原照片不会被修改。'); lead.setObjectName('lead')
+        start = self.button('打开文件夹…', self.choose_source, 'primary'); start.setProperty('large', True)
+        for widget in (heading, lead): widget.setAlignment(Qt.AlignmentFlag.AlignHCenter); hero.addWidget(widget)
+        hero.addSpacing(26); hero.addWidget(start, 0, Qt.AlignmentFlag.AlignHCenter); hero.addStretch(4); self.stack.addWidget(empty)
+        self.toast = Toast(root)
+
+    def show_menu(self):
+        self.updates.touch()
+        menu = QMenu(self); menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
+        rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
+        menu.addAction('快捷键…', self.edit_shortcuts)
+        menu.addSeparator(); menu.addAction('检查更新', lambda: self.updates.check())
+        automatic = QAction('启动时检查更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
+        automatic.toggled.connect(self.updates.set_automatic); menu.addAction(automatic)
+        if self.updates.staged: menu.addAction('立即安装更新并重启', lambda: self.updates.install())
+        menu.addSeparator()
+        gpu = QAction('GPU 合成（重启后生效）', menu); gpu.setCheckable(True); gpu.setEnabled(os.name == 'nt')
+        gpu.setChecked(QSettings('PhotoSieve', 'PhotoSieve').value('gpu_compositing', True, type=bool)); gpu.toggled.connect(self.set_gpu); menu.addAction(gpu)
+        fps = QAction('显示帧率', menu); fps.setCheckable(True); fps.setChecked(self.fps_label is not None); fps.toggled.connect(self.show_fps); menu.addAction(fps)
+        menu.addSeparator()
+        for line in (self.machine_status(), self.updates.status or '版本 ' + APP_VERSION): menu.addAction(line).setEnabled(False)
+        menu.exec(self.more_button.mapToGlobal(QPoint(self.more_button.width() - menu.sizeHint().width(), self.more_button.height() + 6)))
+
+    def machine_status(self):
+        return (f'{machine.PROFILE.describe()} · 解码 {self.workers} · 预读 {self.ahead_target} · '
+                + ('GPU 合成' if COMPOSITING['gpu'] else 'CPU 合成'))
+
+    def set_gpu(self, enabled):
+        QSettings('PhotoSieve', 'PhotoSieve').setValue('gpu_compositing', bool(enabled))
+        self.toast.show_message(('GPU 合成' if enabled else 'CPU 合成') + '将在下次启动时生效', 'info', 2600)
+
+    def show_fps(self, enabled):
+        if not enabled:
+            if self.fps_label: self.removeEventFilter(self); self.fps_timer.stop(); self.fps_label.deleteLater(); self.fps_label = None
+            return
+        self.installEventFilter(self)   # only while the meter is shown: every window event passes through Python
+        self.fps_label = QLabel(self.centralWidget()); self.fps_label.setObjectName('caption')
+        self.fps_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.frames = 0
+        self.fps_timer = QTimer(self.fps_label); self.fps_timer.timeout.connect(self.tick_fps); self.fps_timer.start(1000); self.tick_fps()
+        self.fps_label.show()
+
+    def tick_fps(self):
+        # Window frames actually composed in the last second (one UpdateRequest per frame).
+        self.fps_label.setText(f'{self.frames} 帧/秒'); self.frames = 0; self.fps_label.adjustSize()
+        self.fps_label.move(self.centralWidget().width() - self.fps_label.width() - 20, 68); self.fps_label.raise_()
+
+    def eventFilter(self, watched, event):
+        if watched is self and event.type() == QEvent.Type.UpdateRequest: self.frames += 1
+        return False
+
+    def update_ready(self):
+        self.badge.show(); self.toast.show_message('新版已下载 · 停止操作 3 秒后自动重启完成更新', 'info', 3600)
+
+    def place_overlays(self):
+        root = self.centralWidget()
+        if self.stack.currentIndex() == 0: bottom = self.actionbar.mapTo(root, QPoint(0, 0)).y() - 14
+        else: bottom = root.height() - 70
+        self.toast.place(bottom)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event); self.place_overlays()
+
+    def showEvent(self, event):
+        super().showEvent(event); QTimer.singleShot(0, self.place_overlays)
+
+    # ---- state ------------------------------------------------------------
+    def refresh_state(self, delay=0):
+        if not self.timer.isActive(): self.state_timer.start(delay)
+
+    def job_running(self):
+        return bool(self.state_data and self.state_data['job']['running']) or self.library.job['running']
+
     def poll(self):
-        if self.state_pending or self.closed:return
-        self.state_pending=True; library=self.library
+        if self.state_pending or self.closed: return
+        self.state_pending = True; library = self.library
         def done(state):
-            if library is not self.library:return
-            self.state_pending=False;first=self.state_data is None;old=self.state_data;self.state_data=state
-            if first:self.load(anchor=max(0,state['cursor']-1))
-            for name,(button,text) in self.nav.items():button.setText(f"{text}    {state['counts'].get(name,'!')}")
-            job=state['job'];running=job['running'];self.progress.setVisible(running)
+            self.state_pending = False
+            if library is not self.library: self.poll(); return
+            first = self.state_data is None; old = self.state_data; self.state_data = state; job = state['job']; running = job['running']
+            if not self.pending_ops: self.counts = dict(state['counts'])
+            self.show_counts()
             if running:
-                self.progress.setRange(0,job['total'] or 0);self.progress.setValue(job['done']);self.progress.setFormat(f"{job['kind']}：{job['done']} / {job['total'] or '…'}")
-                self.message.setText(f"{job['kind']}在后台运行；完成后可继续筛选。" )
-            elif self.was_running or (old and job.get('revision')!=old['job'].get('revision')):
-                errors=job.get('errors',[]);self.message.setText(job['kind']+'：'+job['message']+(f"；失败 {len(errors)} 项，点击导出按钮查看结果" if errors else ''))
-                if errors:self.statusBar().showMessage('\n'.join(errors[:3]),20000)
-                self.load(anchor=0 if self.view=='deleted' or not self.queue else self.queue[0]['id']-1)
-            last=state['last_deleted'];self.restore_button.setEnabled(bool(last) and not running and not self.busy);self.trash_location.setEnabled(bool(last))
-            self.last_deleted.setText(f"最近删除：{last['name']}\n实际暂存：{last['backup']}" if last else '删除会移入原文件夹下的 .photo-sieve-trash，可按 ← 恢复')
-            if first and not running:self.message.setText(f"共 {state['counts']['all']:,} 张未删除照片 · 保留 {state['counts']['keep']:,} · 已删除 {state['counts']['deleted']:,}")
-            self.was_running=running;self.update_actions()
-        def failed(message):self.state_pending=False;self.statusBar().showMessage(message)
-        self.submit(library.state,done,failed)
-    def switch(self,view):
-        if self.busy or self.fetching:return
-        self.view=view;self.heading.setText(self.nav[view][1]);self.stack.setCurrentIndex(1 if view=='deleted' else 0)
-        for n,(button,_) in self.nav.items():button.setChecked(n==view)
-        self.load()
-    def load(self,anchor=0):
-        self.generation+=1;generation=self.generation;view=self.view;self.fetching=True;self.queue=[];self.render()
-        if view=='deleted':
-            self.deleted_rows=[];self.deleted_cards={}
-            while self.deleted_layout.count():
-                item=self.deleted_layout.takeAt(0)
-                if item.widget():item.widget().deleteLater()
-        def done(rows):
-            if generation!=self.generation:return
-            self.fetching=False
-            if view=='deleted':self.add_deleted(rows)
+                if not self.timer.isActive(): self.timer.start(900)
+                self.progress.set_progress(job['done'], job['total'])
             else:
-                self.queue=rows
-                if not rows and anchor:
-                    self.load();return
-                self.render();self.prefetch()
-        def failed(message):self.fetching=False;self.error(message)
-        self.submit(lambda:self.library.list_photos(view,anchor,'next',40),done,failed)
+                self.timer.stop(); self.progress.set_progress(0, 0, False)
+            if first:
+                self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 0)); self.place_overlays()
+                if state['root'] or running: self.load(anchor=max(0, state['cursor'] - 1))
+            elif not running and (self.was_running or job.get('revision') != old['job'].get('revision')):
+                errors = job.get('errors', []); message = job['kind'] + '：' + job['message'] + (f'，{len(errors)} 项失败' if errors else '')
+                self.toast.show_message(message, 'error' if errors or job['message'] != '已完成' else 'info', 3600)
+                if self.stack.currentIndex() == 2: self.stack.setCurrentIndex(0); self.place_overlays()
+                self.load(anchor=0 if self.view == 'deleted' or not self.queue else self.queue[0]['id'] - 1)
+            self.was_running = running; self.update_actions()
+        def failed(message):
+            self.state_pending = False; self.error(message)
+        self.submit(library.state, done, failed)
+
+    def show_counts(self):
+        state = self.state_data or {}; counts = self.counts; self.segments.set_counts(counts if counts else {})
+        root = state.get('root') or ''; job = state.get('job') or {}
+        self.title.set_text(Path(root).name or root or '照片快筛')
+        if job.get('running'):
+            text = f"{job['kind']} · {job['done']:,}" + (f" / {job['total']:,}" if job.get('total') else '')
+        elif root:
+            text = f"{counts.get('all', 0):,} 张照片 · {root}"
+        else:
+            text = '原生桌面版 ' + APP_VERSION
+        self.subtitle.set_text(text)
+
+    def refresh_chrome(self):
+        """Counts and the delete toast follow every press, but while a key is held they repaint at most every 80 ms."""
+        if not self.chrome_timer.isActive(): self.chrome_timer.start(80 if self.burst else 0)
+
+    def paint_chrome(self):
+        self.show_counts()
+        self.toast.show_pending()
+
+    def adjust_counts(self, action, status):
+        if not self.counts: return
+        source = 'keep' if status == 1 else 'pending'
+        if action == 'delete':
+            self.counts[source] = max(0, self.counts.get(source, 0) - 1); self.counts['deleted'] = self.counts.get('deleted', 0) + 1
+            self.counts['all'] = max(0, self.counts.get('all', 0) - 1)
+        elif action == 'keep' and status != 1:
+            self.counts['pending'] = max(0, self.counts.get('pending', 0) - 1); self.counts['keep'] = self.counts.get('keep', 0) + 1
+        self.refresh_chrome()
+
+    # ---- queue ------------------------------------------------------------
+    def switch(self, view):
+        self.updates.touch()
+        if self.busy or view == self.view and not self.fetching: self.segments.set_current(self.view); return
+        self.reset_zoom(); self.view = view; self.segments.set_current(view)
+        if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 0)
+        self.place_overlays(); self.load(); self.refresh_state(0)
+
+    def load(self, anchor=0):
+        self.generation += 1; generation = self.generation; view = self.view; library = self.library
+        # Previews that failed (a disconnected drive, say) are retried whenever the queue reloads.
+        self.fetching = True; self.queue = []; self.image_errors.clear(); self.update_actions(); self.update_display_size()
+        if view == 'deleted':
+            self.deleted_rows = []; self.deleted_items = {}; self.deleted_grid.clear(); self.thumb_wanted.clear()
+        def done(rows):
+            if generation != self.generation: return
+            self.fetching = False
+            if view == 'deleted': self.add_deleted(rows); self.update_actions(); return
+            self.queue = [p for p in rows if p['id'] not in self.inflight]; self.queue_end = len(rows) < PAGE
+            if not self.queue and anchor: self.load(); return
+            self.warmed.clear(); self.render(); self.prefetch()
+        def failed(message):
+            self.fetching = False; self.error(message)
+        self.submit(lambda: library.list_photos(view, anchor, 'next', 60 if view == 'deleted' else PAGE), done, failed)
+
     def refill(self):
-        if self.fetching or len(self.queue)>=12 or not self.queue:return
-        self.fetching=True;anchor=self.queue[-1]['id'];generation=self.generation;view=self.view
+        if self.fetching or self.queue_end or len(self.queue) >= REFILL or not self.queue or self.view == 'deleted': return
+        self.fetching = True; anchor = self.queue[-1]['id']; generation = self.generation; view = self.view; library = self.library
         def done(rows):
-            self.fetching=False
-            if generation!=self.generation:return
-            ids={p['id'] for p in self.queue};self.queue.extend(p for p in rows if p['id'] not in ids);self.render();self.prefetch()
-        self.submit(lambda:self.library.list_photos(view,anchor,'next',40),done,lambda message:setattr(self,'fetching',False))
-    def request_image(self,photo):
-        pid=photo['id']; library=self.library
-        if pid in self.cache or pid in self.loading or pid in self.image_errors:return
-        self.loading.add(pid)
-        def done(image):
-            if library is not self.library:return
-            self.loading.discard(pid)
-            if image.isNull():failed('无法解码预览');return
-            self.cache[pid]=QPixmap.fromImage(image)
-            while len(self.cache)>16:self.cache.popitem(last=False)
-            for pane in self.photos:
-                if pane.photo and pane.photo['id']==pid and not pane.detail:pane.show_photo(pane.photo,self.cache[pid])
-            self.thumb_cache[pid]=self.cache[pid].scaled(124,80,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
-            while len(self.thumb_cache)>64:self.thumb_cache.popitem(last=False)
-            self.update_thumbnail(pid)
-            card=self.deleted_cards.get(pid)
-            if card:card.setPixmap(self.cache[pid].scaled(220,140,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
-            self.update_actions()
+            if generation != self.generation: return   # a newer load owns the fetching flag now
+            self.fetching = False; self.queue_end = len(rows) < PAGE
+            ids = {p['id'] for p in self.queue}; self.queue.extend(p for p in rows if p['id'] not in ids and p['id'] not in self.inflight)
+            self.render(); self.prefetch()
         def failed(message):
-            if library is not self.library:return
-            self.loading.discard(pid);self.image_errors[pid]=message
+            if generation == self.generation: self.fetching = False
+        self.submit(lambda: library.list_photos(view, anchor, 'next', PAGE), done, failed)
+
+    # ---- previews -----------------------------------------------------------
+    def update_display_size(self):
+        dpr = self.devicePixelRatioF(); view = self.photos[0].viewport().size()
+        size = QSize(max(320, round(view.width() * dpr)), max(240, round(view.height() * dpr)))
+        old = self.display_size
+        if old is None or abs(size.width() - old.width()) > old.width() * .06 or abs(size.height() - old.height()) > old.height() * .06:
+            self.display_size = size
+            # Pane-sized RGB32 preview plus its strip thumbnail.
+            self.ahead_target = machine.PROFILE.buffer(size.width() * size.height() * 4 + 160 * 110 * 4)
+            self.cache_limit = self.ahead_target + BEHIND
+            return old is not None
+        return False
+
+    def resized(self):
+        # Previews keep showing (scaled) while sharper ones are decoded for the new pane size.
+        if self.update_display_size(): self.prefetch()
+
+    def request_image(self, photo, priority):
+        pid = photo['id']; library = self.library; size = self.display_size; dpr = self.devicePixelRatioF()
+        if pid in self.loading or pid in self.image_errors or (pid in self.cache and self.cache_size.get(pid) == size): return
+        self.loading.add(pid); thumb = (round(104 * dpr), round(68 * dpr))
+        def done(result):
+            if library is not self.library: return
+            self.loading.discard(pid); (image, _), (small, _), source = result
+            pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(dpr)
+            self.cache[pid] = pixmap; self.cache_size[pid] = size; self.sources[pid] = source[0]; self.cache.move_to_end(pid)
+            if len(self.cache) > self.cache_limit:
+                ahead = {p['id'] for p in self.queue[:self.ahead_target]}
+                for old in [k for k in self.cache if k not in ahead][:len(self.cache) - self.cache_limit]:
+                    self.cache.pop(old); self.cache_size.pop(old, None); self.sources.pop(old, None)
+            icon = QPixmap.fromImage(small); icon.setDevicePixelRatio(dpr); self.thumb_cache[pid] = icon
+            while len(self.thumb_cache) > 64: self.thumb_cache.popitem(last=False)
             for pane in self.photos:
-                if pane.photo and pane.photo['id']==pid and not pane.detail:pane.show_photo(pane.photo,error=message)
-            self.update_actions()
-        self.submit(lambda:QImage.fromData(library.preview(pid,1600)),done,failed,self.image_pool,priority=1)
-    def update_thumbnail(self,pid):
-        for i in range(self.strip.count()):
-            item=self.strip.item(i)
-            if item.data(Qt.ItemDataRole.UserRole)!=pid:continue
-            if pid in self.thumb_cache:item.setIcon(QIcon(self.thumb_cache[pid]));item.setToolTip(item.data(Qt.ItemDataRole.UserRole+1))
-            elif pid in self.thumb_errors:
-                item.setText('预览失败\n'+item.data(Qt.ItemDataRole.UserRole+2));item.setToolTip(self.thumb_errors[pid])
-    def request_thumbnail(self,photo):
-        pid=photo['id'];library=self.library
-        if pid in self.thumb_cache or pid in self.thumb_loading or pid in self.thumb_errors or len(self.thumb_loading)>=4:return
-        self.thumb_loading.add(pid)
-        def done(image):
-            if library is not self.library:return
-            self.thumb_loading.discard(pid)
-            if image.isNull():failed('无法读取缩略图');return
-            self.thumb_cache[pid]=QPixmap.fromImage(image).scaled(124,80,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
-            while len(self.thumb_cache)>64:self.thumb_cache.popitem(last=False)
-            self.update_thumbnail(pid);self.prefetch_thumbnails()
+                if pane.photo and pane.photo['id'] == pid and not pane.detail and not pane.zoom_animation:
+                    fresh = pane.pixmap is None; pane.show_photo(pane.photo, pixmap); pane.source_width = source[0]
+                    if fresh and pane.item and time.monotonic() - self.last_motion > BURST: self.fade(pane, 0, 1, 160)
+            self.update_thumbnail(pid); self.update_actions(); self.prefetch()
         def failed(message):
-            if library is not self.library:return
-            self.thumb_loading.discard(pid);self.thumb_errors[pid]=message;self.update_thumbnail(pid);self.prefetch_thumbnails()
-        self.submit(lambda:QImage.fromData(library.preview(pid,320)),done,failed,self.thumb_pool)
+            if library is not self.library: return
+            self.loading.discard(pid); self.image_errors[pid] = message
+            for pane in self.photos:
+                if pane.photo and pane.photo['id'] == pid and not pane.detail: pane.show_photo(pane.photo, error=message)
+            self.update_thumbnail(pid); self.update_actions(); self.prefetch()
+        gate = self.display_gate
+        def work():
+            image = library.preview_image(pid, 1600)   # may wait for a decoder process, without holding the gate
+            with gate: return display_image(image, size.width(), size.height(), thumb)
+        self.submit(work, done, failed, self.image_pool, priority)
+
     def prefetch(self):
-        # Large previews remain bounded; every filmstrip item gets its own small thumbnail.
-        for photo in self.queue[:6]:
-            if len(self.loading)>=6:break
-            self.request_image(photo)
-        self.prefetch_thumbnails()
-    def prefetch_thumbnails(self):
-        for photo in self.queue[:16]:
-            if photo['status']!=1:self.request_thumbnail(photo)
+        if self.view == 'deleted' or self.display_size is None: return
+        # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
+        for index, photo in enumerate(self.queue[:self.ahead_target]):
+            if len(self.loading) >= self.in_flight: break
+            self.request_image(photo, 1000 - index)
+        # Beyond that, build disk previews ahead with every decoder, but only once the nearest photos are ready.
+        library = self.library; limit = 0 if self.loading else self.workers
+        if len(self.warming) >= limit: return
+        # Previews average roughly 0.4 MB; never warm further ahead than 40% of the disk cache holds.
+        horizon = min(WARM, max(self.ahead_target, int(library.cache_limit * .4 / 400_000)))
+        for photo in self.queue[self.ahead_target:horizon]:
+            if len(self.warming) >= limit: break
+            pid = photo['id']
+            if pid in self.warming or pid in self.warmed or pid in self.cache: continue
+            self.warming.add(pid)
+            def settled(_, pid=pid):
+                self.warming.discard(pid); self.warmed.add(pid); self.prefetch()
+            self.submit(lambda pid=pid: library.preview(pid, 1600) and None, settled, settled, self.image_pool, -10)
+
+    def ready(self):
+        current = self.queue[0]['id'] if self.queue else None
+        return current in self.cache or current in self.image_errors
+
+    # ---- rendering ----------------------------------------------------------
     def render(self):
-        for i,pane in enumerate(self.photos):
-            p=self.queue[i] if len(self.queue)>i else None;pid=p['id'] if p else None
-            if p and pid in self.cache:self.cache.move_to_end(pid)
-            if not pane.photo or not p or pane.photo['id']!=pid or (pid in self.cache and not pane.pixmap):pane.show_photo(p,self.cache.get(pid),self.image_errors.get(pid,''))
-            self.captions[i].setText((p['relative']+'\n'+('已保留' if p['status']==1 else '未筛选')) if p else ('当前队列已处理完' if not self.fetching else '正在读取队列…'))
-        scroll=self.strip.horizontalScrollBar().value();self.strip.clear()
-        for p in [p for p in self.queue[:16] if p['status']!=1]:
-            item=QListWidgetItem(p['name']);item.setData(Qt.ItemDataRole.UserRole,p['id']);item.setToolTip(p['relative']);item.setData(Qt.ItemDataRole.UserRole+1,p['relative']);item.setData(Qt.ItemDataRole.UserRole+2,p['name']);self.strip.addItem(item)
-            if p['id'] in self.thumb_cache:item.setIcon(QIcon(self.thumb_cache[p['id']]))
-            elif p['id'] in self.cache:item.setIcon(QIcon(self.cache[p['id']]))
-            else:
-                placeholder=QPixmap(124,80);placeholder.fill(QColor('#223247'));painter=QPainter(placeholder);painter.setPen(QColor('#a5b4ca'));painter.drawText(placeholder.rect(),Qt.AlignmentFlag.AlignCenter,'读取中…');painter.end();item.setIcon(QIcon(placeholder))
-            if p['id'] in self.thumb_errors:self.update_thumbnail(p['id'])
-        self.strip.horizontalScrollBar().setValue(scroll)
-        if self.queue:
-            self.cursor_id=self.queue[0]['id'];self.cursor_timer.start(250)
+        for i, pane in enumerate(self.photos):
+            p = self.queue[i] if len(self.queue) > i else None; pid = p['id'] if p else None
+            if p and pid in self.cache: self.cache.move_to_end(pid)
+            pixmap = self.cache.get(pid); error = self.image_errors.get(pid, '')
+            same = bool(p and pane.photo and pane.photo['id'] == pid)
+            if same and (pane.detail or pane.zoom_animation): continue
+            if not same or not p or pane.pixmap is not pixmap or (error and not pixmap and not pane.text):
+                message = '' if p or i else ('正在读取…' if self.fetching else ('全部筛选完毕' if self.view == 'pending' else '没有照片'))
+                pane.show_photo(p, pixmap, error, message); pane.source_width = self.sources.get(pid, 0)
+            self.caption(i, p)
+        self.update_strip()
+        if self.queue: self.cursor_id = self.queue[0]['id']; self.cursor_timer.start(400)
         self.update_actions()
-    def update_actions(self):
-        running=bool(self.state_data and self.state_data['job']['running']);current=self.queue[0]['id'] if self.queue else None
-        ready=current in self.cache or current in self.image_errors
-        allowed=bool(self.queue) and not self.busy and not self.fetching and not running and self.view!='deleted' and ready
-        self.keep_button.setEnabled(allowed);self.delete_button.setEnabled(allowed)
-        self.next_button.setEnabled(bool(self.queue) and not self.busy and self.view!='deleted');self.prev_button.setEnabled(not self.busy and self.view!='deleted')
-        self.scan_button.setEnabled(not self.busy and not running)
-    def act(self,action):
-        if (action=='keep' and not self.keep_button.isEnabled()) or (action=='delete' and not self.delete_button.isEnabled()):return
-        photo=self.queue[0];self.busy=True;self.update_actions();generation=self.generation
-        def done(result):
-            self.busy=False
-            if generation==self.generation and self.queue and self.queue[0]['id']==photo['id']:self.queue.pop(0)
-            if action=='delete':self.last_deleted.setText(f"已删除：{photo['name']}\n实际暂存：{result['backup']}")
-            self.message.setText(('已保留：' if action=='keep' else '已删除，可按 ← 恢复：')+photo['name'])
-            self.render();self.prefetch();self.refill();self.poll()
-        def failed(message):self.busy=False;self.update_actions();self.error(message)
-        self.submit((lambda:self.library.mark(photo['id'],1)) if action=='keep' else (lambda:self.library.trash(photo['id'])),done,failed)
-    def next_photo(self):
-        if self.busy or self.view=='deleted' or not self.queue:return
-        self.queue.pop(0);self.render();self.prefetch();self.refill()
-    def previous_photo(self):
-        if self.busy or self.fetching or self.view=='deleted':return
-        anchor=self.queue[0]['id'] if self.queue else 2**63-1;view=self.view
-        def done(rows):
-            if rows:self.load(rows[-1]['id']-1)
-        self.submit(lambda:self.library.list_photos(view,anchor,'prev',1),done)
-    def strip_select(self,item):
-        if self.busy:return
-        pid=item.data(Qt.ItemDataRole.UserRole);idx=next((i for i,p in enumerate(self.queue) if p['id']==pid),None)
-        if idx is not None:self.queue=self.queue[idx:];self.render();self.prefetch();self.refill()
-    def restore(self,photo_id=None,general=False):
-        if self.busy:return
-        self.busy=True;self.update_actions()
-        def done(result):
-            self.busy=False;self.message.setText('已恢复到原位置' if result.get('restored') else '已撤回筛选')
-            if self.view=='deleted':self.load()
+
+    def caption(self, index, photo, detail=None):
+        if not photo: self.names[index].set_text(''); self.details[index].set_text(''); return
+        self.names[index].set_text(photo['name'])
+        folder = os.path.dirname(photo['relative'])
+        text = detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
+        self.details[index].set_text(text)
+
+    def strip_item(self, photo):
+        item = QListWidgetItem(); item.setData(ROLE, photo['id']); item.setToolTip(photo['relative'])
+        icon = self.thumb_cache.get(photo['id']); item.setIcon(QIcon(icon) if icon else self.placeholder)
+        return item
+
+    def update_strip(self):
+        want = [p for p in self.queue[:STRIP] if p['status'] != 1]; ids = [p['id'] for p in want]
+        have = [self.strip.item(i).data(ROLE) for i in range(self.strip.count())]
+        if have != ids:
+            keep = set(ids)
+            for i in reversed(range(len(have))):
+                if have[i] not in keep: self.strip.takeItem(i)
+            have = [x for x in have if x in keep]
+            if have == ids[:len(have)]:
+                for p in want[len(have):]: self.strip.addItem(self.strip_item(p))
             else:
-                if result.get('status')==1 and self.view=='pending':self.switch('keep')
-                self.load(result['id']-1)
-            self.poll()
-        def failed(message):self.busy=False;self.update_actions();self.error(message)
-        self.submit(lambda:self.library.undo(only_delete=not general,photo_id=photo_id),done,failed)
-    def reset_pane_zoom(self,pane):
-        if pane is self.deleted_focus:
-            pane.show_photo(None);pane.hide();return
-        if pane.photo:
-            p=pane.photo;pane.show_photo(p,self.cache.get(p['id']),self.image_errors.get(p['id'],''))
-            index=self.photos.index(pane);self.captions[index].setText(p['relative']+'\n'+('已保留' if p['status']==1 else '未筛选'))
+                self.strip.clear()
+                for p in want: self.strip.addItem(self.strip_item(p))
+        current = 0 if want and self.queue and want[0] is self.queue[0] else -1
+        if self.strip.currentRow() != current: self.strip.setCurrentRow(current)
+
+    def update_thumbnail(self, pid):
+        for i in range(self.strip.count()):
+            item = self.strip.item(i)
+            if item.data(ROLE) == pid and pid in self.thumb_cache: item.setIcon(QIcon(self.thumb_cache[pid]))
+
+    def update_actions(self):
+        running = self.job_running(); reviewing = self.view != 'deleted'
+        allowed = bool(self.queue) and self.ready() and not self.busy and not running and reviewing
+        for button, enabled in [(self.keep_button, allowed), (self.delete_button, allowed),
+                                (self.next_button, bool(self.queue) and not self.busy and reviewing),
+                                (self.restore_button, not self.busy and not running and (self.counts.get('deleted', 1) > 0 or self.pending_ops > 0)),
+                                (self.restore_selected, bool(self.deleted_grid.selectedItems()) and not self.busy and not running),
+                                (self.export_button, not self.busy and not running and bool(self.state_data and self.state_data.get('root'))),
+                                (self.open_button, not self.busy and not running)]:
+            if button.isEnabled() != enabled: button.setEnabled(enabled)
+
+    # ---- motion -------------------------------------------------------------
+    def track(self, animation):
+        self.motions.append(animation); animation.finished.connect(lambda: animation in self.motions and self.motions.remove(animation))
+        return animation
+
+    def finish_motion(self):
+        for animation in list(self.motions): animation.setCurrentTime(animation.duration())
+
+    def fade(self, pane, start, end, duration):
+        item = pane.item
+        if item is None: return
+        def step(value):
+            if pane.item is item: item.setOpacity(value)
+        item.setOpacity(start); self.track(animate(self, duration, step, theme.EASE, None, start, end))
+
+    def ghost(self, pane):
+        # The pane's own pixmap, not a viewport grab: no re-render on the keypress frame, whatever composites the window.
+        if pane.detail or not pane.item or not pane.pixmap: return None
+        rect = pane.content_rect()
+        if rect.isEmpty(): return None
+        # Still easing back from a zoom, the pane shows only part of the photo: take exactly what is on screen.
+        picture = pane.viewport().grab(rect) if pane.zoom_animation else pane.pixmap
+        return Ghost(self.centralWidget(), picture, QRect(pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size()))
+
+    def begin_transition(self):
+        """Snapshot both panes before the queue moves; held keys get instant swaps instead."""
+        now = time.monotonic(); burst = self.burst = now - self.last_motion < BURST; self.last_motion = now; self.finish_motion()
+        if burst or not self.isVisible(): return None
+        return self.ghost(self.photos[0]), self.ghost(self.photos[1])
+
+    def play_transition(self, kind, ghosts):
+        if not ghosts: return
+        left, right = ghosts; offset = {'keep': QPoint(0, -48), 'delete': QPoint(0, 56), 'next': QPoint(-72, 0)}[kind]
+        if left:
+            start = left.pos()
+            def lift(t, g=left):
+                g.move(start + QPoint(round(offset.x() * t), round(offset.y() * t))); g.opacity = max(0.0, 1 - t * 1.5); g.update()
+            self.track(animate(self, 300, lift, theme.SNAPPY, left.deleteLater))
+        target_pane = self.photos[0]
+        if right and target_pane.item and target_pane.photo and self.queue and target_pane.photo['id'] == self.queue[0]['id']:
+            origin = right.pos(); rect = right.geometry().translated(-self.photos[1].viewport().mapTo(self.centralWidget(), QPoint(0, 0)))
+            destination = self.photos[0].viewport().mapTo(self.centralWidget(), rect.topLeft()); item = target_pane.item; item.setOpacity(0)
+            def glide(t, g=right):
+                g.move(origin + (destination - origin) * t)
+            def landed(g=right, item=item):
+                if target_pane.item is item: item.setOpacity(1)
+                g.deleteLater()
+            right.raise_(); self.track(animate(self, 320, glide, theme.SNAPPY, landed))
+        elif right: right.deleteLater()
+        if self.photos[1].item: self.fade(self.photos[1], 0, 1, 320)
+        self.toast.raise_()
+
+    def nudge(self):
+        """iOS-style refusal shake when the current preview is not ready yet."""
+        now = time.monotonic()
+        if now - self.last_nudge < .6: return
+        self.last_nudge = now; pane = self.photos[0]; item = pane.item or pane.text
+        if item is None: return
+        def step(t):
+            if (pane.item or pane.text) is item: item.setX(8 * (1 - t) * math.sin(t * 6 * math.pi))
+        self.track(animate(self, 320, step, theme.EASE, lambda: (pane.item or pane.text) is item and item.setX(0)))
+
+    # ---- actions ------------------------------------------------------------
+    def act(self, action):
+        self.updates.touch()
+        if action not in ('keep', 'delete') or self.closing: return
+        if not self.keep_button.isEnabled():
+            if self.queue and self.view != 'deleted' and not self.busy and not self.job_running(): self.nudge()
+            return
+        photo = self.queue[0]; pid = photo['id']; generation = self.generation; view = self.view; library = self.library
+        ghosts = self.begin_transition(); self.queue.pop(0); self.inflight.add(pid); self.adjust_counts(action, photo['status'])
+        self.render(); self.play_transition(action, ghosts); self.prefetch(); self.refill()
+        if action == 'delete':
+            self.delete_streak += 1
+            back = f'{self.key("restore")} 恢复'
+            self.toast.defer(f'已移到暂存 · {back}' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · {back}', 'delete'); self.refresh_chrome()
+        elif self.delete_streak and not self.toast.active():
+            self.delete_streak = 0
+        def done(result):
+            self.inflight.discard(pid)
+            if not self.toast.active(): self.delete_streak = 0
+        def failed(message):
+            self.inflight.discard(pid)
+            if generation == self.generation and self.view == view and all(p['id'] != pid for p in self.queue):
+                self.queue.insert(0, photo); self.render(); self.prefetch()
+            self.delete_streak = 0; self.error(message)
+        self.op((lambda: library.mark(pid, 1)) if action == 'keep' else (lambda: library.trash(pid)), done, failed)
+
+    def next_photo(self):
+        self.updates.touch()
+        if self.busy or self.view == 'deleted' or not self.queue: return
+        ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
+
+    def strip_select(self, item):
+        self.updates.touch()
+        if self.busy: return
+        pid = item.data(ROLE); index = next((i for i, p in enumerate(self.queue) if p['id'] == pid), None)
+        if index: self.finish_motion(); self.queue = self.queue[index:]; self.render(); self.prefetch(); self.refill()
+
+    def restore(self, photo_id=None, general=False):
+        self.updates.touch()
+        if self.busy or self.closing: return
+        library = self.library; generation = self.generation
+        def work():
+            result = library.undo(only_delete=not general, photo_id=photo_id)
+            try: result['photo'] = library.public(library.photo(result['id']))
+            except Exception: result['photo'] = None
+            return result
+        def done(result):
+            if generation != self.generation: return
+            pid = result['id']; photo = result['photo']; self.delete_streak = 0
+            if pid in self.deleted_items:
+                self.deleted_grid.takeItem(self.deleted_grid.row(self.deleted_items.pop(pid)))
+                self.deleted_rows = [p for p in self.deleted_rows if p['id'] != pid]
+            if self.view != 'deleted':
+                self.queue = [p for p in self.queue if p['id'] != pid]; wanted = 1 if self.view == 'keep' else 0
+                if photo and photo['status'] == wanted:
+                    self.finish_motion(); self.queue.insert(0, photo); self.render(); self.prefetch()
+                    pane = self.photos[0]
+                    if pane.item:
+                        item = pane.item; item.setTransformOriginPoint(item.boundingRect().center())
+                        def settle(t):
+                            if pane.item is item: item.setOpacity(t); item.setScale(.96 + .04 * t)
+                        self.track(animate(self, 320, settle, theme.SNAPPY))
+                else: self.render()
+            kept = photo and photo['status'] == 1 and self.view == 'pending'
+            self.toast.show_message(('已恢复到原位置' + (' · 在「保留」中' if kept else '')) if result.get('restored') else '已撤回', 'keep')
+            self.update_actions()
+        self.op(work, done, self.error)
+
+    def restore_selection(self):
+        items = self.deleted_grid.selectedItems()
+        if items: self.restore(photo_id=items[0].data(ROLE))
+
+    # ---- zoom -----------------------------------------------------------------
+    def reset_pane(self, pane):
+        if pane.detail or not pane.photo: return
+        pid = pane.photo['id']; pane.show_photo(pane.photo, self.cache.get(pid), self.image_errors.get(pid, '')); pane.source_width = self.sources.get(pid, 0)
+        self.caption(self.photos.index(pane), pane.photo)
+
     def reset_zoom(self):
-        for pane in self.photos+[self.deleted_focus]:
-            if pane.detail:self.reset_pane_zoom(pane)
-    def focus(self,photo,point=None):
-        sender=self.sender()
-        pane=sender if isinstance(sender,PhotoView) else next((v for v in self.photos if v.photo and v.photo['id']==photo['id']),None)
-        if pane is None:
-            pane=self.deleted_focus;pane.show();pane.show_photo(photo,self.cache.get(photo['id']))
-        if pane.detail:self.reset_pane_zoom(pane);return
-        pane.zoom_at(point)
-        if pane in self.photos:
-            index=self.photos.index(pane);self.captions[index].setText(photo['relative']+'\n已就地放大；正在读取原始分辨率… 再点一次或 Esc 恢复')
-        self.load_focus(photo)
+        for pane in self.photos:
+            if pane.detail:
+                photo = pane.photo; pane.unzoom(lambda pane=pane: self.reset_pane(pane)); self.caption(self.photos.index(pane), photo)
+
+    def focus(self, photo, point=None):
+        self.updates.touch()
+        sender = self.sender()
+        pane = sender if isinstance(sender, PhotoView) else next((v for v in self.photos if v.photo and v.photo['id'] == photo['id']), None)
+        if pane is None or not pane.pixmap: return
+        if pane.detail:
+            pane.unzoom(lambda: self.reset_pane(pane)); self.caption(self.photos.index(pane), photo); return
+        self.finish_motion(); pane.zoom_at(point)
+        self.caption(self.photos.index(pane), photo, f'正在读取原始分辨率… 再点一次或 {self.key("unzoom")} 还原'); self.load_focus(photo)
+
     def pump_focus(self):
-        for pane in self.photos+[self.deleted_focus]:
-            if pane.detail and pane.photo and not pane.full_resolution:self.load_focus(pane.photo)
-    def load_focus(self,photo):
-        pid=photo['id'];library=self.library
-        if pid in self.focus_loading or len(self.focus_loading)>=2:return
+        for pane in self.photos:
+            if pane.detail and pane.photo and not pane.full_resolution and not pane.pending_full: self.load_focus(pane.photo)
+
+    def load_focus(self, photo):
+        pid = photo['id']; library = self.library
+        if pid in self.focus_loading or len(self.focus_loading) >= 2: return
         self.focus_loading.add(pid)
         def loaded(image):
-            if library is not self.library:return
+            if library is not self.library: return
             self.focus_loading.discard(pid)
-            if image.isNull():failed('原图解码失败');return
-            pixmap=None
-            for target in self.photos+[self.deleted_focus]:
-                if target.detail and target.photo and target.photo['id']==pid:
-                    if pixmap is None:pixmap=QPixmap.fromImage(image)
-                    target.install_full_image(pixmap)
-                    if target in self.photos:
-                        index=self.photos.index(target);self.captions[index].setText(photo['relative']+f'\n100% · {image.width()} × {image.height()} · 拖动查看，再点一次或 Esc 恢复')
+            if image.isNull(): failed('原图解码失败'); return
+            pixmap = None
+            for index, pane in enumerate(self.photos):
+                if pane.detail and pane.photo and pane.photo['id'] == pid:
+                    if pixmap is None: pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(self.devicePixelRatioF())
+                    pane.install_full_image(pixmap)
+                    self.caption(index, photo, f'100% · {image.width()} × {image.height()} · 拖动查看，再点一次或 {self.key("unzoom")} 还原')
             self.pump_focus()
         def failed(message):
-            if library is not self.library:return
-            self.focus_loading.discard(pid);self.statusBar().showMessage('原始分辨率读取失败：'+message,15000)
-            for pane in self.photos+[self.deleted_focus]:
-                if pane.detail and pane.photo and pane.photo['id']==pid:self.reset_pane_zoom(pane)
+            if library is not self.library: return
+            self.focus_loading.discard(pid); self.error('原始分辨率读取失败：' + message)
+            for pane in self.photos:
+                if pane.detail and pane.photo and pane.photo['id'] == pid: pane.unzoom(lambda pane=pane: self.reset_pane(pane))
             self.pump_focus()
-        self.submit(lambda:QImage.fromData(library.preview(pid,0)),loaded,failed,self.detail_pool)
+        self.submit(lambda: full_qimage(library.preview_image(pid, 0)), loaded, failed, self.detail_pool)
+
     def focus_left(self):
-        if self.queue:self.focus(self.queue[0])
+        if self.queue and self.view != 'deleted': self.focus(self.queue[0])
+
     def save_cursor(self):
-        pid=self.cursor_id;library=self.library
-        if pid:self.submit(lambda:library.remember('cursor',pid))
+        pid = self.cursor_id; library = self.library
+        if pid: self.submit(lambda: library.remember('cursor', pid))
+
+    # ---- folders --------------------------------------------------------------
     def choose_source(self):
-        folder=QFileDialog.getExistingDirectory(self,'选择照片文件夹',self.folder.text())
-        if folder:self.folder.setText(folder)
-    def scan(self):
-        folder=self.folder.text().strip()
-        if not folder:self.choose_source();folder=self.folder.text().strip()
-        if not folder:return
-        current=self.library.meta('root')
-        if current and Path(current).resolve()!=Path(folder).resolve():
-            import hashlib
-            newdir=Path.home()/'.photo-sieve'/'libraries'/hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
-            self.busy=True;self.update_actions();self.scan_button.setEnabled(False)
-            self.message.setText('正在打开此目录的筛选记录…')
+        self.updates.touch()
+        start = (self.state_data or {}).get('root') or str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, '选择照片文件夹', start)
+        if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
+
+    def scan(self, folder=None):
+        if folder is None: self.choose_source(); return
+        if self.busy: return
+        folder = str(folder); current = self.library.meta('root')
+        if current and Path(current).resolve() != Path(folder).resolve():
+            newdir = Path.home() / '.photo-sieve' / 'libraries' / hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
+            self.busy = True; self.update_actions(); self.toast.show_message('正在打开此文件夹的筛选记录…', 'info')
             def changed(library):
-                QSettings('PhotoSieve','PhotoSieve').setValue('library',str(library.directory))
-                self.library=library;self.generation+=1;self.cache.clear();self.loading.clear();self.image_errors.clear();self.thumb_cache.clear();self.thumb_loading.clear();self.thumb_errors.clear();self.focus_loading.clear();self.reset_zoom()
-                self.state_data=None;self.state_pending=False;self.busy=False;self.cursor_timer.stop();self.cursor_id=0
-                self.view='pending';self.stack.setCurrentIndex(0);self.heading.setText('未筛选')
-                for name,(button,_) in self.nav.items():button.setChecked(name=='pending')
-                self.queue=[];self.render();library.scan(folder);self.poll()
-            self.submit(lambda:Library(newdir),changed,lambda message:(setattr(self,'busy',False),self.error(message)))
+                QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
+                self.library = library; self.generation += 1
+                for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed): store.clear()
+                self.reset_zoom(); self.state_data = None; self.state_pending = False; self.busy = False; self.counts = {}
+                self.cursor_timer.stop(); self.cursor_id = 0; self.view = 'pending'; self.segments.set_current('pending', False)
+                self.stack.setCurrentIndex(0); self.queue = []; self.render(); self.start_scan(library, folder)
+            def failed(message):
+                self.busy = False; self.update_actions(); self.error(message)
+            self.submit(lambda: Library(newdir), changed, failed)
             return
-        self.submit(lambda:self.library.scan(folder),lambda _:self.poll())
-    def open_folder(self,path):
-        if not Path(path).is_dir():self.error('文件夹不存在，或硬盘未连接：'+path);return
+        self.start_scan(self.library, folder)
+
+    def start_scan(self, library, folder):
+        def started(_):
+            if self.stack.currentIndex() == 2: self.stack.setCurrentIndex(0); self.place_overlays()
+            self.poll(); self.timer.start(900)
+        self.submit(lambda: library.scan(folder), started)
+
+    def dragEnterEvent(self, event):
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if urls and urls[0].isLocalFile() and Path(urls[0].toLocalFile()).is_dir(): event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        self.scan(str(Path(event.mimeData().urls()[0].toLocalFile()))); event.acceptProposedAction()
+
+    def open_folder(self, path):
+        if not Path(path).is_dir(): self.error('文件夹不存在，或硬盘未连接：' + path); return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
-    def open_last_trash(self):
-        last=self.state_data.get('last_deleted') if self.state_data else None
-        if last:self.open_folder(str(Path(last['backup']).parent))
-    def add_deleted(self,rows):
-        self.deleted_rows.extend(rows);self.more_button.setEnabled(len(rows)==40)
+
+    # ---- deleted grid ----------------------------------------------------------
+    def add_deleted(self, rows):
+        self.deleted_rows.extend(rows); self.deleted_more = len(rows) == 60
         for photo in rows:
-            frame=QFrame();frame.setObjectName('card');layout=QHBoxLayout(frame);image=QLabel('预览读取中…');image.setFixedSize(220,150);image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.deleted_cards[photo['id']]=image;layout.addWidget(image);text=QVBoxLayout();name=QLabel(photo['name']);text.addWidget(name)
-            paths=QLabel('原位置：'+photo['path']+'\n实际暂存：'+str(photo['backup']));paths.setWordWrap(True);paths.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);text.addWidget(paths)
-            buttons=QHBoxLayout();buttons.addWidget(self.button('恢复到原位置',lambda checked=False,p=photo:self.restore(photo_id=p['id'])));buttons.addWidget(self.button('打开暂存位置',lambda checked=False,p=photo:self.open_folder(str(Path(p['backup']).parent))));buttons.addWidget(self.button('放大检查',lambda checked=False,p=photo:self.focus(p)));text.addLayout(buttons);layout.addLayout(text,1);self.deleted_layout.addWidget(frame)
-            if photo['id'] in self.cache:image.setPixmap(self.cache[photo['id']].scaled(220,140,Qt.AspectRatioMode.KeepAspectRatio))
-            else:
-                # Thumbnail-only task for long deleted lists; no full-size memory accumulation.
-                generation=self.generation;library=self.library
-                def loaded(im,pid=photo['id'],generation=generation):
-                    if generation!=self.generation:return
-                    label=self.deleted_cards.get(pid)
-                    if label:label.setPixmap(QPixmap.fromImage(im).scaled(220,140,Qt.AspectRatioMode.KeepAspectRatio))
-                self.submit(lambda pid=photo['id'],library=library:QImage.fromData(library.preview(pid,320)),loaded,lambda message:None,self.image_pool,priority=-1)
-        if not self.deleted_rows:self.deleted_layout.addWidget(QLabel('暂无删除记录'))
+            item = QListWidgetItem(self.tile, photo['name']); item.setData(ROLE, photo['id'])
+            item.setToolTip('原位置：' + photo['path'] + '\n暂存：' + str(photo['backup'])); self.deleted_grid.addItem(item)
+            self.deleted_items[photo['id']] = item; self.thumb_wanted.append(photo['id'])
+        self.pump_thumbnails()
+
+    def pump_thumbnails(self):
+        library = self.library; generation = self.generation; dpr = self.devicePixelRatioF(); size = (round(176 * dpr), round(118 * dpr))
+        while self.thumb_wanted and len(self.thumb_loading) < 3:
+            pid = self.thumb_wanted.popleft()
+            if pid not in self.deleted_items: continue
+            self.thumb_loading.add(pid)
+            def done(result, pid=pid):
+                self.thumb_loading.discard(pid)
+                item = self.deleted_items.get(pid)
+                if item and generation == self.generation:
+                    pixmap = QPixmap.fromImage(result[0][0]); pixmap.setDevicePixelRatio(dpr); item.setIcon(QIcon(pixmap))
+                self.pump_thumbnails()
+            def failed(message, pid=pid):
+                self.thumb_loading.discard(pid); item = self.deleted_items.get(pid)
+                if item: item.setText('无法预览'); item.setToolTip(item.toolTip() + '\n' + message)
+                self.pump_thumbnails()
+            self.submit(lambda pid=pid: display_image(library.preview_image(pid, 320), *size, (8, 8)), done, failed, self.thumb_pool)
+
+    def maybe_more_deleted(self, value):
+        bar = self.deleted_grid.verticalScrollBar()
+        if self.deleted_more and not self.fetching and value >= bar.maximum() - 240: self.load_more_deleted()
+
     def load_more_deleted(self):
-        if self.fetching:return
-        self.fetching=True;anchor=self.deleted_rows[-1]['id'] if self.deleted_rows else 0;generation=self.generation
+        if self.fetching or not self.deleted_more: return
+        self.fetching = True; anchor = self.deleted_rows[-1]['id'] if self.deleted_rows else 0; generation = self.generation; library = self.library
         def done(rows):
-            self.fetching=False
-            if generation==self.generation:self.add_deleted(rows)
-        self.submit(lambda:self.library.list_photos('deleted',anchor,'next',40),done,lambda message:setattr(self,'fetching',False))
+            self.fetching = False
+            if generation == self.generation: self.add_deleted(rows)
+        self.submit(lambda: library.list_photos('deleted', anchor, 'next', 60), done, lambda message: setattr(self, 'fetching', False))
+
+    # ---- export -------------------------------------------------------------------
     def export_dialog(self):
-        dialog=QDialog(self);dialog.setWindowTitle('保存全部保留照片');dialog.resize(700,440);layout=QVBoxLayout(dialog)
-        count=self.state_data['counts']['keep'] if self.state_data else 0;layout.addWidget(QLabel(f'将本次任务开始时已保留的 {count:,} 张照片保存到目标目录。'))
-        path=QLineEdit();summary=self.library.export_summary();path.setText(summary['destination'] if summary else '')
-        row=QHBoxLayout();row.addWidget(path,1)
+        self.updates.touch()
+        dialog = QDialog(self); dialog.setWindowTitle('导出保留的照片'); dialog.setFixedWidth(560)
+        layout = QVBoxLayout(dialog); layout.setContentsMargins(28, 24, 28, 22); layout.setSpacing(10)
+        count = self.counts.get('keep', 0); heading = QLabel('导出保留的照片'); heading.setObjectName('heading'); layout.addWidget(heading)
+        lead = QLabel(f'{count:,} 张已保留的照片，保留原文件名和子文件夹。'); lead.setObjectName('lead'); lead.setWordWrap(True); layout.addWidget(lead)
+        layout.addSpacing(6); summary = self.library.export_summary(); chosen = {'path': summary['destination'] if summary else ''}
+        row = QHBoxLayout(); target = QLabel(); target.setObjectName('name'); target.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        def show_target():
+            target.setText(target.fontMetrics().elidedText(chosen['path'] or '尚未选择目标文件夹', Qt.TextElideMode.ElideMiddle, 380))
         def choose():
-            folder=QFileDialog.getExistingDirectory(dialog,'选择输出目录',path.text())
-            if folder:path.setText(folder)
-        row.addWidget(self.button('选择目录…',choose));layout.addLayout(row)
-        label=QLabel('保留原文件名和子目录；遇到同名文件会跳过并报告。\n复制：原片仍在原位置。移动：原片转到目标目录，不能用 ← 撤回。');label.setWordWrap(True);layout.addWidget(label)
-        buttons=QHBoxLayout()
-        def start(mode):
-            destination=path.text().strip()
-            if not destination:self.error('请先选择目标目录');return
-            self.submit(lambda:self.library.export_kept(destination,mode),lambda _:(dialog.accept(),self.poll()))
-        buttons.addWidget(self.button('复制全部保留照片',lambda:start('copy'),True));buttons.addWidget(self.button('移动全部保留照片',lambda:start('move')));layout.addLayout(buttons)
+            folder = QFileDialog.getExistingDirectory(dialog, '选择目标文件夹', chosen['path'])
+            if folder: chosen['path'] = folder; show_target()
+        row.addWidget(target, 1); row.addWidget(self.button('选择…', choose)); layout.addLayout(row); show_target()
+        note = QLabel(f'复制：原片仍在原处。移动：原片转到目标文件夹，不能用 {self.key("restore")} 撤回。\n目标中已有的同名文件会跳过，不会覆盖。'); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
+        problem = QLabel(); problem.setStyleSheet(f'color:{theme.RED}; font-size:12px;'); problem.setWordWrap(True); problem.hide(); layout.addWidget(problem)
         if summary:
-            result=QLabel(f"上次任务：成功 {summary['done']} / {summary['total']}，失败 {summary['failed']}\n目标：{summary['destination']}");result.setWordWrap(True);result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);layout.addWidget(result)
-            layout.addWidget(self.button('打开输出文件夹',lambda:self.open_folder(summary['destination'])))
+            result = QLabel(f"上次：成功 {summary['done']:,} / {summary['total']:,}，失败 {summary['failed']:,}"); result.setObjectName('caption'); layout.addWidget(result)
             if summary['errors']:
-                failures=QLabel('\n'.join((e['original']+'：'+e['error']) for e in summary['errors'][:20]));failures.setWordWrap(True);failures.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(failures);layout.addWidget(scroll)
-        layout.addStretch();layout.addWidget(self.button('关闭',dialog.reject));dialog.exec()
-    def closeEvent(self,event):
+                failures = QLabel('\n'.join((e['original'] + '：' + e['error']) for e in summary['errors'][:20])); failures.setObjectName('caption')
+                failures.setWordWrap(True); failures.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(failures); scroll.setMaximumHeight(140); layout.addWidget(scroll)
+            reveal = self.button('在资源管理器中显示上次导出', lambda: self.open_folder(summary['destination']), 'plain'); layout.addWidget(reveal, 0, Qt.AlignmentFlag.AlignLeft)
+        def start(mode):
+            if not chosen['path']: problem.setText('请先选择目标文件夹。'); problem.show(); return
+            if self.busy: problem.setText('正在准备更新或切换文件夹，请稍后再导出。'); problem.show(); return
+            def started(_):
+                dialog.accept(); self.poll(); self.timer.start(900)
+            def failed(message):
+                problem.setText(message); problem.show()
+            self.submit(lambda: self.library.export_kept(chosen['path'], mode), started, failed)
+        layout.addSpacing(8); buttons = QHBoxLayout(); buttons.addStretch()
+        buttons.addWidget(self.button('取消', dialog.reject)); buttons.addWidget(self.button('移动', lambda: start('move')))
+        copy = self.button('复制', lambda: start('copy'), 'primary'); copy.setDefault(True); buttons.addWidget(copy); layout.addLayout(buttons)
+        dialog.exec()
+
+    def closeEvent(self, event):
+        if self.updates.installing and self.library.job['running']:
+            event.ignore(); QTimer.singleShot(1000, self.close); return   # the update closes the APP once the job is done
         if self.busy or self.library.job['running']:
-            QMessageBox.information(self,'任务正在进行','请等待文件操作或扫描完成后再退出。');event.ignore();return
-        self.updates.timer.stop();self.timer.stop();self.cursor_timer.stop();self.closed=True
-        for pool in (self.pool,self.image_pool,self.thumb_pool,self.detail_pool):pool.clear();pool.waitForDone()
-        if self.cursor_id:self.library.remember('cursor',self.cursor_id)
+            QMessageBox.information(self, '任务正在进行', '请等待扫描、导出或文件夹切换完成后再退出。'); event.ignore(); return
+        if self.pending_ops:
+            # Queued keeps and deletions finish first; the window stays responsive and closes by itself.
+            self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项筛选记录…', 'info', 2000)
+            event.ignore(); QTimer.singleShot(120, self.close); return
+        for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer): timer.stop()
+        self.closed = True
+        self.op_pool.waitForDone()
+        for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()
+        if self.decoders: self.decoders.close()
+        if self.cursor_id: self.library.remember('cursor', self.cursor_id)
         event.accept()
 
+COMPOSITING = {'gpu': False}
+
+
+def configure_compositing(settings, windows=os.name == 'nt'):
+    """GPU compositing on Windows: the window is composed with Direct3D 11 through Qt's RHI, and Qt itself falls back
+    to WARP software rendering when no GPU device can be created. A launch that never reached a healthy window
+    turns it off for the next start. Must run before QApplication exists."""
+    COMPOSITING['gpu'] = False
+    if 'QT_WIDGETS_RHI' in os.environ and not os.environ.get('PHOTOSIEVE_RHI_AUTO'):
+        COMPOSITING['gpu'] = os.environ['QT_WIDGETS_RHI'] == '1'; return   # set by hand for an A/B test
+    for name in ('QT_WIDGETS_RHI', 'QT_WIDGETS_RHI_BACKEND', 'PHOTOSIEVE_RHI_AUTO'): os.environ.pop(name, None)
+    if not windows or os.environ.get('QT_QPA_PLATFORM', '').startswith(('offscreen', 'minimal')): return
+    if settings.value('gpu_pending', False, type=bool):
+        settings.setValue('gpu_compositing', False); settings.setValue('gpu_fell_back', True)
+    settings.setValue('gpu_pending', False)
+    if settings.value('gpu_compositing', True, type=bool):
+        os.environ.update(QT_WIDGETS_RHI='1', QT_WIDGETS_RHI_BACKEND='d3d11', PHOTOSIEVE_RHI_AUTO='1')
+        settings.setValue('gpu_pending', True); COMPOSITING['gpu'] = True
+    settings.sync()
+
+
 def main():
-    if len(sys.argv)==3 and sys.argv[1]=='--apply-update':
+    if len(sys.argv) == 3 and sys.argv[1] == '--apply-update':
         from updater import run_helper
-        try:return run_helper(sys.argv[2])
+        try: return run_helper(sys.argv[2])
         except Exception:
-            Path(sys.argv[2]).with_name('helper-error.txt').write_text(traceback.format_exc(),encoding='utf-8');return 1
-    parser=argparse.ArgumentParser(description='照片快筛 · 原生 Qt 桌面版')
-    parser.add_argument('--folder');parser.add_argument('--data-dir',type=Path);parser.add_argument('--cache-mb',type=int,default=2048)
-    parser.add_argument('--self-test-output',type=Path,help=argparse.SUPPRESS)
-    args=parser.parse_args();application=QApplication(sys.argv[:1]);application.setStyleSheet(STYLE)
+            Path(sys.argv[2]).with_name('helper-error.txt').write_text(traceback.format_exc(), encoding='utf-8'); return 1
+    parser = argparse.ArgumentParser(description='照片快筛 · 原生 Qt 桌面版')
+    parser.add_argument('--folder'); parser.add_argument('--data-dir', type=Path)
+    parser.add_argument('--cache-mb', type=int, help='磁盘预览缓存（MB）；默认取缓存盘可用空间的 5%%，2 到 20 GB')
+    parser.add_argument('--self-test-output', type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args(); settings = QSettings('PhotoSieve', 'PhotoSieve')
+    if not args.self_test_output: configure_compositing(settings)
+    machine.interface_qos(); machine.fine_timer()
+    application = QApplication(sys.argv[:1]); application.setStyleSheet(STYLE)
     if args.self_test_output:
         from diagnostics import run
-        return run(application,args.self_test_output)
-    if args.cache_mb<64:parser.error('缓存至少 64 MB')
-    default_directory=Path.home()/'.photo-sieve'
-    settings=QSettings('PhotoSieve','PhotoSieve')
-    directory=args.data_dir or (default_directory if args.folder else Path(settings.value('library',str(default_directory))))
+        return run(application, args.self_test_output)
+    # Only a crash skips the finally, so the next start blames the GPU for nothing else (a locked database, say).
     try:
-        lockpath=Path.home()/'.photo-sieve';lockpath.mkdir(parents=True,exist_ok=True)
-        application.library_lock=QLockFile(str(lockpath/'desktop.lock'));application.library_lock.setStaleLockTime(0)
-        if not application.library_lock.tryLock(100):
-            QMessageBox.information(None,'照片快筛已在运行','请使用已经打开的窗口。');return 1
-        if args.folder and not args.data_dir:
-            directory=default_directory
-            existing=Library(directory,args.cache_mb).meta('root')
-            if existing and Path(existing).resolve()!=Path(args.folder).resolve():
-                import hashlib
-                directory=directory/'libraries'/hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
-        library=Library(directory,args.cache_mb);settings.setValue('library',str(library.directory));window=Window(library)
-        screen=application.primaryScreen().availableGeometry();window.resize(min(1480,screen.width()-40),min(960,screen.height()-60));window.show()
-        if args.folder:window.folder.setText(args.folder);QTimer.singleShot(100,window.scan)
-    except Exception:
-        QMessageBox.critical(None,'无法启动照片快筛',traceback.format_exc());return 1
-    return application.exec()
+        if args.cache_mb is not None and args.cache_mb < 64: parser.error('缓存至少 64 MB')
+        default_directory = Path.home() / '.photo-sieve'
+        directory = args.data_dir or (default_directory if args.folder else Path(settings.value('library', str(default_directory))))
+        try:
+            lockpath = Path.home() / '.photo-sieve'; lockpath.mkdir(parents=True, exist_ok=True)
+            application.library_lock = QLockFile(str(lockpath / 'desktop.lock')); application.library_lock.setStaleLockTime(0)
+            if not application.library_lock.tryLock(100):
+                QMessageBox.information(None, '照片快筛已在运行', '请使用已经打开的窗口。'); return 1
+            if args.folder and not args.data_dir:
+                directory = default_directory
+                existing = Library(directory, args.cache_mb).meta('root')
+                if existing and Path(existing).resolve() != Path(args.folder).resolve():
+                    directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
+            library = Library(directory, args.cache_mb); settings.setValue('library', str(library.directory)); window = Window(library, decoders=Decoders())
+            screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60)); window.show()
+            if args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))
+            if COMPOSITING['gpu']: QTimer.singleShot(3000, lambda: settings.setValue('gpu_pending', False))   # the GPU-composed window is healthy
+            if settings.value('gpu_fell_back', False, type=bool):
+                settings.setValue('gpu_fell_back', False)
+                QTimer.singleShot(800, lambda: window.toast.show_message('上次以 GPU 合成启动未成功，已改用 CPU 合成；可在 ⋯ 中重新开启', 'error', 5000))
+        except Exception:
+            QMessageBox.critical(None, '无法启动照片快筛', traceback.format_exc()); return 1
+        return application.exec()
+    finally:
+        settings.setValue('gpu_pending', False)
 
-if __name__=='__main__':sys.exit(main())
+
+if __name__ == '__main__':
+    multiprocessing.freeze_support()   # decoder processes of the packaged app start here
+    sys.exit(main())

@@ -2,11 +2,14 @@ name: Build and release Windows APP
 on:
   push:
     branches: [main]
+  # Pull requests get the full Windows build and checks; only main publishes.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: windows-release
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   windows:
@@ -18,9 +21,13 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install native dependencies
-        run: python -m pip install -r requirements-desktop.txt 'pyinstaller>=6,<7' httpx
+        run: python -m pip install -r requirements-desktop.txt 'pyinstaller>=6,<7'
       - name: Test library and updater
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Test native interface, held keys and decoder processes
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tests/desktop_check.py
       - name: Test update UI idle and restart behavior
         env:
           QT_QPA_PLATFORM: offscreen
@@ -47,6 +54,7 @@ jobs:
             frozen-diagnostics-ci.json
           retention-days: 14
       - name: Publish a new version to GitHub Releases
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
