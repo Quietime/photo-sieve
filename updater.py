@@ -27,6 +27,9 @@ MAX_DOWNLOAD = 512 * 1024 * 1024
 MAX_UNPACKED = 2 * 1024 * 1024 * 1024
 CREDENTIAL = 'PhotoSieve:GitHub:' + UPDATE_REPOSITORY
 STAGING = threading.Lock()   # a download and a cleanup of the update folder never run at once
+# The old version's files are moved aside inside the APP folder: a move cannot cross drives, and the APP may live on
+# D: or an external disk while %LOCALAPPDATA% is on C:.
+BACKUP = '.photo-sieve-update-backup'
 
 
 def version_tuple(value):
@@ -164,16 +167,16 @@ def updates_dir():
     return Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'.photo-sieve')))/'PhotoSieve'/'updates'
 
 
-def cleanup_updates(keep=None):
-    """Delete downloaded packages, unpacked new versions and old-version backups, except keep.
+def cleanup_updates(*keep):
+    """Delete downloaded packages and unpacked new versions, except the stage folders in keep.
     True when nothing is left; a file still in use (the installer exiting) stays for a later try,
     and so does everything while a download is running."""
     if not STAGING.acquire(blocking=False):return False
     try:
-        base=updates_dir();keep=Path(keep).resolve() if keep else None;clean=True
+        base=updates_dir();keep={Path(path).resolve() for path in keep if path};clean=True
         if not base.is_dir():return True
         for child in base.iterdir():
-            if keep is not None and child.resolve()==keep:continue
+            if child.resolve() in keep:continue
             if child.is_dir() and not child.is_symlink():shutil.rmtree(child,ignore_errors=True)
             else:
                 try:child.unlink()
@@ -181,6 +184,25 @@ def cleanup_updates(keep=None):
             clean=clean and not child.exists()
         return clean
     finally:STAGING.release()
+
+
+def intact(root):
+    """Every file the installation's manifest lists is present and unchanged; other files may sit beside them."""
+    root=Path(root)
+    try:
+        files=json.loads((root/'installed-files.json').read_text('utf-8'))['files']
+        return all((root/name).is_file() and hashlib.sha256((root/name).read_bytes()).hexdigest()==digest for name,digest in files.items())
+    except (OSError,ValueError,KeyError,TypeError,AttributeError):return False
+
+
+def cleanup_backups(app):
+    """Delete the old version's files saved during an update, but only once the running installation is complete:
+    after a rollback that could not finish they may be the only copy of some program files."""
+    backup=Path(app)/BACKUP
+    if not backup.exists():return True
+    if linked(backup) or not intact(app):return True   # keep it; nothing to retry
+    shutil.rmtree(backup,ignore_errors=True)
+    return not backup.exists()
 
 
 def download_release(release, token, progress=lambda done,total:None):
@@ -276,7 +298,7 @@ def run_helper(plan_path):
     wait_for_parent(plan['pid'],plan_path.parent/'ready')
     result={'version':APP_VERSION,'ok':False}
     try:
-        install_transaction(source,target,plan_path.parent/'backup');result['ok']=True
+        install_transaction(source,target,target/BACKUP/plan_path.parent.name);result['ok']=True
     except Exception as error:result['error']=str(error)
     (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
     arguments=[str(target/'PhotoSieve.exe'),*plan.get('arguments',[])]

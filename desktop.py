@@ -856,6 +856,7 @@ class Window(QMainWindow):
             reveal = self.button('在资源管理器中显示上次导出', lambda: self.open_folder(summary['destination']), 'plain'); layout.addWidget(reveal, 0, Qt.AlignmentFlag.AlignLeft)
         def start(mode):
             if not chosen['path']: problem.setText('请先选择目标文件夹。'); problem.show(); return
+            if self.busy: problem.setText('正在准备更新或切换文件夹，请稍后再导出。'); problem.show(); return
             def started(_):
                 dialog.accept(); self.poll(); self.timer.start(900)
             def failed(message):
@@ -867,6 +868,8 @@ class Window(QMainWindow):
         dialog.exec()
 
     def closeEvent(self, event):
+        if self.updates.installing and self.library.job['running']:
+            event.ignore(); QTimer.singleShot(1000, self.close); return   # the update closes the APP once the job is done
         if self.busy or self.library.job['running']:
             QMessageBox.information(self, '任务正在进行', '请等待扫描、导出或文件夹切换完成后再退出。'); event.ignore(); return
         if self.pending_ops:

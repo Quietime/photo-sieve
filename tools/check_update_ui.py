@@ -8,7 +8,7 @@ import time
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 from PIL import Image
 from app import Library
 from desktop import Window
@@ -49,10 +49,22 @@ with tempfile.TemporaryDirectory() as temporary,patch.dict('os.environ',{'LOCALA
         controller.tick();assert not asked,'The offer must not interrupt a held key'
         controller.last_activity=time.monotonic()-3;controller.tick()
         assert asked==['99.0.0'] and controller.offer is None and not download.called,'Declining must not download'
+        # A pending offer waits while a check is still asking GitHub, and while a dialog or menu is open.
+        controller.offer=release;controller.running=True;controller.last_activity=time.monotonic()-5;controller.tick()
+        assert asked==['99.0.0'],'No second prompt while a check runs';controller.running=False
+        dialog=QDialog(window);dialog.setModal(True);dialog.open();wait(lambda:QApplication.activeModalWidget() is dialog)
+        controller.last_activity=time.monotonic()-5;controller.tick()
+        assert asked==['99.0.0'] and controller.idle_seconds()<1,'An open dialog counts as activity';dialog.close();controller.offer=None
         # Asked for from the menu, the offer appears at once; accepting downloads while review goes on.
         controller.ask=lambda offered:True;controller.last_activity=time.monotonic()+60
         controller.check();wait(lambda:controller.staged is not None)
         assert download.call_count==1 and not window.closed and window.keep_button.isEnabled(),'Downloads must not block photo review'
+    # If the installer cannot start, the update is dropped quietly: the window works again and the blue dot goes.
+    window.update_ready();assert window.badge.isVisible()
+    with patch('updater.launch_helper',side_effect=RuntimeError('更新安装器启动失败')):
+        controller.last_activity=time.monotonic()-5;controller.tick();wait(lambda:not controller.installing)
+        assert controller.staged is None and not window.badge.isVisible() and window.centralWidget().isEnabled() and not window.busy
+    controller.staged=root   # downloaded again later
     with patch('updater.launch_helper',return_value=base/'stage') as launch:
         window.busy=True;controller.last_activity=time.monotonic()-5;controller.tick();assert not launch.called,'Scans and file work finish first'
         window.busy=False;controller.last_activity=time.monotonic();controller.tick();assert not launch.called,'Recent interaction must delay installation'
@@ -72,6 +84,16 @@ with tempfile.TemporaryDirectory() as temporary,patch.dict('os.environ',{'LOCALA
     restarted=Window(Library(base/'records'),check_updates=False);restarted.show();after=controller_for(restarted,base)
     after.settings.setValue('last_update_stage',str(stage))
     after.report_previous();assert '已更新至 99.0.0' in restarted.toast.message and not after.settings.value('last_update_stage')
-    after.tidy();wait(lambda:not any(updates.iterdir()))
+    after.running=True   # the startup check is still waiting on a slow GitHub: cleanup goes ahead anyway
+    after.tidy();wait(lambda:not any(updates.iterdir()));after.running=False
+    # A version that failed to install is not offered again by the same start; a manual check still offers it.
+    failed=updates/'v99.0.0-failed';failed.mkdir(parents=True)
+    (failed/'result.json').write_text(json.dumps({'version':'99.0.0','ok':False,'error':'disk full'}),encoding='utf-8')
+    after.settings.setValue('last_update_stage',str(failed));after.report_previous()
+    assert '更新失败' in restarted.toast.message
+    with patch('sys.frozen',True,create=True),patch('updater.check_release',return_value=release):
+        after.check(False);wait(lambda:not after.running);assert after.offer is None,'No automatic re-offer after a failed install'
+        offered=[];after.ask=lambda o:(offered.append(o['version']),False)[1]
+        after.check();wait(lambda:not after.running and offered);assert offered==['99.0.0']
     restarted.close()
-    print('PASS: offer waits for a pause, decline, background download, busy guard, idle install, preserved library, cleanup after restart')
+    print('PASS: offer waits for a pause and for dialogs, decline, single prompt, background download, failed launch, busy guard, idle install, preserved library, cleanup after restart, no re-offer after a failure')

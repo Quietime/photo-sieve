@@ -46,6 +46,18 @@ class UpdaterTest(unittest.TestCase):
         self.assertEqual((self.base/'backup/PhotoSieve.exe').read_bytes(),b'old')
         for name in ['photos/image.jpg','library.sqlite3','.photo-sieve-trash/deleted.raw','notes.txt']:
             self.assertEqual((self.old/name).read_bytes(),b'user data')
+    def test_backup_beside_the_app_is_deleted_only_when_the_install_is_complete(self):
+        # The helper keeps the old version inside the APP folder: a move to %LOCALAPPDATA% would fail across drives.
+        backup=self.old/updater.BACKUP/'v99.0.0-stage'
+        updater.install_transaction(self.new,self.old,backup)
+        self.assertEqual((backup/'PhotoSieve.exe').read_bytes(),b'old');self.assertEqual((self.old/'PhotoSieve.exe').read_bytes(),b'new')
+        (self.old/'_internal/new.dll').unlink()   # as after a rollback that could not finish
+        self.assertFalse(updater.intact(self.old));self.assertTrue(updater.cleanup_backups(self.old))
+        self.assertTrue(backup.is_dir(),'The only copy of program files must stay')
+        (self.old/'_internal/new.dll').write_bytes(b'new DLL')
+        self.assertTrue(updater.intact(self.old));self.assertTrue(updater.cleanup_backups(self.old))
+        self.assertFalse((self.old/updater.BACKUP).exists())
+        self.assertTrue(updater.cleanup_backups(self.old))   # nothing left to do
     def test_rollback_when_copy_fails_after_partial_write(self):
         original=shutil.copyfile;count=0
         def fail(source,destination):
@@ -141,7 +153,7 @@ class UpdaterTest(unittest.TestCase):
                 (updates/name/'backup').mkdir(parents=True);(updates/name/'backup/PhotoSieve.exe').write_bytes(b'old version')
             with updater.STAGING:   # a download is running: its folder and every other one stay
                 self.assertFalse(updater.cleanup_updates());self.assertEqual(len(list(updates.iterdir())),3)
-            self.assertTrue(updater.cleanup_updates(keep));self.assertEqual([p.name for p in updates.iterdir()],['v3.2.0-new'])
+            self.assertTrue(updater.cleanup_updates(keep,None,updates/'missing'));self.assertEqual([p.name for p in updates.iterdir()],['v3.2.0-new'])
             self.assertTrue(updater.cleanup_updates());self.assertEqual(list(updates.iterdir()),[])
 
 class IdleTest(unittest.TestCase):
