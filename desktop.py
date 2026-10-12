@@ -322,7 +322,8 @@ class Window(QMainWindow):
         for control in self.actionbar.controls:control.set_response(0.);control.update()
 
     def material_sources(self):
-        sources=[self.thumb_cache.get(p['id']) for p in self.queue[:2]]
+        # The tiny thumbnail LRU can evict visible photos while 200 previews fill; the pane cache stays ready.
+        sources=[self.cache.get(p['id']) for p in self.queue[:2]]
         self.actionbar.set_sources(sources);self.segments.set_sources(sources)
 
     def machine_status(self):
