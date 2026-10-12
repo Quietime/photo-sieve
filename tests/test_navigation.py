@@ -8,7 +8,7 @@ class NavigationTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.lib=Library(Path(self.temp.name))
         with self.lib.connect() as db:
-            db.executemany('INSERT INTO photos(id,path,size,mtime,status) VALUES (?,?,1,?,?)',[(1,'a',300,0),(2,'b',100,0),(3,'c',200,0),(4,'d',200,0),(5,'e',400,1)])
+            db.executemany('INSERT INTO photos(id,path,size,mtime,status) VALUES (?,?,1,?,?)',[(pid,str(self.lib.directory/name),stamp,status) for pid,name,stamp,status in [(1,'a',300,0),(2,'b',100,0),(3,'c',200,0),(4,'d',200,0),(5,'e',400,1)]])
     def tearDown(self):self.temp.cleanup()
     def test_date_sort_with_equal_timestamps_is_stable_across_pages(self):
         for sort,want in [('oldest',[2,3,4,1]),('newest',[1,4,3,2])]:
