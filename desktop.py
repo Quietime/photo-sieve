@@ -624,7 +624,7 @@ class Window(QMainWindow):
             self.warmed.clear(); self.render(); self.prefetch()
         def failed(message):
             self.fetching = False; self.error(message)
-        self.refresh_strip()
+        if target_id is None:self.refresh_strip()
         options=self.navigation_options() if view!='deleted' else {}
         target=target_id if target_id is not None else anchor+1 if anchor else 0
         self.submit(lambda: library.list_photos(view,target,'next',60 if view=='deleted' else PAGE,inclusive=bool(anchor) or target_id is not None,**options),done,failed)
@@ -1098,6 +1098,7 @@ class Window(QMainWindow):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
                 self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
+                self.strip_revision+=1;self.strip.clear()
                 crashlog.event('workspace_ready',library=str(library.directory))
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed,self.strip_loading): store.clear()
                 self.reset_zoom(); self.state_data = None; self.state_pending = False; self.counts = {}

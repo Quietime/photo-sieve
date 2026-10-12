@@ -22,7 +22,7 @@ def install(window,output,folders):
     window.prompt_on_close=False;window.updates.timer.stop();window.warm_count=0
     def finish(error=None):
         timer.stop()
-        if error:report['error']=str(error)
+        if error:report['error']=repr(error)
         else:report['ok']=True
         report['elapsed_seconds']=round(time.monotonic()-started,3)
         report['log_directory']=str(crashlog.SESSION.directory)
@@ -56,7 +56,9 @@ def install(window,output,folders):
             if window.library.meta('root')!=str(state['folder']):return
             if any(p.pixmap is None or not p.photo or not Path(p.photo['path']).is_relative_to(state['folder']) for p in window.photos):return
             assert window.counts['all']==len(list(state['folder'].glob('*.arw')))
-            assert window.strip.count()==window.counts['all']
+            # The full inventory comes back asynchronously, separately from
+            # cached pane images, especially when reopening a large workspace.
+            if window.strip.count()!=window.counts['all']:return
             if state['last_target'] is None:
                 state['last_target']=window.strip.item(window.strip.count()-2).data(256)
                 bar=window.strip.horizontalScrollBar();bar.setValue(bar.maximum())
@@ -73,6 +75,8 @@ def install(window,output,folders):
             window.grab().save(str(output.with_name(output.stem+f'-{state["index"]}.png')))
             state['index']+=1;state['opening']=False
             if state['index']==len(folders):finish()
-        except BaseException as exc:finish(exc)
+        except BaseException as exc:
+            crashlog.LOGGER.exception('Frozen normal-runtime verification failed')
+            finish(exc)
     timer.timeout.connect(tick);timer.start()
     window.runtime_test_timer=timer

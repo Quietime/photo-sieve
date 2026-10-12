@@ -36,7 +36,7 @@ def run(args):
             print('PASS: normal frozen EXE, QApplication.exec, real folder picker, 12 decoders, 10/16000 RAW repeated switch',flush=True)
         finally:
             logs=install/'workspaces'/'logs'
-            if logs.is_dir():shutil.copytree(logs,output.with_name(output.stem+'-logs'),dirs_exist_ok=True)
+            if logs.is_dir():shutil.copytree(logs,output.with_name(output.stem+'-logs'),dirs_exist_ok=True,ignore=shutil.ignore_patterns('*.tmp'))
             if child.poll() is None:child.kill();child.wait()
     return 0
 if __name__=='__main__':
