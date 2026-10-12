@@ -1,5 +1,6 @@
 """Native, frameless window chrome shared by the app and its sheets."""
 from pathlib import Path
+import theme
 from PySide6.QtCore import Qt, QEvent, QPoint, QRectF
 from PySide6.QtGui import QIcon, QPainter, QPainterPath, QColor, QPen, QRegion
 from PySide6.QtWidgets import (QDialog as QtDialog, QMessageBox as QtMessageBox,
@@ -185,7 +186,9 @@ class SettingsPanel(QFrame):
             #morePanel QPushButton#menuItem:disabled { color:#636366; }
             #morePanel QCheckBox { padding:8px 12px; spacing:9px; }
             #morePanel QLabel#panelStatus { color:#98989D; font-size:12px; padding:6px 12px; }
-        """)
+        """.replace('#1C1C1E',theme.ELEVATED).replace('#38383A',theme.SEPARATOR)
+            .replace('#2C2C2E',theme.ELEVATED2).replace('#636366',theme.TERTIARY)
+            .replace('#98989D',theme.SECONDARY))
         outer=QVBoxLayout(self); outer.setContentsMargins(12,12,12,12); outer.setSpacing(8)
         header=QHBoxLayout(); title=QLabel('更多选项'); header.addWidget(title); header.addStretch()
         from apple_ui import AppleButton
@@ -211,7 +214,7 @@ class SettingsPanel(QFrame):
         label=QLabel(text); label.setObjectName('panelStatus'); label.setWordWrap(True); self.column.addWidget(label)
 
     def addSeparator(self):
-        line=QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet('background:#38383A; min-height:1px; max-height:1px;'); self.column.addWidget(line)
+        line=QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet('background:'+theme.SEPARATOR+'; min-height:1px; max-height:1px;'); self.column.addWidget(line)
 
     def place(self):
         parent=self.parentWidget(); width=min(380,max(160,parent.width()-24))

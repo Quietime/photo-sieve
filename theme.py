@@ -8,14 +8,14 @@ from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from shiboken6 import isValid
 
-BG = '#000000'
-ELEVATED = '#1C1C1E'
-ELEVATED2 = '#2C2C2E'
-ELEVATED3 = '#3A3A3C'
-SEPARATOR = '#38383A'
+BG = '#25262A'
+ELEVATED = '#2D2E33'
+ELEVATED2 = '#393A40'
+ELEVATED3 = '#46474F'
+SEPARATOR = '#4A4B53'
 LABEL = '#F5F5F7'
-SECONDARY = '#98989D'
-TERTIARY = '#636366'
+SECONDARY = '#B0B2BB'
+TERTIARY = '#858892'
 BLUE = '#0A84FF'
 BLUE_HOVER = '#409CFF'
 BLUE_PRESSED = '#0066CC'
