@@ -89,19 +89,19 @@ class WindowFrame(QObject):
         msg=W.MSG.from_address(int(message)); api=self.api
         if msg.message==0x0083:  # WM_NCCALCSIZE: draw content over the whole frame
             api.IsZoomed.argtypes=[W.HWND]; api.IsZoomed.restype=W.BOOL
-            if msg.wParam and api.IsZoomed(msg.hwnd):
+            if msg.wParam and api.IsZoomed(msg.hWnd):
                 class MonitorInfo(ctypes.Structure):
                     _fields_=[('size',W.DWORD),('monitor',W.RECT),('work',W.RECT),('flags',W.DWORD)]
                 api.MonitorFromWindow.argtypes=[W.HWND,W.DWORD]; api.MonitorFromWindow.restype=W.HANDLE
                 api.GetMonitorInfoW.argtypes=[W.HANDLE,ctypes.POINTER(MonitorInfo)]
                 info=MonitorInfo(); info.size=ctypes.sizeof(info)
-                if api.GetMonitorInfoW(api.MonitorFromWindow(msg.hwnd,2),ctypes.byref(info)):
+                if api.GetMonitorInfoW(api.MonitorFromWindow(msg.hWnd,2),ctypes.byref(info)):
                     rect=W.RECT.from_address(msg.lParam)
                     rect.left,rect.top,rect.right,rect.bottom=info.work.left,info.work.top,info.work.right,info.work.bottom
             return True,0
         if msg.message!=0x0084: return None  # WM_NCHITTEST
         point=W.POINT(ctypes.c_short(msg.lParam&0xffff).value,ctypes.c_short((msg.lParam>>16)&0xffff).value)
-        api.ScreenToClient.argtypes=[W.HWND,ctypes.POINTER(W.POINT)]; api.ScreenToClient(msg.hwnd,ctypes.byref(point))
+        api.ScreenToClient.argtypes=[W.HWND,ctypes.POINTER(W.POINT)]; api.ScreenToClient(msg.hWnd,ctypes.byref(point))
         dpr=self.window.devicePixelRatioF(); local=QPoint(round(point.x/dpr),round(point.y/dpr))
         x,y=local.x(),local.y(); w,h=self.window.width(),self.window.height(); b=6
         if not self.window.isMaximized() and not self.window.isFullScreen():
