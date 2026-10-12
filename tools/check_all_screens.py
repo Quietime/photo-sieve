@@ -83,6 +83,7 @@ class ScreenCheck:
         assert button.isEnabled(), 'Disabled button: ' + button.text()
         position = QPoint(20, button.height() // 2) if isinstance(button, QCheckBox) else button.rect().center()
         QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=position)
+        self.application.processEvents()
 
     def modal(self, name, trigger, operate=None, expected_title=None):
         """A real click enters QDialog.exec; a timer captures and operates that real dialog."""
@@ -186,10 +187,16 @@ def run(output):
                 audit.click(audit.button(window.window_chrome, '最小化'))
                 audit.check('minimize_button_operates', window.isMinimized())
                 window.showNormal()
+                QTest.qWait(100)
                 audit.click(window.window_chrome.max_button)
+                audit.until(window.isMaximized)
                 audit.check('maximize_button_operates', window.isMaximized())
                 audit.screenshot('01b_maximized_start', window)
+                # These are two separate clicks, not a native double click. Windows
+                # otherwise coalesces the second press within its double-click interval.
+                QTest.qWait(application.doubleClickInterval() + 50)
                 audit.click(window.window_chrome.max_button)
+                audit.until(lambda: not window.isMaximized())
                 audit.check('maximize_button_restores_window', not window.isMaximized())
                 window.resize(1280, 900)
 
@@ -221,6 +228,7 @@ def run(output):
 
                 audit.segment(window, 1)
                 audit.until(lambda: len(window.queue) == 1 and window.photos[0].pixmap is not None)
+                audit.until(window.export_button.isEnabled)
                 audit.screenshot('05_kept_review', window)
                 audit.check('kept_hidden_from_filmstrip', window.strip.count() == 0)
 
@@ -387,6 +395,14 @@ def run(output):
                     lambda dialog: audit.click(audit.button(dialog, '取消')))
                 audit.check('cancel_close_keeps_app_open', window.isVisible() and not window.closed)
             except BaseException as error:
+                if window:
+                    audit.screenshot('failure_window', window)
+                    audit.findings.append('Window state: ' + json.dumps({
+                        'maximized': window.isMaximized(), 'geometry': window.geometry().getRect(),
+                        'busy': window.busy, 'fetching': window.fetching,
+                        'counts': window.counts, 'job': window.library.job,
+                        'state_job': (window.state_data or {}).get('job'),
+                        'export_enabled': window.export_button.isEnabled()}, default=str))
                 audit.findings.append(type(error).__name__ + ': ' + str(error))
                 audit.checks.append({'name': 'complete_surface_walkthrough', 'passed': False, 'detail': str(error)})
             finally:

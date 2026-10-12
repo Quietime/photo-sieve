@@ -40,6 +40,16 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_all_screens.py --output ui-screenshots-ci
+      - name: Retain interface diagnostics even if a check fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-interface-diagnostics
+          path: |
+            windows-chrome-ci.json
+            ui-screenshots-ci/*
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Audit paging, review performance and cache limits
         env:
           QT_QPA_PLATFORM: offscreen
