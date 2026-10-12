@@ -23,6 +23,12 @@ def pump(condition, seconds=3):
 
 
 class FrameClockTest(unittest.TestCase):
+    def setUp(self):
+        # Test the animation clock independently of Windows accessibility and
+        # settings loaded by other Window tests in the same interpreter.
+        preference=patch('theme.REDUCED_MOTION',False)
+        preference.start();self.addCleanup(preference.stop)
+
     def test_runs_to_the_end_and_finishes_once(self):
         owner = QObject(); values = []; finished = []
         motion = theme.animate(owner, 120, values.append, theme.EASE, lambda: finished.append(1), 10, 20)
