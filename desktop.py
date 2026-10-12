@@ -272,7 +272,7 @@ class Window(QMainWindow):
         rescan = menu.addAction('重新扫描当前文件夹'); root = self.state_data and self.state_data.get('root')
         rescan.setEnabled(bool(root) and not self.busy); rescan.triggered.connect(lambda: self.scan(root))
         menu.addSeparator(); menu.addAction('检查更新', lambda: self.updates.check())
-        automatic = QAction('自动更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
+        automatic = QAction('启动时检查更新', menu); automatic.setCheckable(True); automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic); menu.addAction(automatic)
         if self.updates.staged: menu.addAction('立即安装更新并重启', lambda: self.updates.install())
         menu.addSeparator()
@@ -311,7 +311,7 @@ class Window(QMainWindow):
         return False
 
     def update_ready(self):
-        self.badge.show(); self.toast.show_message('新版已下载 · 空闲 30 秒后自动更新，或在 ⋯ 中立即安装', 'info', 3600)
+        self.badge.show(); self.toast.show_message('新版已下载 · 停止操作 3 秒后自动重启完成更新', 'info', 3600)
 
     def place_overlays(self):
         root = self.centralWidget()

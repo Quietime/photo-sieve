@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -25,6 +26,7 @@ from version import APP_VERSION, UPDATE_REPOSITORY, UPDATE_ASSET
 MAX_DOWNLOAD = 512 * 1024 * 1024
 MAX_UNPACKED = 2 * 1024 * 1024 * 1024
 CREDENTIAL = 'PhotoSieve:GitHub:' + UPDATE_REPOSITORY
+STAGING = threading.Lock()   # a download and a cleanup of the update folder never run at once
 
 
 def version_tuple(value):
@@ -114,7 +116,7 @@ def check_release(token):
     if not re.fullmatch('[0-9a-f]{64}',str(manifest.get('sha256',''))):raise ValueError('缺少更新包校验值')
     if not isinstance(manifest.get('size'),int) or not 0<manifest['size']<=MAX_DOWNLOAD or asset['size']!=manifest['size']:
         raise ValueError('更新包大小无效')
-    return {**manifest,'url':asset['url'],'page':release['html_url']}
+    return {**manifest,'url':asset['url'],'page':release['html_url'],'notes':str(release.get('body') or '')[:4000]}
 
 
 def safe_relative(name):
@@ -158,8 +160,36 @@ def validate_install(root):
     return manifest
 
 
+def updates_dir():
+    return Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'.photo-sieve')))/'PhotoSieve'/'updates'
+
+
+def cleanup_updates(keep=None):
+    """Delete downloaded packages, unpacked new versions and old-version backups, except keep.
+    True when nothing is left; a file still in use (the installer exiting) stays for a later try,
+    and so does everything while a download is running."""
+    if not STAGING.acquire(blocking=False):return False
+    try:
+        base=updates_dir();keep=Path(keep).resolve() if keep else None;clean=True
+        if not base.is_dir():return True
+        for child in base.iterdir():
+            if keep is not None and child.resolve()==keep:continue
+            if child.is_dir() and not child.is_symlink():shutil.rmtree(child,ignore_errors=True)
+            else:
+                try:child.unlink()
+                except OSError:pass
+            clean=clean and not child.exists()
+        return clean
+    finally:STAGING.release()
+
+
 def download_release(release, token, progress=lambda done,total:None):
-    base=Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'.photo-sieve')))/'PhotoSieve'/'updates'
+    with STAGING:
+        return _download(release,token,progress)
+
+
+def _download(release, token, progress):
+    base=updates_dir()
     base.mkdir(parents=True,exist_ok=True)
     stage=Path(tempfile.mkdtemp(prefix='v'+release['version']+'-',dir=base))
     try:

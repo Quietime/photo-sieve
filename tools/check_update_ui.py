@@ -1,4 +1,6 @@
-"""Exercise asynchronous private update checks and idle/busy installation rules."""
+"""Exercise the update flow: the offer waits for a pause, declining downloads nothing, accepting downloads in the
+background and installs once idle, the restart keeps the library, and the next start reports and cleans up."""
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from PIL import Image
 from app import Library
 from desktop import Window
+import updater
 
 application=QApplication([])
 def wait(predicate):
@@ -20,31 +23,55 @@ def wait(predicate):
         time.sleep(.01)
     raise TimeoutError('update UI check timed out')
 
-with tempfile.TemporaryDirectory() as temporary:
+def controller_for(window,base):
+    controller=window.updates;controller.settings=QSettings(str(base/'preferences.ini'),QSettings.Format.IniFormat)
+    controller.idle_seconds=lambda:time.monotonic()-controller.last_activity   # this computer's own mouse and keyboard must not decide the check
+    return controller
+
+with tempfile.TemporaryDirectory() as temporary,patch.dict('os.environ',{'LOCALAPPDATA':str(Path(temporary)/'local')}):
     base=Path(temporary);photos=base/'photos';photos.mkdir()
     Image.new('RGB',(400,300),'red').save(photos/'original.jpg')
     original=(photos/'original.jpg').read_bytes()
     lib=Library(base/'records');lib.scan(str(photos));wait(lambda:not lib.job['running'])
     window=Window(lib);window.show();wait(lambda:window.keep_button.isEnabled())
-    controller=window.updates;controller.settings=QSettings(str(base/'preferences.ini'),QSettings.Format.IniFormat)
-    controller.idle_seconds=lambda:time.monotonic()-controller.last_activity   # this computer's own mouse and keyboard must not decide the check
+    controller=controller_for(window,base)
     root=base/'stage/new/PhotoSieve';root.mkdir(parents=True)
-    release={'version':'99.0.0','page':'https://github.com/Quietime/photo-sieve/releases/tag/v99.0.0'}
-    with patch('sys.frozen',True,create=True),patch('updater.credential_store',side_effect=AssertionError('Public updates must not access credentials')),patch('updater.check_release',return_value=release) as check_release,patch('updater.download_release',return_value=root):
-        controller.check();wait(lambda:controller.staged is not None)
-        check_release.assert_called_once_with('')
-        assert not window.closed and window.keep_button.isEnabled(),'Downloads must not block photo review'
-    controller.last_activity=time.monotonic()-31
-    with patch('updater.launch_helper',return_value=base/'stage') as launch:
-        window.busy=True;controller.maybe_install();assert not launch.called
-        window.busy=False;controller.settings.setValue('automatic_updates',False)
-        controller.maybe_install();assert not launch.called,'Disabled auto update must remain idle'
+    release={'version':'99.0.0','page':'https://github.com/Quietime/photo-sieve/releases/tag/v99.0.0','notes':'- 更快'}
+    asked=[]
+    with patch('sys.frozen',True,create=True),patch('updater.credential_store',side_effect=AssertionError('Public updates must not access credentials')),patch('updater.check_release',return_value=release) as check_release,patch('updater.download_release',return_value=root) as download:
+        controller.settings.setValue('automatic_updates',False);controller.startup_check()
+        assert not check_release.called,'Turning off the startup check must keep the APP from asking GitHub'
         controller.settings.setValue('automatic_updates',True)
-        controller.last_activity=time.monotonic();controller.maybe_install();assert not launch.called,'Recent interaction must delay installation'
-        controller.last_activity=time.monotonic()-31;controller.maybe_install();wait(lambda:window.closed)
+        # At startup the offer waits until review pauses, and declining downloads nothing.
+        controller.ask=lambda offered:(asked.append(offered['version']),False)[1]
+        controller.last_activity=time.monotonic()+60;controller.startup_check();wait(lambda:controller.offer is not None)
+        check_release.assert_called_once_with('')
+        controller.tick();assert not asked,'The offer must not interrupt a held key'
+        controller.last_activity=time.monotonic()-3;controller.tick()
+        assert asked==['99.0.0'] and controller.offer is None and not download.called,'Declining must not download'
+        # Asked for from the menu, the offer appears at once; accepting downloads while review goes on.
+        controller.ask=lambda offered:True;controller.last_activity=time.monotonic()+60
+        controller.check();wait(lambda:controller.staged is not None)
+        assert download.call_count==1 and not window.closed and window.keep_button.isEnabled(),'Downloads must not block photo review'
+    with patch('updater.launch_helper',return_value=base/'stage') as launch:
+        window.busy=True;controller.last_activity=time.monotonic()-5;controller.tick();assert not launch.called,'Scans and file work finish first'
+        window.busy=False;controller.last_activity=time.monotonic();controller.tick();assert not launch.called,'Recent interaction must delay installation'
+        controller.last_activity=time.monotonic()-5;controller.tick();wait(lambda:window.closed)
         assert launch.call_count==1
         arguments=launch.call_args.args[2]
         assert arguments[arguments.index('--data-dir')+1]==str(lib.directory),'Restart must preserve selected library'
         assert (photos/'original.jpg').read_bytes()==original
         assert not controller.timer.isActive()
-    print('PASS: asynchronous download, busy guard, idle delay, opt-out, preserved library on restart')
+        assert controller.settings.value('last_update_stage')==str(base/'stage')
+    # The next start reports the result, then deletes the finished update and anything older.
+    updates=updater.updates_dir();stage=updates/'v99.0.0-done'
+    (stage/'new/PhotoSieve').mkdir(parents=True);(stage/'new/PhotoSieve/PhotoSieve.exe').write_bytes(b'new')
+    (stage/'backup').mkdir();(stage/'backup/PhotoSieve.exe').write_bytes(b'old')
+    (stage/'result.json').write_text(json.dumps({'version':'99.0.0','ok':True}),encoding='utf-8')
+    (updates/'v98.0.0-abandoned').mkdir()
+    restarted=Window(Library(base/'records'),check_updates=False);restarted.show();after=controller_for(restarted,base)
+    after.settings.setValue('last_update_stage',str(stage))
+    after.report_previous();assert '已更新至 99.0.0' in restarted.toast.message and not after.settings.value('last_update_stage')
+    after.tidy();wait(lambda:not any(updates.iterdir()))
+    restarted.close()
+    print('PASS: offer waits for a pause, decline, background download, busy guard, idle install, preserved library, cleanup after restart')

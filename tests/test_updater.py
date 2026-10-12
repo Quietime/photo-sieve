@@ -120,11 +120,11 @@ class UpdaterTest(unittest.TestCase):
         with patch('updater.read_json',return_value={'tag_name':'v2.0.0','assets':[]}):self.assertIsNone(updater.check_release('token'))
     def test_release_manifest_matches_version_repository_and_asset(self):
         metadata={'version':'99.0.0','repository':UPDATE_REPOSITORY,'asset':UPDATE_ASSET,'size':123,'sha256':'a'*64}
-        release={'tag_name':'v99.0.0','html_url':'https://github.com/'+UPDATE_REPOSITORY+'/releases/tag/v99.0.0','assets':[
+        release={'tag_name':'v99.0.0','html_url':'https://github.com/'+UPDATE_REPOSITORY+'/releases/tag/v99.0.0','body':'- 更快','assets':[
             {'name':UPDATE_ASSET,'size':123,'url':f'https://api.github.com/repos/{UPDATE_REPOSITORY}/releases/assets/1'},
             {'name':'update.json','url':f'https://api.github.com/repos/{UPDATE_REPOSITORY}/releases/assets/2'}]}
         with patch('updater.read_json',return_value=release),patch('updater.open_api',return_value=io.BytesIO(json.dumps(metadata).encode())):
-            self.assertEqual(updater.check_release('token')['version'],'99.0.0')
+            offered=updater.check_release('token');self.assertEqual((offered['version'],offered['notes']),('99.0.0','- 更快'))
         metadata['repository']='wrong/repo'
         with patch('updater.read_json',return_value=release),patch('updater.open_api',return_value=io.BytesIO(json.dumps(metadata).encode())):
             with self.assertRaises(ValueError):updater.check_release('token')
@@ -133,6 +133,16 @@ class UpdaterTest(unittest.TestCase):
         with patch.dict('os.environ',{'LOCALAPPDATA':str(self.base/'local')}),patch('updater.open_api',return_value=io.BytesIO(b'bad')):
             with self.assertRaisesRegex(ValueError,'校验失败'):updater.download_release(release,'token')
         self.assertFalse(list((self.base/'local/PhotoSieve/updates').iterdir()))
+    def test_cleanup_deletes_finished_updates_but_never_a_running_download(self):
+        with patch.dict('os.environ',{'LOCALAPPDATA':str(self.base/'local')}):
+            self.assertTrue(updater.cleanup_updates())   # nothing downloaded yet
+            updates=updater.updates_dir();keep=updates/'v3.2.0-new';(keep/'new').mkdir(parents=True)
+            for name in ('v3.1.1-done','v3.1.2-abandoned'):
+                (updates/name/'backup').mkdir(parents=True);(updates/name/'backup/PhotoSieve.exe').write_bytes(b'old version')
+            with updater.STAGING:   # a download is running: its folder and every other one stay
+                self.assertFalse(updater.cleanup_updates());self.assertEqual(len(list(updates.iterdir())),3)
+            self.assertTrue(updater.cleanup_updates(keep));self.assertEqual([p.name for p in updates.iterdir()],['v3.2.0-new'])
+            self.assertTrue(updater.cleanup_updates());self.assertEqual(list(updates.iterdir()),[])
 
 class IdleTest(unittest.TestCase):
     def test_idle_time_counts_input_anywhere_on_windows(self):
