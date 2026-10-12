@@ -261,6 +261,7 @@ def run(output):
                 audit.until(lambda: not window.library.job['running'])
                 audit.check('copy_export_produces_photo', len(list(destination.rglob('photo_*'))) == 1)
                 window.poll()
+                audit.until(window.export_button.isEnabled)
                 audit.modal('07e_export_complete_summary', lambda: audit.click(window.export_button),
                     lambda dialog: audit.click(audit.button(dialog, '取消')))
 
