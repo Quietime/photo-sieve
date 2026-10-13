@@ -177,7 +177,7 @@ class QFileDialog:
 class SettingsPanel(QFrame):
     """An anchored child panel: no top-level window and no focus-loss auto-dismiss."""
     def __init__(self,window,anchor):
-        super().__init__(window.centralWidget()); self.host=window; self.anchor=anchor
+        super().__init__(window.centralWidget()); self.host=window; self.anchor=anchor; self.action_controls={}
         self.setObjectName('morePanel'); self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("""
             #morePanel { background:#1C1C1E; border:1px solid #38383A; border-radius:16px; }
@@ -186,6 +186,8 @@ class SettingsPanel(QFrame):
             #morePanel QPushButton#menuItem:hover { background:#2C2C2E; }
             #morePanel QPushButton#menuItem:disabled { color:#636366; }
             #morePanel QCheckBox { padding:8px 12px; spacing:9px; }
+            #morePanel QLabel#sectionTitle { color:#F5F5F7; font-size:14px; font-weight:600; padding:10px 12px 0; }
+            #morePanel QLabel#sectionDescription { color:#98989D; font-size:12px; padding:0 12px 6px; }
             #morePanel QLabel#panelStatus { color:#98989D; font-size:12px; padding:6px 12px; }
         """.replace('#1C1C1E',theme.ELEVATED).replace('#38383A',theme.SEPARATOR)
             .replace('#2C2C2E',theme.ELEVATED2).replace('#636366',theme.TERTIARY)
@@ -201,6 +203,7 @@ class SettingsPanel(QFrame):
     def addAction(self,action):
         from PySide6.QtGui import QAction
         if isinstance(action,str): action=QAction(action,self)
+        if action in self.action_controls:return action
         control=QCheckBox(action.text()) if action.isCheckable() else QPushButton(action.text())
         control.setObjectName('menuItem'); control.setEnabled(action.isEnabled())
         if action.isCheckable():
@@ -208,8 +211,15 @@ class SettingsPanel(QFrame):
         else:
             def clicked(): self.hide(); action.trigger()
             control.clicked.connect(clicked)
+        self.action_controls[action]=control
         self.column.addWidget(control)
         action.changed.connect(lambda:control.setEnabled(action.isEnabled())); return action
+
+    def addSection(self,title,description=''):
+        if self.column.count():self.addSeparator()
+        label=QLabel(title);label.setObjectName('sectionTitle');self.column.addWidget(label)
+        if description:
+            hint=QLabel(description);hint.setObjectName('sectionDescription');hint.setWordWrap(True);self.column.addWidget(hint)
 
     def addStatus(self,text):
         label=QLabel(text); label.setObjectName('panelStatus'); label.setWordWrap(True); self.column.addWidget(label)

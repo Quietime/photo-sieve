@@ -19,7 +19,7 @@ from PySide6.QtCore import QEvent, QPoint, QRectF, QSettings, Qt, QTimer, QDate
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QCheckBox,
-    QFileDialog as NativeFileDialog, QLabel, QLineEdit, QSpinBox, QComboBox, QDateEdit)
+    QFileDialog as NativeFileDialog, QLabel, QLineEdit, QSpinBox, QComboBox, QDateEdit, QScrollArea)
 from app import Library
 from desktop import STYLE, Window
 import keys
@@ -81,6 +81,10 @@ class ScreenCheck:
 
     def click(self, button):
         assert button.isEnabled(), 'Disabled button: ' + button.text()
+        parent=button.parentWidget()
+        while parent:
+            if isinstance(parent,QScrollArea):parent.ensureWidgetVisible(button);self.application.processEvents()
+            parent=parent.parentWidget()
         position = QPoint(20, button.height() // 2) if isinstance(button, QCheckBox) else button.rect().center()
         QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=position)
         self.application.processEvents()
@@ -325,6 +329,17 @@ def run(output):
                 audit.screenshot('11_deleted_empty', window)
 
                 panel = audit.open_menu(window, '12_more_options')
+                titles=[label.text() for label in panel.findChildren(QLabel) if label.objectName()=='sectionTitle']
+                audit.check('settings_have_four_clear_categories',titles==['照片管理','界面与操作','性能与缓存','更新与诊断'])
+                names=[control.text() for control in panel.findChildren(QAbstractButton) if control.objectName()=='menuItem']
+                audit.check('settings_have_no_duplicate_controls',len(names)==len(set(names)))
+                audit.click(audit.button(panel,'显示底部操作栏'))
+                audit.check('bottom_action_row_hidden',window.action_row.isHidden())
+                panel.hide();audit.screenshot('12c_bottom_actions_hidden',window)
+                panel.exec();audit.screenshot('12d_settings_dock_disabled',panel)
+                audit.click(audit.button(panel,'显示底部操作栏'))
+                audit.check('bottom_action_row_restored',not window.action_row.isHidden())
+                panel.scroll.verticalScrollBar().setValue(0)
                 panel_size = panel.size()
                 application.sendEvent(panel, QEvent(QEvent.Type.WindowDeactivate))
                 audit.check('system_focus_loss_keeps_menu', panel.isVisible() and panel.size() == panel_size)

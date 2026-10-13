@@ -80,6 +80,33 @@ class OperationAuditTest(unittest.TestCase):
         self.window.switch('deleted')
         until(lambda: not self.window.fetching and self.window.deleted_grid.count() == 60)
 
+    def test_hidden_dock_keeps_shortcuts_and_persists_preference(self):
+        self.window.show_menu()
+        panel=self.window.more_panel
+        texts=[control.text() for control in panel.action_controls.values()]
+        self.assertEqual(len(texts),len(set(texts)))
+        action=next(a for a in panel.action_controls if a.text()=='显示底部操作栏')
+        action.setChecked(False)
+        self.assertTrue(self.window.action_row.isHidden())
+        self.assertFalse(self.settings.value('show_actionbar',True,type=bool))
+        count=len(panel.action_controls)
+        panel.addAction(action)
+        self.assertEqual(len(panel.action_controls),count)
+        panel.hide()
+        self.assertTrue(all(shortcut.isEnabled() for shortcut in self.window.shortcuts))
+        left=self.window.queue[0]['id']
+        self.window.activateWindow();self.window.setFocus()
+        QTest.keyClick(self.window,Qt.Key.Key_Up)
+        until(lambda:self.library.photo(left)['status']==1)
+        self.settle()
+        self.window.show_menu()
+        action=next(a for a in self.window.more_panel.action_controls if a.text()=='显示底部操作栏')
+        self.assertFalse(action.isChecked())
+        action.setChecked(True)
+        self.assertFalse(self.window.action_row.isHidden())
+        self.assertTrue(self.settings.value('show_actionbar',False,type=bool))
+        self.window.more_panel.hide()
+
     def test_delete_targets_left_and_latest_delete_restore_ignores_later_keep(self):
         left, right = self.window.queue[:2]
         original = Path(left['path']).read_bytes()
