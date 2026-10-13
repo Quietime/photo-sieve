@@ -34,6 +34,7 @@ import machine
 from cache_policy import prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
 from filmstrip import Filmstrip
+from photo_grid import PhotoGrid
 from window_frame import WindowFrame
 from version import APP_VERSION
 from update_ui import UpdateController
@@ -209,10 +210,11 @@ class Window(QMainWindow):
         self.thumb_cache = OrderedDict(); self.warming = set(); self.warmed = set(); self.thumb_wanted = deque(); self.thumb_loading = set()
         self.sort_order='file';self.date_start=None;self.date_end=None;self.strip_revision=0;self.strip_loading=set()
         self.queue = []; self.view = 'pending'; self.busy = False; self.fetching = False; self.state_pending = False; self.state_data = None
-        self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.queue_end = False; self.generation = 0; self.focus_loading = set()
+        self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.restore_running=False; self.queue_end = False; self.generation = 0; self.focus_loading = set()
         self.was_running = False; self.closed = False; self.closing = False; self.display_size = None; self.motions = []; self.last_motion = 0.0
         self.last_nudge = 0.0; self.delete_streak = 0; self.deleted_rows = []; self.deleted_items = {}; self.deleted_more = False
         self.deleted_thumb_cache=OrderedDict(); self.deleted_errors=set()
+        self.kept_thumb_cache=OrderedDict();self.kept_loading={};self.kept_revision=0
         self.cursor_id = 0; self.cursor_timer = QTimer(self); self.cursor_timer.setSingleShot(True); self.cursor_timer.timeout.connect(self.save_cursor)
         self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
         self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.burst = False
@@ -323,6 +325,7 @@ class Window(QMainWindow):
         self.stack = QStackedWidget(); outer.addWidget(self.stack, 1)
 
         review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
+        self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
         pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
         for index in range(2):
             pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
@@ -381,6 +384,13 @@ class Window(QMainWindow):
         lead.setAlignment(Qt.AlignmentFlag.AlignHCenter); hero.addWidget(lead)
         hero.addWidget(start, 0, Qt.AlignmentFlag.AlignHCenter); self.stack.addWidget(empty)
         self.import_page=ImportPage();self.stack.addWidget(self.import_page)
+        kept=QWidget();kept_layout=QVBoxLayout(kept);kept_layout.setContentsMargins(24,8,24,16);kept_layout.setSpacing(16)
+        self.kept_grid=PhotoGrid();self.kept_grid.icon_for=lambda pid:QIcon(self.kept_thumb_cache[pid]) if pid in self.kept_thumb_cache else self.tile
+        self.kept_grid.itemClicked.connect(self.open_kept_item);self.kept_grid.verticalScrollBar().valueChanged.connect(self.queue_kept_thumbnails)
+        kept_layout.addWidget(self.kept_grid,1)
+        self.kept_note=QLabel('已保留照片 · 单击缩略图查看大图，右上角可导出全部保留照片');self.kept_note.setObjectName('caption');kept_layout.addWidget(self.kept_note)
+        self.stack.addWidget(kept)
+
         self.toast = Toast(root)
         self.toast.positioner=self.place_overlays
         grip_row=QHBoxLayout(); grip_row.setContentsMargins(0,0,2,2); grip_row.addStretch(); grip_row.addWidget(QSizeGrip(self)); outer.addLayout(grip_row)
@@ -464,8 +474,8 @@ class Window(QMainWindow):
             return library.clear_preview_cache()
         def done(count):
             self.cache_clearing=False; self.busy=False
-            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.image_errors,self.warmed): store.clear()
-            self.render(); self.prefetch(); self.toast.show_message(f'已清理 {count:,} 个预览缓存，正在重新加载当前照片','info')
+            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.image_errors,self.warmed): store.clear()
+            self.render(); self.prefetch(); self.queue_kept_thumbnails(); self.toast.show_message(f'已清理 {count:,} 个预览缓存，正在重新加载当前照片','info')
         def failed(message):
             self.cache_clearing=False; self.busy=False; self.update_actions(); self.prefetch(); self.error(message)
         self.submit(work,done,failed)
@@ -557,7 +567,7 @@ class Window(QMainWindow):
                 self.import_page.set_progress(job.get('phase','正在打开照片文件夹'),job['done'],job['total'],state['root'],job.get('found',0))
                 if running:
                     self.timer.start(180);self.progress.set_progress(job['done'],job['total']);self.was_running=True;self.update_actions();return
-                self.importing=False;self.busy=False;self.stack.setCurrentIndex(0);self.place_overlays()
+                self.importing=False;self.busy=False;self.stack.setCurrentIndex(1 if self.view=='deleted' else 4 if self.view=='keep' else 0);self.keep_back_button.hide();self.place_overlays()
                 self.toast.hide();self.load(anchor=max(0,state['cursor']-1))
                 self.timer.stop();self.progress.set_progress(0,0,False)
                 self.was_running=False;self.update_actions()
@@ -569,7 +579,7 @@ class Window(QMainWindow):
             else:
                 self.timer.stop(); self.progress.set_progress(0, 0, False)
             if first:
-                self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 0)); self.place_overlays()
+                self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 4 if self.view=='keep' else 0)); self.place_overlays()
                 if state['root'] or running: self.load(anchor=max(0, state['cursor'] - 1))
             elif not running and (self.was_running or job.get('revision') != old['job'].get('revision')):
                 errors = job.get('errors', []); message = job['kind'] + '：' + job['message'] + (f'，{len(errors)} 项失败' if errors else '')
@@ -617,7 +627,8 @@ class Window(QMainWindow):
         self.updates.touch()
         if self.busy or view == self.view and not self.fetching: self.segments.set_current(self.view); return
         self.reset_zoom(); self.view = view; self.segments.set_current(view)
-        if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 0)
+        if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 4 if view=='keep' else 0)
+        self.keep_back_button.hide()
         self.place_overlays(); self.load(); self.refresh_state(0)
 
     def load(self, anchor=0, target_id=None):
@@ -637,7 +648,9 @@ class Window(QMainWindow):
             self.warmed.clear(); self.render(); self.prefetch()
         def failed(message):
             self.fetching = False; self.error(message)
-        if target_id is None:self.refresh_strip()
+        if target_id is None:
+            self.refresh_strip()
+            if view=='keep' and self.stack.currentIndex()==4:self.load_kept_grid()
         options=self.navigation_options() if view!='deleted' else {}
         target=target_id if target_id is not None else anchor+1 if anchor else 0
         self.submit(lambda: library.list_photos(view,target,'next',60 if view=='deleted' else PAGE,inclusive=bool(anchor) or target_id is not None,**options),done,failed)
@@ -675,6 +688,7 @@ class Window(QMainWindow):
     def resized(self):
         # Previews keep showing (scaled) while sharper ones are decoded for the new pane size.
         if self.update_display_size(): self.prefetch()
+        self.queue_kept_thumbnails()
 
     def request_image(self, photo, priority):
         pid = photo['id']; library = self.library; size = self.display_size; dpr = self.devicePixelRatioF()
@@ -711,7 +725,7 @@ class Window(QMainWindow):
             self.cache.pop(old); self.cache_size.pop(old,None); self.sources.pop(old,None)
 
     def prefetch(self):
-        if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.display_size is None: return
+        if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or self.display_size is None: return
         self.refill()  # custom horizons can exceed the first 1,200 metadata rows
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
         for index, photo in enumerate(self.queue[:self.ahead_target]):
@@ -777,6 +791,7 @@ class Window(QMainWindow):
         if self.queue:
             row=self.strip.index_of(self.queue[0]['id'])
             if row>=0 and self.strip.currentRow()!=row:self.strip.setCurrentRow(row)
+        if self.queue:self.strip.adapt_to_preview(self.thumbnail(self.queue[0]['id']))
         for row in self.strip.visible_rows():self.update_thumbnail(self.strip.item(row).data(ROLE))
         self.strip_note.setText(f'未筛选 {self.strip.count():,} 张 · 拖动滚动条浏览全部照片 · '+{'file':'文件顺序','oldest':'文件日期：从旧到新','newest':'文件日期：从新到旧'}[self.sort_order])
         self.load_strip_thumbnails()
@@ -820,11 +835,13 @@ class Window(QMainWindow):
     def update_thumbnail(self,pid):
         row=self.strip.index_of(pid)
         if row>=0:
-            self.thumbnail(pid);self.strip.photo_model.changed(row)
+            preview=self.thumbnail(pid)
+            if self.queue and pid==self.queue[0]['id']:self.strip.adapt_to_preview(preview)
+            self.strip.photo_model.changed(row)
         self.refresh_chrome()
 
     def update_actions(self):
-        running = self.job_running(); reviewing = self.view != 'deleted'
+        running = self.job_running(); reviewing = self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4)
         allowed = bool(self.queue) and self.ready() and not self.busy and not running and reviewing
         for button, enabled in [(self.keep_button, allowed and self.queue[0]['status']!=1), (self.delete_button, allowed),
                                 (self.next_button, bool(self.queue) and not self.busy and reviewing),
@@ -902,7 +919,7 @@ class Window(QMainWindow):
     # ---- actions ------------------------------------------------------------
     def act(self, action):
         self.updates.touch()
-        if action not in ('keep', 'delete') or self.closing: return
+        if action not in ('keep', 'delete') or self.closing or self.view=='keep' and self.stack.currentIndex()==4: return
         if not (self.keep_button if action=='keep' else self.delete_button).isEnabled():
             if self.queue and self.view != 'deleted' and not self.busy and not self.job_running(): self.nudge()
             return
@@ -928,7 +945,7 @@ class Window(QMainWindow):
 
     def next_photo(self):
         self.updates.touch()
-        if self.busy or self.view == 'deleted' or not self.queue: return
+        if self.busy or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or not self.queue: return
         ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
 
     def strip_select(self, item):
@@ -940,7 +957,8 @@ class Window(QMainWindow):
 
     def restore(self, photo_id=None, general=False):
         self.updates.touch()
-        if not self.session_active or self.busy or self.closing: return
+        if not self.session_active or self.busy or self.closing or self.restore_running: return
+        self.restore_running=True
         library = self.library; generation = self.generation
         def work():
             result = library.undo(only_delete=not general, photo_id=photo_id)
@@ -948,6 +966,7 @@ class Window(QMainWindow):
             except Exception: result['photo'] = None
             return result
         def done(result):
+            self.restore_running=False
             if generation != self.generation: return
             pid = result['id']; photo = result['photo']; self.delete_streak = 0;self.refresh_strip()
             if pid in self.deleted_items:
@@ -967,8 +986,11 @@ class Window(QMainWindow):
                 else: self.render()
             kept = photo and photo['status'] == 1 and self.view == 'pending'
             self.toast.show_message(('已恢复到原位置' + (' · 在「保留」中' if kept else '')) if result.get('restored') else '已撤回', 'keep')
+            if self.view=='keep' and self.stack.currentIndex()==4:self.load_kept_grid()
             self.update_actions()
-        self.op(work, done, self.error)
+        def failed(message):
+            self.restore_running=False;self.error(message)
+        self.op(work, done, failed)
 
     def restore_selection(self):
         items = self.deleted_grid.selectedItems()
@@ -1052,7 +1074,7 @@ class Window(QMainWindow):
         self.submit(lambda: full_qimage(library.preview_image(pid, 0)), loaded, failed, self.detail_pool)
 
     def focus_left(self):
-        if self.queue and self.view != 'deleted': self.focus(self.queue[0])
+        if self.queue and self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4): self.focus(self.queue[0])
 
     def save_cursor(self):
         pid = self.cursor_id; library = self.library
@@ -1077,7 +1099,7 @@ class Window(QMainWindow):
         changed(enabled.isChecked());enabled.toggled.connect(changed)
         layout.addLayout(form)
         hint=QLabel('日期使用照片文件的修改时间。范围只影响未筛选／保留视图，不影响已删除列表和导出。');hint.setObjectName('caption');hint.setWordWrap(True);layout.addWidget(hint)
-        error=QLabel();error.setWordWrap(True);error.setStyleSheet('color:'+theme.RED);layout.addWidget(error)
+        error=QLabel();error.setWordWrap(True);error.setStyleSheet('color:'+theme.ERROR_TEXT);layout.addWidget(error)
         row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
         def apply():
             if enabled.isChecked() and start.date()>end.date():error.setText('开始日期不能晚于结束日期。');return
@@ -1111,7 +1133,7 @@ class Window(QMainWindow):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
                 self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
-                self.strip_revision+=1;self.strip.clear()
+                self.strip_revision+=1;self.strip.clear();self.kept_revision+=1;self.kept_grid.clear();self.kept_thumb_cache.clear();self.kept_loading.clear()
                 crashlog.event('workspace_ready',library=str(library.directory))
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed,self.strip_loading): store.clear()
                 self.reset_zoom(); self.state_data = None; self.state_pending = False; self.counts = {}
@@ -1148,6 +1170,59 @@ class Window(QMainWindow):
     def open_folder(self, path):
         if not Path(path).is_dir(): self.error('文件夹不存在，或硬盘未连接：' + path); return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
+
+    # ---- kept gallery ----------------------------------------------------------
+    def load_kept_grid(self):
+        self.kept_revision+=1;revision=self.kept_revision;library=self.library
+        self.kept_loading.clear();options=self.navigation_options()
+        self.kept_note.setText('正在读取已保留照片…')
+        def done(ids):
+            if revision!=self.kept_revision or library is not self.library:return
+            self.kept_grid.set_ids(ids)
+            self.kept_note.setText(f'已保留 {len(ids):,} 张 · 单击缩略图查看大图，右上角可导出全部保留照片' if ids else '没有已保留照片' if self.date_start is None else '所选日期范围内没有已保留照片')
+            QTimer.singleShot(0,self.queue_kept_thumbnails)
+        self.submit(lambda:library.list_ids('keep',include_kept=True,**options),done,self.error)
+
+    def queue_kept_thumbnails(self,*_):
+        if self.closed or self.view!='keep' or self.stack.currentIndex()!=4 or self.cache_clearing:return
+        visible=self.kept_grid.visible_ids();protected=set(visible)
+        for old in list(self.kept_thumb_cache):
+            if len(self.kept_thumb_cache)<=max(128,len(protected)):break
+            if old not in protected:
+                self.kept_thumb_cache.pop(old);self.kept_grid.captions.pop(old,None);self.kept_grid.tips.pop(old,None)
+        candidates=[pid for pid in visible if pid not in self.kept_thumb_cache and pid not in self.kept_loading and pid not in self.image_errors]
+        revision=self.kept_revision;library=self.library;dpr=self.devicePixelRatioF();size=(round(176*dpr),round(118*dpr))
+        for pid in candidates[:max(0,3-len(self.kept_loading))]:
+            self.kept_loading[pid]=revision
+            def work(pid=pid):
+                photo=library.public(library.photo(pid))
+                return display_image(library.preview_image(pid,320),*size,(8,8)),photo['name'],photo['path']
+            def done(result,pid=pid):
+                if revision!=self.kept_revision or library is not self.library:return
+                self.kept_loading.pop(pid,None)
+                image,name,path=result;pixmap=QPixmap.fromImage(image[0][0]);pixmap.setDevicePixelRatio(dpr)
+                self.kept_thumb_cache[pid]=pixmap;self.kept_thumb_cache.move_to_end(pid)
+                self.kept_grid.captions[pid]=name;self.kept_grid.tips[pid]=path
+                row=self.kept_grid.index_of(pid)
+                if row>=0:self.kept_grid.photo_model.changed(row)
+                self.queue_kept_thumbnails()
+            def failed(message,pid=pid):
+                if revision!=self.kept_revision or library is not self.library:return
+                self.kept_loading.pop(pid,None);self.image_errors[pid]=message
+                self.kept_grid.captions[pid]='无法预览';self.kept_grid.tips[pid]=message
+                row=self.kept_grid.index_of(pid)
+                if row>=0:self.kept_grid.photo_model.changed(row)
+                self.queue_kept_thumbnails()
+            self.submit(work,done,failed,self.thumb_pool)
+
+    def open_kept_item(self,item):
+        if self.busy or self.view!='keep':return
+        self.stack.setCurrentIndex(0);self.keep_back_button.show();self.place_overlays()
+        self.load(target_id=item.data(ROLE))
+
+    def back_to_kept(self):
+        if self.view!='keep' or self.busy:return
+        self.reset_zoom();self.stack.setCurrentIndex(4);self.keep_back_button.hide();self.place_overlays();self.update_actions();self.load_kept_grid()
 
     # ---- deleted grid ----------------------------------------------------------
     def select_deleted(self):

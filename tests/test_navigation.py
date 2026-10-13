@@ -21,7 +21,39 @@ class NavigationTest(unittest.TestCase):
     def test_date_range_and_keep_exclusion_apply_to_the_entire_inventory(self):
         self.assertEqual(self.lib.list_ids('pending','oldest',100,300),[2,3,4])
         self.assertEqual(self.lib.list_ids('keep'),[])
+        self.assertEqual(self.lib.list_ids('keep',start_ns=300,end_ns=500,include_kept=True),[5])
         self.assertEqual([p['id'] for p in self.lib.list_photos('keep',start_ns=300,end_ns=500)],[5])
+
+    def test_kept_gallery_indexes_100000_without_loading_every_icon(self):
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QIcon
+        from photo_grid import PhotoGrid
+        application=QApplication.instance() or QApplication([])
+        grid=PhotoGrid();calls=[]
+        def icon_for(pid):calls.append(pid);return QIcon()
+        grid.icon_for=icon_for;grid.resize(1000,700);grid.set_ids(list(range(100000)));grid.show();application.processEvents()
+        grid.verticalScrollBar().setValue(grid.verticalScrollBar().maximum());application.processEvents()
+        self.assertIn(99999,grid.visible_ids())
+        self.assertLess(len(calls),500)
+        self.assertLess(len(grid.visible_ids()),100)
+        grid.close();grid.deleteLater();application.processEvents()
+
+    def test_portrait_strip_is_dense_and_keeps_full_inventory_scrollable(self):
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QPixmap
+        from filmstrip import Filmstrip
+        application=QApplication.instance() or QApplication([])
+        strip=Filmstrip();strip.resize(1000,100);strip.set_ids(list(range(100000)));strip.show();application.processEvents()
+        portrait=QPixmap(45,68);strip.adapt_to_preview(portrait);application.processEvents()
+        self.assertEqual(strip.tile_width,57)
+        self.assertEqual(strip.visualItemRect(strip.item(0)).width(),57)
+        self.assertGreater(len(strip.visible_rows()),16)
+        strip.horizontalScrollBar().setValue(strip.horizontalScrollBar().maximum());application.processEvents()
+        self.assertIn(99999,strip.visible_ids())
+        landscape=QPixmap(104,68);strip.adapt_to_preview(landscape);application.processEvents()
+        self.assertEqual(strip.tile_width,116)
+        self.assertIn(99999,strip.visible_ids())
+        strip.close();strip.deleteLater();application.processEvents()
 
     def test_virtual_strip_can_jump_to_last_of_100000_rows_without_all_thumbnails(self):
         from PySide6.QtWidgets import QApplication

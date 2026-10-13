@@ -92,7 +92,7 @@ class PhotoView(QGraphicsView):
         else:
             self.text = self.scene().addSimpleText(error or message or ('正在读取…' if photo else ''))
             font = QFont(self.font()); font.setPixelSize(15); self.text.setFont(font)
-            self.text.setBrush(QColor(theme.RED if error else theme.SECONDARY))
+            self.text.setBrush(QColor(theme.ERROR_TEXT if error else theme.SECONDARY))
             self.scene().setSceneRect(self.text.boundingRect()); self.centerOn(self.text)
 
     def fit_scale(self):

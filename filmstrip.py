@@ -2,6 +2,7 @@
 from PySide6.QtCore import QAbstractListModel,QModelIndex,Qt,Signal,QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QListView
+import theme
 
 ROLE=Qt.ItemDataRole.UserRole
 class Item:
@@ -19,17 +20,18 @@ class Model(QAbstractListModel):
         if not index.isValid() or index.row()>=len(self.ids):return None
         pid=self.ids[index.row()]
         if role==ROLE:return pid
+        if role==Qt.ItemDataRole.DisplayRole:return getattr(self.view,'captions',{}).get(pid,'')
         if role==Qt.ItemDataRole.DecorationRole:return self.view.icon_for(pid)
         if role==Qt.ItemDataRole.ToolTipRole:return self.view.tips.get(pid,f'照片 #{pid}')
-        if role==Qt.ItemDataRole.SizeHintRole:return QSize(116,80)
+        if role==Qt.ItemDataRole.SizeHintRole:return QSize(self.view.tile_width,self.view.tile_height)
         return None
     def changed(self,row):
-        index=self.index(row);self.dataChanged.emit(index,index,[Qt.ItemDataRole.DecorationRole])
+        index=self.index(row);self.dataChanged.emit(index,index,[Qt.ItemDataRole.DecorationRole,Qt.ItemDataRole.DisplayRole,Qt.ItemDataRole.ToolTipRole])
 
 class Filmstrip(QListView):
     itemClicked=Signal(object)
     def __init__(self):
-        super().__init__();self.photo_model=Model(self);self.setModel(self.photo_model);self.tips={};self.icon_for=lambda _:QIcon()
+        super().__init__();self.tile_width=116;self.tile_height=80;self.photo_model=Model(self);self.setModel(self.photo_model);self.tips={};self.icon_for=lambda _:QIcon()
         self.setViewMode(QListView.ViewMode.IconMode);self.setFlow(QListView.Flow.LeftToRight)
         self.setWrapping(False);self.setMovement(QListView.Movement.Static);self.setUniformItemSizes(True)
         self.setIconSize(QSize(104,68));self.setGridSize(QSize(116,80));self.setFixedHeight(100)
@@ -37,7 +39,17 @@ class Filmstrip(QListView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.clicked.connect(lambda index:self.itemClicked.emit(Item(self,index.row())))
-        self.setStyleSheet('QListView { background:transparent; border:0; outline:0; } QListView::item { border:2px solid transparent; border-radius:8px; } QListView::item:selected { border:2px solid #F5F5F7; background:transparent; }')
+        self.setStyleSheet('QListView { background:transparent; border:0; outline:0; } QListView::item { border:2px solid transparent; border-radius:8px; } QListView::item:selected { border:2px solid '+theme.LABEL+'; background:transparent; }')
+    def adapt_to_preview(self,preview):
+        # A uniform virtual grid stays fast even with 100,000 IDs. Match its
+        # density to the current photo, without opening the rest of the files.
+        if preview is None or preview.isNull() or not preview.height():return
+        width=max(44,min(116,round(68*preview.width()/preview.height())+12))
+        if width==self.tile_width:return
+        bar=self.horizontalScrollBar();old=self.tile_width;at_end=bar.maximum()>0 and bar.value()==bar.maximum();first,offset=divmod(bar.value(),old)
+        self.tile_width=width;self.setGridSize(QSize(width,80));self.setIconSize(QSize(width-12,68))
+        self.doItemsLayout();bar.setValue(bar.maximum() if at_end else round(first*width+offset*width/old))
+
     def set_ids(self,ids):
         self.photo_model.beginResetModel();self.photo_model.ids=list(ids);self.tips.clear();self.photo_model.endResetModel()
     def count(self):return len(self.photo_model.ids)
@@ -53,8 +65,8 @@ class Filmstrip(QListView):
         self.photo_model.beginRemoveRows(QModelIndex(),row,row);self.photo_model.ids.pop(row);self.photo_model.endRemoveRows()
         self.tips.pop(pid,None)
     def visible_rows(self):
-        first=max(0,self.horizontalScrollBar().value()//116-1)
-        return range(first,min(self.count(),first+self.viewport().width()//116+4))
+        first=max(0,self.horizontalScrollBar().value()//self.tile_width-1)
+        return range(first,min(self.count(),first+self.viewport().width()//self.tile_width+4))
     def visible_ids(self):return [self.photo_model.ids[i] for i in self.visible_rows()]
     def index_of(self,pid):
         try:return self.photo_model.ids.index(pid)

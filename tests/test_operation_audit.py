@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from PIL import Image
-from PySide6.QtCore import QSettings, QTimer, Qt, QPoint
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QSettings, QTimer, Qt, QPoint, QEvent
+from PySide6.QtGui import QAction, QKeySequence, QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -79,6 +79,36 @@ class OperationAuditTest(unittest.TestCase):
         until(lambda: self.window.counts.get('deleted') == 70)
         self.window.switch('deleted')
         until(lambda: not self.window.fetching and self.window.deleted_grid.count() == 60)
+
+    def test_held_control_z_restores_multiple_and_stops_after_release(self):
+        rows=self.library.list_photos(limit=10)
+        for photo in rows:self.library.trash(photo['id'])
+        self.window.poll();until(lambda:self.window.counts.get('deleted')==4)
+        self.window.activateWindow();self.window.setFocus()
+        QTest.keyPress(self.window,Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier)
+        until(lambda:self.library.state()['counts']['deleted']==3 and not self.window.restore_running)
+        for remaining in (2,1):
+            application.sendEvent(self.window,QKeyEvent(QEvent.Type.KeyPress,Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier,'z',True))
+            until(lambda:self.library.state()['counts']['deleted']==remaining and not self.window.restore_running)
+        QTest.keyRelease(self.window,Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier)
+        self.settle();QTest.qWait(180)
+        self.assertEqual(self.library.state()['counts']['deleted'],1)
+        self.assertFalse(Path(rows[0]['path']).exists())
+        self.assertTrue(all(Path(photo['path']).is_file() for photo in rows[1:]))
+
+    def test_repeated_undo_does_not_build_a_backlog(self):
+        import threading
+        left=self.window.queue[0]['id'];self.library.trash(left)
+        self.window.poll();until(lambda:self.window.counts.get('deleted')==1)
+        gate=threading.Event();entered=threading.Event();original=self.library.undo
+        def slow(*args,**kwargs):
+            entered.set();gate.wait(3);return original(*args,**kwargs)
+        with patch.object(self.library,'undo',side_effect=slow) as undo:
+            self.window.restore(general=True);until(entered.is_set)
+            for _ in range(20):self.window.restore(general=True)
+            self.assertEqual(self.window.pending_ops,1)
+            gate.set();self.settle();self.assertEqual(undo.call_count,1)
+        self.assertFalse(self.window.restore_running)
 
     def test_right_keep_after_clicking_categories_never_changes_category(self):
         chosen=keys.defaults();chosen['keep']=['Right',''];chosen['next']=['','']
@@ -268,6 +298,25 @@ class OperationAuditTest(unittest.TestCase):
         self.assertEqual(self.library.state()['counts']['deleted'], 1)
         until(lambda: self.window.keep_button.isEnabled())
 
+    def test_kept_gallery_displays_all_rows_and_reloads_after_undo(self):
+        for photo in self.library.list_photos(limit=10):self.library.mark(photo['id'],1)
+        self.window.poll();until(lambda:self.window.counts.get('keep')==4)
+        self.window.switch('keep')
+        until(lambda:self.window.kept_grid.count()==4 and all(pid in self.window.kept_thumb_cache for pid in self.window.kept_grid.visible_ids()))
+        self.assertEqual(self.window.stack.currentIndex(),4)
+        self.assertEqual(self.window.strip.count(),0)
+        self.assertTrue(self.window.export_button.isEnabled())
+        self.assertTrue(all(self.window.kept_grid.captions.get(pid) for pid in self.window.kept_grid.visible_ids()))
+        self.window.open_kept_item(self.window.kept_grid.item(2))
+        until(lambda:self.window.queue and self.window.queue[0]['id']==3 and self.window.delete_button.isEnabled())
+        self.assertEqual(self.window.stack.currentIndex(),0)
+        self.window.back_to_kept()
+        until(lambda:self.window.kept_grid.count()==4)
+        self.window.restore(general=True);self.settle()
+        until(lambda:self.window.kept_grid.count()==3)
+        self.assertEqual(self.window.stack.currentIndex(),4)
+        self.assertTrue(all(self.window.kept_grid.captions.get(pid) for pid in self.window.kept_grid.visible_ids()))
+
     def test_keep_category_disables_repeated_keep_but_can_delete_kept_photo(self):
         self.assertFalse(self.window.export_button.isEnabled(), 'No kept photos means no useful export')
         first = self.window.queue[0]['id']
@@ -277,7 +326,11 @@ class OperationAuditTest(unittest.TestCase):
         until(lambda: self.window.counts.get('keep') == 1)
         self.assertTrue(self.window.export_button.isEnabled())
         self.window.switch('keep')
-        until(lambda: not self.window.fetching and self.window.delete_button.isEnabled())
+        until(lambda: not self.window.fetching and self.window.kept_grid.count()==1)
+        self.assertEqual(self.window.stack.currentIndex(),4)
+        self.assertFalse(self.window.delete_button.isEnabled())
+        self.window.open_kept_item(self.window.kept_grid.item(0))
+        until(lambda:self.window.delete_button.isEnabled())
         self.assertFalse(self.window.keep_button.isEnabled())
         self.assertEqual(self.window.queue[0]['id'], first)
         self.assertEqual(self.window.strip.count(), 0)

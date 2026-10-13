@@ -193,7 +193,7 @@ class SettingsPanel(QFrame):
             #morePanel QLabel#panelStatus { color:#98989D; font-size:12px; padding:6px 12px; }
         """.replace('#1C1C1E',theme.ELEVATED).replace('#38383A',theme.SEPARATOR)
             .replace('#2C2C2E',theme.ELEVATED2).replace('#636366',theme.TERTIARY)
-            .replace('#98989D',theme.SECONDARY))
+            .replace('#98989D',theme.SECONDARY).replace('#F5F5F7',theme.LABEL))
         outer=QVBoxLayout(self); outer.setContentsMargins(12,12,12,12); outer.setSpacing(8)
         header=QHBoxLayout(); title=QLabel('更多选项'); header.addWidget(title); header.addStretch()
         from apple_ui import AppleButton

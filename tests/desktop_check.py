@@ -133,7 +133,8 @@ def run(screenshot=None):
         chosen=keys.defaults();chosen['keep']=['P',''];w.apply_shortcuts(chosen);assert w.keep_button.text()=='保留' and w.keep_button.shortcut=='P'
         kept=w.queue[0]['id'];key(w,Qt.Key.Key_P);settle(w);assert lib.photo(kept)['status']==1,'A custom key keeps the photo'
         w.apply_shortcuts(keys.defaults());assert w.keep_button.text()=='保留' and w.keep_button.shortcut=='↑'
-        w.switch('keep');ready(w);assert w.strip.count()==0
+        w.switch('keep');until(lambda:w.kept_grid.count()>0);assert w.stack.currentIndex()==4
+        w.open_kept_item(w.kept_grid.item(0));ready(w);assert w.strip.count()==0
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
         # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.

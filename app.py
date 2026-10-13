@@ -307,8 +307,8 @@ class Library:
         if sort not in ('file','oldest','newest'):raise LibraryError(400,'未知排序方式')
         return ('id',False) if sort=='file' else ('mtime',sort=='newest')
 
-    def list_ids(self,view='pending',sort='file',start_ns=None,end_ns=None):
-        if view!='pending':return []  # retained photos never reappear in the filmstrip
+    def list_ids(self,view='pending',sort='file',start_ns=None,end_ns=None,include_kept=False):
+        if view!='pending' and not (view=='keep' and include_kept):return []  # kept photos appear only in the explicit gallery
         where,values=self.navigation_scope(view,start_ns,end_ns);key,descending=self.navigation_order(sort)
         order='DESC' if descending else 'ASC'
         with self.connect() as db:

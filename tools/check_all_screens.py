@@ -151,7 +151,7 @@ def fixture(directory):
     directory.mkdir()
     extensions = ['jpg', 'png', 'bmp', 'tiff', 'webp']
     for i in range(30):
-        image = Image.new('RGB', (1200, 800), (20 + i * 3, 35 + i * 2, 72 + i * 4))
+        image = Image.new('RGB', (800,1200) if i>=28 else (1200,800), (20 + i * 3, 35 + i * 2, 72 + i * 4))
         drawing = ImageDraw.Draw(image)
         drawing.rectangle((60, 90, 1140, 680), outline=(220, 230, 240), width=5)
         drawing.ellipse((100 + i * 20, 200, 500 + i * 20, 600), fill=(50, 160, 210))
@@ -243,6 +243,11 @@ def run(output):
                 QTest.mouseClick(window.strip.viewport(),Qt.MouseButton.LeftButton,pos=window.strip.visualItemRect(last).center())
                 audit.until(lambda:window.queue and window.queue[0]['id']==last.data(Qt.ItemDataRole.UserRole))
                 audit.check('filmstrip_click_jumps_to_distant_photo',True)
+                portrait=window.strip.item(28)
+                QTest.mouseClick(window.strip.viewport(),Qt.MouseButton.LeftButton,pos=window.strip.visualItemRect(portrait).center())
+                audit.until(lambda:len(window.queue)==2 and all(pane.pixmap is not None for pane in window.photos) and window.strip.tile_width<=60)
+                audit.screenshot('04p_portrait_compact_filmstrip',window)
+                audit.check('portrait_filmstrip_removes_landscape_sized_gaps',window.strip.tile_width<=60 and window.strip.count()==30)
                 window.load();audit.until(lambda:len(window.queue)==30 and window.keep_button.isEnabled())
                 def ordering(dialog):
                     combo=dialog.findChild(QComboBox);dates=dialog.findChildren(QDateEdit);enabled=dialog.findChild(QCheckBox)
@@ -277,10 +282,20 @@ def run(output):
                 audit.check('buttons_act_on_left_photo', window.library.photo(first)['status'] == 1)
 
                 audit.segment(window, 1)
-                audit.until(lambda: len(window.queue) == 1 and window.photos[0].pixmap is not None)
+                audit.until(lambda: window.kept_grid.count()==1 and all(pid in window.kept_thumb_cache for pid in window.kept_grid.visible_ids()))
                 audit.until(window.export_button.isEnabled)
                 audit.screenshot('05_kept_review', window)
                 audit.check('kept_hidden_from_filmstrip', window.strip.count() == 0)
+                audit.check('kept_category_is_a_thumbnail_gallery',window.stack.currentIndex()==4 and window.kept_grid.count()==1)
+                item=window.kept_grid.item(0)
+                QTest.mouseClick(window.kept_grid.viewport(),Qt.MouseButton.LeftButton,pos=window.kept_grid.visualItemRect(item).center())
+                audit.until(lambda:window.stack.currentIndex()==0 and window.delete_button.isEnabled())
+                audit.screenshot('05c_kept_photo_large_view',window)
+                audit.click(window.keep_back_button)
+                audit.until(lambda:window.stack.currentIndex()==4 and window.kept_grid.count()==1)
+                audit.screenshot('05d_kept_gallery_returned',window)
+                audit.check('kept_photo_opens_inside_app_and_returns_to_gallery',window.stack.currentIndex()==4)
+
 
                 def export_empty(dialog):
                     audit.click(audit.button(dialog, '复制'))

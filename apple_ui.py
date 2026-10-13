@@ -84,13 +84,14 @@ class AppleButton(QPushButton):
         scale=1. if theme.REDUCED_MOTION else (1.+theme.HOVER_SCALE*self.hover)*(1-self.press_amount)+theme.PRESS_SCALE*self.press_amount
         painter.translate(self.width()/2,self.height()/2-self.hover);painter.scale(scale,scale);painter.translate(-self.width()/2,-self.height()/2)
         rect=QRectF(self.rect()).adjusted(2,2,-2,-2);path=QPainterPath();path.addRoundedRect(rect,rect.height()/2,rect.height()/2)
-        if self.variant=='primary':fill=QColor(theme.BLUE if self.isEnabled() else '#244969')
+        if self.symbol=='delete' and self.variant=='dock' and self.isEnabled():fill=QColor(theme.RED)
+        elif self.variant=='primary':fill=QColor(theme.BLUE if self.isEnabled() else '#244969')
         elif self.variant=='dock':fill=QColor(255,255,255,round(12*self.hover)+ (12 if self.isDown() else 0))
         else:fill=QColor(255,255,255,round(22+18*self.hover))
         if theme.HIGH_CONTRAST:fill=QColor('#000000');painter.setPen(QPen(QColor('#FFFFFF'),1.5))
         else:painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fill);painter.drawPath(path)
-        color=QColor('#FFFFFF' if theme.HIGH_CONTRAST or self.variant=='primary' else theme.GREEN if self.symbol=='keep' else theme.RED if self.symbol=='delete' else theme.LABEL)
+        color=QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.LABEL)
         if not self.isEnabled():color=QColor(theme.TERTIARY)
         metrics=self.fontMetrics();text_width=metrics.horizontalAdvance(self.text())
         badge_width=max(22,metrics.horizontalAdvance(self.shortcut)+12) if self.shortcut else 0

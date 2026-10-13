@@ -8,19 +8,20 @@ from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from shiboken6 import isValid
 
-BG = '#303030'
-ELEVATED = '#263A4B'
-ELEVATED2 = '#35516B'
-ELEVATED3 = '#426480'
-SEPARATOR = '#4A4A4A'
-LABEL = '#F5F5F7'
-SECONDARY = '#B3B3B3'
-TERTIARY = '#858585'
-BLUE = '#0A84FF'
-BLUE_HOVER = '#409CFF'
-BLUE_PRESSED = '#0066CC'
-GREEN = '#30D158'
-RED = '#FF453A'
+BG = '#303236'
+ELEVATED = '#34383E'
+ELEVATED2 = '#335E83'
+ELEVATED3 = '#4C789B'
+SEPARATOR = '#4D5156'
+LABEL = '#F4F0E6'
+SECONDARY = '#C1BFB8'
+TERTIARY = '#918F88'
+BLUE = '#335E83'
+BLUE_HOVER = '#4C789B'
+BLUE_PRESSED = '#2A4E6D'
+GREEN = '#F4F0E6'
+RED = '#95504C'
+ERROR_TEXT = '#E7A69F'
 FONT = '"SF Pro Text","PingFang SC","Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans CJK SC",sans-serif'
 
 # Shared interaction tokens, with native Windows accessibility preferences.
@@ -59,8 +60,8 @@ def configure_accessibility(settings):
 
 STYLE = f'''
 QWidget {{ background:{BG}; color:{LABEL}; font-family:{FONT}; font-size:14px; }}
-QWidget#windowChrome {{ background:#252525; }}
-QWidget#workspaceToolbar {{ background:#292929; border-bottom:1px solid #3A3A3A; }}
+QWidget#windowChrome {{ background:#292a2e; }}
+QWidget#workspaceToolbar {{ background:#2c2d31; border-bottom:1px solid #3A3A3A; }}
 QWidget#windowChrome QWidget, QWidget#workspaceToolbar QWidget {{ background:transparent; }}
 QLabel {{ background:transparent; }}
 QLabel#title {{ font-size:17px; font-weight:600; }}
@@ -73,7 +74,7 @@ QPushButton {{ background:{ELEVATED2}; color:{LABEL}; border:0; border-radius:15
 QPushButton:hover {{ background:{ELEVATED3}; }}
 QPushButton:pressed {{ background:#48484A; }}
 QPushButton:disabled {{ color:{TERTIARY}; background:{ELEVATED}; }}
-QPushButton#primary {{ background:{BLUE}; color:#FFFFFF; }}
+QPushButton#primary {{ background:{BLUE}; color:{LABEL}; }}
 QPushButton#primary:hover {{ background:{BLUE_HOVER}; }}
 QPushButton#primary:pressed {{ background:{BLUE_PRESSED}; }}
 QPushButton#primary:disabled {{ background:#0A3D73; color:#8FA9C8; }}
@@ -83,7 +84,7 @@ QPushButton#plain {{ background:transparent; border-radius:17px; padding:8px 18p
 QPushButton#plain:hover {{ background:{ELEVATED3}; }}
 QPushButton#plain:disabled {{ color:{TERTIARY}; background:transparent; }}
 QPushButton#keep {{ background:transparent; color:{GREEN}; border-radius:17px; padding:8px 18px; font-size:14px; font-weight:600; }}
-QPushButton#delete {{ background:transparent; color:{RED}; border-radius:17px; padding:8px 18px; font-size:14px; font-weight:600; }}
+QPushButton#delete {{ background:{RED}; color:{LABEL}; border-radius:17px; padding:8px 18px; font-size:14px; font-weight:600; }}
 QPushButton#keep:hover, QPushButton#delete:hover {{ background:{ELEVATED3}; }}
 QPushButton#keep:disabled, QPushButton#delete:disabled {{ color:{TERTIARY}; background:transparent; }}
 QFrame#actionbar {{ background:transparent; border-radius:22px; }}
@@ -101,7 +102,7 @@ QScrollBar::handle {{ background:#48484A; border-radius:4px; min-width:30px; min
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ width:0; height:0; background:transparent; }}
 QMenu {{ background:{ELEVATED2}; border:1px solid {SEPARATOR}; border-radius:12px; padding:6px; }}
 QMenu::item {{ padding:7px 28px 7px 14px; border-radius:7px; color:{LABEL}; }}
-QMenu::item:selected {{ background:{BLUE}; color:#FFFFFF; }}
+QMenu::item:selected {{ background:{BLUE}; color:{LABEL}; }}
 QMenu::item:disabled {{ color:{SECONDARY}; background:transparent; }}
 QMenu::separator {{ height:1px; background:{SEPARATOR}; margin:5px 10px; }}
 QMenu::indicator {{ width:14px; height:14px; left:6px; }}

@@ -13,7 +13,7 @@ ACTIONS = [
     ('delete', '删除', ('Down',), True),
     ('next', '下一张', ('Right',), True),
     ('restore', '恢复最近删除', ('Left',), True),
-    ('undo', '撤回上一步', ('Ctrl+Z',), False),
+    ('undo', '撤回上一步', ('Ctrl+Z',), True),
     ('zoom', '放大到 100%', ('Z',), False),
     ('unzoom', '还原缩放', ('Esc',), False),
 ]
