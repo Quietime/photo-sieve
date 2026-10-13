@@ -351,9 +351,9 @@ class Window(QMainWindow):
         pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
         for index in range(2):
             pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
-            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 下一张对比')
+            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比（保留 / 删除不操作此图）')
             role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22); pane.addWidget(role)
-            photo = PhotoView()
+            photo = PhotoView(fit_factor=1.0 if index == 0 else 0.6)
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
             name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
@@ -933,10 +933,14 @@ class Window(QMainWindow):
             self.track(animate(self, 300, lift, theme.SNAPPY, left.deleteLater))
         target_pane = self.photos[0]
         if right and target_pane.item and target_pane.photo and self.queue and target_pane.photo['id'] == self.queue[0]['id']:
-            origin = right.pos(); rect = right.geometry().translated(-self.photos[1].viewport().mapTo(self.centralWidget(), QPoint(0, 0)))
-            destination = self.photos[0].viewport().mapTo(self.centralWidget(), rect.topLeft()); item = target_pane.item; item.setOpacity(0)
+            origin = right.geometry(); rect = target_pane.content_rect()
+            destination = QRect(target_pane.viewport().mapTo(self.centralWidget(), rect.topLeft()), rect.size())
+            item = target_pane.item; item.setOpacity(0)
             def glide(t, g=right):
-                g.move(origin + (destination - origin) * t)
+                g.setGeometry(QRect(round(origin.x() + (destination.x() - origin.x()) * t),
+                                    round(origin.y() + (destination.y() - origin.y()) * t),
+                                    round(origin.width() + (destination.width() - origin.width()) * t),
+                                    round(origin.height() + (destination.height() - origin.height()) * t)))
             def landed(g=right, item=item):
                 if target_pane.item is item: item.setOpacity(1)
                 g.deleteLater()

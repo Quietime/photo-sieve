@@ -25,6 +25,25 @@ class WheelZoomTest(unittest.TestCase):
         self.wheel()
         self.assertEqual(self.view.transform().m11(), before)
         self.assertEqual(self.view.mapToScene(QPoint(240,190)), point)
+    def test_comparison_is_smaller_after_resize_and_zoom_reset(self):
+        comparison = PhotoView(fit_factor=.6); comparison.show()
+        try:
+            for dimensions in ((1000, 750), (750, 1000)):
+                pixmap = QPixmap(*dimensions); pixmap.fill(QColor('blue'))
+                for size in ((600, 480), (420, 320)):
+                    self.view.resize(*size); comparison.resize(*size); application.processEvents()
+                    self.view.show_photo({'id': 1}, pixmap); comparison.show_photo({'id': 2}, pixmap)
+                    self.assertAlmostEqual(comparison.transform().m11() / self.view.transform().m11(), .6)
+                    rect = comparison.content_rect()
+                    self.assertLess((rect.center() - comparison.viewport().rect().center()).manhattanLength(), 4)
+                    comparison.source_width = 2000; comparison.zoom_at()
+                    comparison.zoom_animation.setCurrentTime(comparison.zoom_animation.duration())
+                    self.assertAlmostEqual(comparison.transform().m11(), 2000 / dimensions[0])
+                    comparison.unzoom(lambda: None)
+                    comparison.zoom_animation.setCurrentTime(comparison.zoom_animation.duration())
+                    self.assertAlmostEqual(comparison.transform().m11() / self.view.transform().m11(), .6)
+        finally:
+            comparison.close(); comparison.deleteLater(); application.processEvents()
     def test_wheel_zooms_around_cursor_and_returns_with_reverse_delta(self):
         self.zoomed();before = self.view.transform().m11();anchor = self.view.mapToScene(QPoint(240,190))
         self.wheel();self.assertAlmostEqual(self.view.transform().m11(), before*1.2)
