@@ -111,17 +111,32 @@ class AppleButton(QPushButton):
 
 
 class GlassSurface(QFrame):
-    """A solid deep-blue surface; current photos never alter its background."""
+    """A restrained navy glass surface with stable colour and a soft specular rim."""
     def __init__(self,parent=None):
         super().__init__(parent);self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
     def set_sources(self,pixmaps):
-        # Solid surfaces deliberately do not pick up photograph colours.
+        # Keep the navy tint stable rather than mixing the current photograph into it.
         return
     def paintEvent(self,event):
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect=QRectF(self.rect()).adjusted(1,1,-1,-1)
-        painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor('#000000' if theme.HIGH_CONTRAST else theme.ELEVATED))
-        painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
+        rect=QRectF(self.rect()).adjusted(1,1,-1,-1);radius=rect.height()/2
+        path=QPainterPath();path.addRoundedRect(rect,radius,radius)
+        base=QColor('#000000' if theme.HIGH_CONTRAST else theme.ELEVATED)
+        if not theme.HIGH_CONTRAST and not theme.REDUCED_TRANSPARENCY:base.setAlpha(235)
+        painter.fillPath(path,base)
+        if theme.HIGH_CONTRAST:
+            painter.setPen(QPen(QColor('#FFFFFF'),1.5));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawPath(path);return
+        # Two small gradients provide depth without photo tinting, blur or
+        # continually animated shaders. Their colour remains a muted navy.
+        light=QLinearGradient(rect.topLeft(),rect.bottomLeft())
+        light.setColorAt(0,QColor(255,255,255,27));light.setColorAt(.48,QColor(255,255,255,3));light.setColorAt(1,QColor(0,0,0,15))
+        painter.fillPath(path,light)
+        rim=QLinearGradient(rect.topLeft(),rect.bottomLeft())
+        rim.setColorAt(0,QColor(210,230,250,82));rim.setColorAt(.5,QColor(210,230,250,15));rim.setColorAt(1,QColor(210,230,250,31))
+        painter.setPen(QPen(rim,.8));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawPath(path)
+        inner=QLinearGradient(rect.topLeft(),rect.bottomLeft())
+        inner.setColorAt(0,QColor(255,255,255,30));inner.setColorAt(.6,QColor(255,255,255,0))
+        painter.setPen(QPen(inner,.6));painter.drawRoundedRect(rect.adjusted(1.5,1.5,-1.5,-1.5),max(0,radius-1.5),max(0,radius-1.5))
 
 
 class GlassDock(GlassSurface):

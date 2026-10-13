@@ -8,14 +8,14 @@ from PySide6.QtCore import QEasingCurve, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from shiboken6 import isValid
 
-BG = '#202C40'
-ELEVATED = '#193654'
-ELEVATED2 = '#24476A'
-ELEVATED3 = '#305A82'
-SEPARATOR = '#4A4B53'
+BG = '#303030'
+ELEVATED = '#263A4B'
+ELEVATED2 = '#35516B'
+ELEVATED3 = '#426480'
+SEPARATOR = '#4A4A4A'
 LABEL = '#F5F5F7'
-SECONDARY = '#B0B2BB'
-TERTIARY = '#858892'
+SECONDARY = '#B3B3B3'
+TERTIARY = '#858585'
 BLUE = '#0A84FF'
 BLUE_HOVER = '#409CFF'
 BLUE_PRESSED = '#0066CC'
@@ -59,6 +59,9 @@ def configure_accessibility(settings):
 
 STYLE = f'''
 QWidget {{ background:{BG}; color:{LABEL}; font-family:{FONT}; font-size:14px; }}
+QWidget#windowChrome {{ background:#252525; }}
+QWidget#workspaceToolbar {{ background:#292929; border-bottom:1px solid #3A3A3A; }}
+QWidget#windowChrome QWidget, QWidget#workspaceToolbar QWidget {{ background:transparent; }}
 QLabel {{ background:transparent; }}
 QLabel#title {{ font-size:17px; font-weight:600; }}
 QLabel#subtitle, QLabel#caption {{ color:{SECONDARY}; font-size:12px; }}

@@ -29,12 +29,13 @@ class ApplePrimitivesTest(unittest.TestCase):
         self.assertEqual((self.keep.symbol,self.keep.text(),self.keep.shortcut),('keep','保留','P'))
         self.assertIn('P / ↑',self.keep.toolTip());self.assertEqual(self.keep.accessibleName(),'保留')
         self.assertIn('P',self.keep.accessibleDescription())
-    def test_surface_is_solid_and_never_tinted_by_the_current_photo(self):
+    def test_navy_glass_is_never_tinted_by_the_current_photo(self):
         self.dock.set_sources([self.image('red')]);first=self.dock.grab().toImage()
         self.dock.set_sources([self.image('blue')]);second=self.dock.grab().toImage()
         for point in ((15,24),(200,3),(200,44)):
             self.assertEqual(first.pixelColor(*point),second.pixelColor(*point))
-        self.assertEqual(first.pixelColor(15,24),QColor(theme.ELEVATED))
+        self.assertGreater(first.pixelColor(15,24).blue(),first.pixelColor(15,24).red())
+        self.assertGreater(first.pixelColor(200,3).lightness(),first.pixelColor(200,44).lightness())
     def test_opaque_fallback_removes_photo_tint(self):
         theme.REDUCED_TRANSPARENCY=True
         self.dock.set_sources([self.image('red')]);first=self.dock.grab().toImage().pixelColor(15,24)

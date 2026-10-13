@@ -303,7 +303,7 @@ class Window(QMainWindow):
     def build(self):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
         self.window_chrome=TitleBar(self,'照片快筛',main=True); outer.addWidget(self.window_chrome)
-        bar = QWidget(); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(24, 16, 24, 16); top.setSpacing(16)
+        bar = QWidget(); bar.setObjectName('workspaceToolbar'); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(24, 16, 24, 16); top.setSpacing(16)
         left = QWidget(); titles = QVBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(1)
         left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
