@@ -5,7 +5,7 @@ import json
 from PySide6.QtCore import Signal, QTimer
 from PySide6.QtGui import QKeySequence
 from ui_shell import QDialog
-from PySide6.QtWidgets import  QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import  QGridLayout, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget, QScrollArea
 
 # id, label, default keys, repeats while held (↑ ↓ → ← follow the keyboard repeat rate, about 30 per second on Windows)
 ACTIONS = [
@@ -27,15 +27,15 @@ def normal(text):
     return sequence.toString(QKeySequence.SequenceFormat.PortableText) if sequence.count() == 1 else ''
 
 
-def defaults():
-    return {action: [normal(key) for key in keys] + [''] * (SLOTS - len(keys)) for action, _, keys, _ in ACTIONS}
+def defaults(actions=ACTIONS):
+    return {action: [normal(key) for key in keys] + [''] * (SLOTS - len(keys)) for action, _, keys, _ in actions}
 
 
-def load(settings):
-    chosen = defaults()
+def load(settings, actions=ACTIONS, prefix='shortcuts/'):
+    chosen = defaults(actions)
     for action in chosen:
         try:
-            stored = json.loads(settings.value('shortcuts/' + action, '') or 'null')
+            stored = json.loads(settings.value(prefix + action, '') or 'null')
         except (TypeError, ValueError):
             stored = None
         if isinstance(stored, list):
@@ -44,9 +44,9 @@ def load(settings):
     return chosen
 
 
-def save(settings, chosen):
+def save(settings, chosen, prefix='shortcuts/'):
     for action, keys in chosen.items():
-        settings.setValue('shortcuts/' + action, json.dumps([key for key in keys if key]))
+        settings.setValue(prefix + action, json.dumps([key for key in keys if key]))
     settings.sync()
 
 
@@ -75,24 +75,25 @@ class ShortcutDialog(QDialog):
     """Settings sheet: press the key you want in a field; its clear button empties it. Duplicates are shown and cannot be saved."""
     saved = Signal(dict)
 
-    def __init__(self, parent, chosen):
-        super().__init__(parent); self.setWindowTitle('快捷键'); self.setModal(True); self.setMinimumWidth(520)
+    def __init__(self, parent, chosen, actions=ACTIONS, title_text="快捷键", description=None):
+        self.actions=actions
+        super().__init__(parent); self.setWindowTitle(title_text); self.setModal(True); self.setMinimumWidth(520)
         layout = QVBoxLayout(self); layout.setContentsMargins(24, 22, 24, 20); layout.setSpacing(12)
-        title = QLabel('快捷键'); title.setObjectName('heading'); layout.addWidget(title)
-        hint = QLabel('点一下输入框，再按下想用的键。每个操作可以设两个键，也可以全部留空，仅用按钮。恢复最近删除仅恢复删除；撤回上一步也可撤回保留。')
+        title = QLabel(title_text); title.setObjectName('heading'); layout.addWidget(title)
+        hint = QLabel(description or '点一下输入框，再按下想用的键。每个操作可以设两个键，也可以全部留空，仅用按钮。恢复最近删除仅恢复删除；撤回上一步也可撤回保留。')
         hint.setObjectName('caption'); hint.setWordWrap(True); layout.addWidget(hint)
         grid = QGridLayout(); grid.setHorizontalSpacing(10); grid.setVerticalSpacing(8)
         for column, text in ((1, '按键'), (2, '备用按键')):
             heading = QLabel(text); heading.setObjectName('caption'); grid.addWidget(heading, 0, column)
         self.fields = {}
-        for row, (action, name, _, _) in enumerate(ACTIONS, 1):
+        for row, (action, name, _, _) in enumerate(self.actions, 1):
             grid.addWidget(QLabel(name), row, 0)
             for slot in range(SLOTS):
                 field = QKeySequenceEdit(QKeySequence(chosen[action][slot])); field.setMaximumSequenceLength(1)
                 field.setClearButtonEnabled(True); field.setMinimumWidth(170); field.keySequenceChanged.connect(self.check)
                 field.findChild(QLineEdit).setPlaceholderText('未设置')   # Qt's own hint is in English
                 grid.addWidget(field, row, 1 + slot); self.fields[action, slot] = field
-        layout.addLayout(grid)
+        content=QWidget();content.setLayout(grid);scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(content);scroll.setMinimumHeight(240);scroll.setMaximumHeight(420);layout.addWidget(scroll)
         self.problem = QLabel(); self.problem.setStyleSheet('color:#FF453A; font-size:12px;'); self.problem.setWordWrap(True); layout.addWidget(self.problem)
         buttons = QHBoxLayout()
         reset = QPushButton('恢复默认'); reset.setObjectName('plain'); reset.clicked.connect(self.reset); buttons.addWidget(reset)
@@ -104,14 +105,14 @@ class ShortcutDialog(QDialog):
 
     def chosen(self):
         result = {}
-        for action, _, _, _ in ACTIONS:
+        for action, _, _, _ in self.actions:
             keys = [normal(self.fields[action, slot].keySequence().toString(QKeySequence.SequenceFormat.PortableText)) for slot in range(SLOTS)]
             result[action] = [key for key in keys if key] + [''] * keys.count('')
         return result
 
     def check(self, *_):
         chosen = self.chosen(); clashes = conflicts(chosen)
-        names = {action: name for action, name, _, _ in ACTIONS}
+        names = {action: name for action, name, _, _ in self.actions}
         missing = []  # every action can be button-only
         for (action, slot), field in self.fields.items():
             line=field.findChild(QLineEdit); line.setPlaceholderText('未设置')
@@ -131,7 +132,7 @@ class ShortcutDialog(QDialog):
 
     def reset(self):
         for (action, slot), field in self.fields.items():
-            field.setKeySequence(QKeySequence(defaults()[action][slot]))
+            field.setKeySequence(QKeySequence(defaults(self.actions)[action][slot]))
 
     def accept_keys(self):
         self.check()

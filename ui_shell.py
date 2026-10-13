@@ -241,10 +241,13 @@ class SettingsPanel(QFrame):
     def showEvent(self,event):
         QApplication.instance().installEventFilter(self)
         for shortcut in getattr(self.host,'shortcuts',[]): shortcut.setEnabled(False)
+        for shortcut in getattr(getattr(self.host,'rating_page',None),'shortcut_objects',[]):shortcut.setEnabled(False)
         super().showEvent(event)
     def hideEvent(self,event):
         QApplication.instance().removeEventFilter(self)
-        for shortcut in getattr(self.host,'shortcuts',[]): shortcut.setEnabled(True)
+        if hasattr(self.host,'sync_shortcut_mode'):self.host.sync_shortcut_mode()
+        else:
+            for shortcut in getattr(self.host,'shortcuts',[]): shortcut.setEnabled(True)
         super().hideEvent(event)
     def eventFilter(self,watched,event):
         if event.type()==QEvent.Type.MouseButtonPress and event.button()==Qt.MouseButton.LeftButton:

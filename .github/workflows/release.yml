@@ -30,6 +30,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tests/desktop_check.py
+      - name: Test real Windows ratings and independent grading interface
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_ratings.py ratings-ui-ci
       - name: Test update UI idle and restart behavior
         env:
           QT_QPA_PLATFORM: offscreen
@@ -66,6 +70,7 @@ jobs:
           path: |
             windows-chrome-ci.json
             ui-screenshots-ci/*
+            ratings-ui-ci/*
             folder-icons-ci.json
             large-import-*-ci.*
             large-import-*-ci-*.png
@@ -78,6 +83,12 @@ jobs:
         run: python tools/check_performance.py --output performance-ci.json
       - name: Build native EXE
         run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
+      - name: Verify frozen isolated Windows rating helpers
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--rating-self-test', 'frozen-ratings-ci.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Frozen system ratings failed' }
+          if (!(Get-Content frozen-ratings-ci.json -Raw | ConvertFrom-Json).ok) { throw 'Frozen ratings verification failed' }
       - name: Verify normal frozen startup, real folder picker and repeated RAW switches
         env:
           QT_QPA_PLATFORM: windows
@@ -88,6 +99,7 @@ jobs:
         with:
           name: Windows-normal-runtime-diagnostics
           path: |
+            frozen-ratings-ci.json
             frozen-runtime-ci.json
             frozen-runtime-ci-*.png
             frozen-runtime-ci-logs/**
@@ -129,6 +141,7 @@ jobs:
             windows-chrome-ci.json
             performance-ci.json
             ui-screenshots-ci/*
+            ratings-ui-ci/*
             ui-screenshots-windows/*
           retention-days: 14
       - name: Publish a new version to GitHub Releases

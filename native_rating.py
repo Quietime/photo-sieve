@@ -14,17 +14,18 @@ def value_from_stars(stars):
     if isinstance(stars,bool) or not isinstance(stars,int) or not 0<=stars<=5:raise RatingError('星级必须为 0～5')
     return VALUES[stars]
 
-def operate(path,stars=None):
+def operate(path,stars=None,expected=None):
     if os.name!='nt':raise RatingError('Windows 系统评级只能在 Windows 上读写')
     import pythoncom
     from win32com.propsys import propsys,pscon
     path=str(Path(path).resolve())
     pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
-    store=writer=None
+    store=writer=capabilities=None
     try:
         store=propsys.SHGetPropertyStoreFromParsingName(path,None,0)
         raw=store.GetValue(pscon.PKEY_Rating).GetValue()
         before=stars_from_value(raw)
+        if expected is not None and before!=expected:raise RatingError('Windows 星级已被改变，不能覆盖外部修改来撤销评级')
         store=None
         writable=False;reason=''
         try:
@@ -43,5 +44,7 @@ def operate(path,stars=None):
             raw=store.GetValue(pscon.PKEY_Rating).GetValue()
             if stars_from_value(raw)!=stars:raise RatingError('Windows 写入后的星级验证未通过')
         return {'stars':stars_from_value(raw),'value':int(raw or 0),'before':before,'writable':writable,'reason':reason}
+    except pythoncom.com_error as exc:
+        raise RatingError('Windows 无法读取此格式的系统星级；请检查对应的文件属性处理器（错误码 '+hex(exc.hresult & 0xffffffff)+'）') from exc
     finally:
-        store=writer=None;pythoncom.CoUninitialize()
+        store=writer=capabilities=None;pythoncom.CoUninitialize()

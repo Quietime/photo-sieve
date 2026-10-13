@@ -35,6 +35,7 @@ from cache_policy import prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
 from filmstrip import Filmstrip
 from photo_grid import PhotoGrid
+from rating_page import RatingPage
 from window_frame import WindowFrame
 from version import APP_VERSION
 from update_ui import UpdateController
@@ -192,6 +193,7 @@ class Window(QMainWindow):
         self.previous_library=QSettings('PhotoSieve','PhotoSieve').value('library','')
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint); self.setWindowIcon(app_icon())
         settings=QSettings('PhotoSieve','PhotoSieve')
+        self.rating_active=False
         self.actionbar_visible=settings.value('show_actionbar',True,type=bool)
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
@@ -264,6 +266,7 @@ class Window(QMainWindow):
                                      (self.restore_button, 'restore', '恢复'), (self.next_button, 'next', '下一张')):
             button.setText(text); button.symbol=action; button.variant='dock'
             button.set_shortcut(keys.first(chosen, action), ' / '.join(keys.label(key) for key in chosen[action] if key))
+        self.sync_shortcut_mode()
         hint = ('或按 ' + keys.first(chosen, 'restore') + ' ') if keys.first(chosen, 'restore') else ''
         self.deleted_note.setText('照片暂存在 .photo-sieve-trash 中。双击' + hint + '恢复；彻底删除后无法撤回。')
 
@@ -271,11 +274,29 @@ class Window(QMainWindow):
         return keys.first(self.chosen_keys, action) or ('再次单击图片' if action=='unzoom' else '恢复按钮')
 
     def edit_shortcuts(self):
+        if self.rating_active:self.rating_page.edit_keys();return
         self.updates.touch()
         dialog = keys.ShortcutDialog(self, self.chosen_keys)
         def saved(chosen):
             keys.save(QSettings('PhotoSieve', 'PhotoSieve'), chosen); self.apply_shortcuts(chosen); self.toast.show_message('快捷键已更新', 'info')
         dialog.saved.connect(saved); dialog.exec()
+
+    def sync_shortcut_mode(self):
+        menu_open=bool(getattr(self,'more_panel',None) and self.more_panel.isVisible())
+        for shortcut in getattr(self,'shortcuts',[]):shortcut.setEnabled(not self.rating_active and not menu_open)
+        for shortcut in self.rating_page.shortcut_objects:shortcut.setEnabled(self.rating_active and not menu_open)
+
+    def toggle_rating(self):
+        if self.busy or self.pending_ops or self.job_running():return
+        if getattr(self,'more_panel',None):self.more_panel.hide()
+        self.rating_active=not self.rating_active;self.segments.setVisible(not self.rating_active)
+        self.rating_button.setText('返回照片筛选' if self.rating_active else '照片分级')
+        if self.rating_active:
+            self.generation+=1;self.fetching=False;self.reset_zoom();self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate()
+        else:
+            self.rating_page.deactivate();self.stack.setCurrentIndex(2 if not self.session_active else 1 if self.view=='deleted' else 4 if self.view=='keep' else 0)
+            if self.session_active:self.load(anchor=max(0,self.cursor_id-1))
+        self.sync_shortcut_mode();self.update_actions();self.place_overlays()
 
     # ---- infrastructure -------------------------------------------------
     def submit(self, fn, ok=lambda _: None, fail=None, pool=None, priority=0):
@@ -314,6 +335,7 @@ class Window(QMainWindow):
         self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
         right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
+        self.rating_button=self.button('照片分级',self.toggle_rating);tools.addWidget(self.rating_button)
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
         self.export_button = self.button('导出', self.export_dialog, 'primary'); self.export_button.symbol='export'; tools.addWidget(self.export_button)
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
@@ -352,6 +374,7 @@ class Window(QMainWindow):
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
         self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(100)
         self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.strip.enable_mixed_layout()
         self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.strip.itemClicked.connect(self.strip_select); column.addWidget(self.strip)
         self.strip.icon_for=lambda pid:QIcon(self.thumbnail(pid)) if self.thumbnail(pid) is not None else self.placeholder
         self.strip.horizontalScrollBar().valueChanged.connect(self.load_strip_thumbnails)
@@ -391,6 +414,8 @@ class Window(QMainWindow):
         self.kept_note=QLabel('已保留照片 · 单击缩略图查看大图，右上角可导出全部保留照片');self.kept_note.setObjectName('caption');kept_layout.addWidget(self.kept_note)
         self.stack.addWidget(kept)
 
+        self.rating_page=RatingPage(self);self.stack.addWidget(self.rating_page)
+
         self.toast = Toast(root)
         self.toast.positioner=self.place_overlays
         grip_row=QHBoxLayout(); grip_row.setContentsMargins(0,0,2,2); grip_row.addStretch(); grip_row.addWidget(QSizeGrip(self)); outer.addLayout(grip_row)
@@ -401,14 +426,14 @@ class Window(QMainWindow):
         if getattr(self,'more_panel',None): self.more_panel.deleteLater()
         menu = self.more_panel = SettingsPanel(self,self.more_button)
         menu.addSection('照片管理', '整理当前文件夹中的照片')
-        ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(self.session_active and not self.busy);ordering.triggered.connect(self.edit_ordering)
+        ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(self.session_active and not self.busy and not self.rating_active);ordering.triggered.connect(self.edit_ordering)
         rescan=menu.addAction('重新扫描当前文件夹');root=self.state_data and self.state_data.get('root')
-        rescan.setEnabled(bool(root) and not self.busy);rescan.triggered.connect(lambda:self.scan(root))
-        undo=menu.addAction('撤回上一步');undo.setEnabled(self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
-        undo.triggered.connect(lambda:self.restore(general=True))
+        rescan.setEnabled(bool(root) and not self.busy and not self.pending_ops);rescan.triggered.connect(lambda:self.scan(root))
+        undo=menu.addAction('撤销评级' if self.rating_active else '撤回上一步');undo.setEnabled(self.rating_page.undo_button.isEnabled() if self.rating_active else self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
+        undo.triggered.connect(lambda:self.rating_page.undo() if self.rating_active else self.restore(general=True))
         menu.addSection('界面与操作', '调整显示方式和键盘操作')
         dock=QAction('显示底部操作栏',menu);dock.setCheckable(True);dock.setChecked(self.actionbar_visible)
-        dock.toggled.connect(self.set_actionbar_visible);menu.addAction(dock)
+        dock.toggled.connect(self.set_actionbar_visible);dock.setEnabled(not self.rating_active);menu.addAction(dock)
         menu.addAction('快捷键…').triggered.connect(self.edit_shortcuts)
         fps=QAction('显示帧率',menu);fps.setCheckable(True);fps.setChecked(self.fps_label is not None);fps.toggled.connect(self.show_fps);menu.addAction(fps)
         reduced=QAction('减少动态效果',menu);reduced.setCheckable(True);reduced.setChecked(theme.REDUCED_MOTION)
@@ -557,7 +582,7 @@ class Window(QMainWindow):
             self.state_pending = False
             if library is not self.library: self.poll(); return
             if not self.session_active:
-                self.state_data = dict(state, root='', cursor=0, counts={}); self.counts={}; self.stack.setCurrentIndex(2); self.show_counts(); self.update_actions(); return
+                self.state_data = dict(state, root='', cursor=0, counts={}); self.counts={}; self.stack.setCurrentIndex(5 if self.rating_active else 2); self.show_counts(); self.update_actions(); return
             first = self.state_data is None; old = self.state_data; self.state_data = state; job = state['job']; running = job['running']
             if not self.pending_ops: self.counts = dict(state['counts'])
             self.show_counts()
@@ -568,6 +593,8 @@ class Window(QMainWindow):
                 if running:
                     self.timer.start(180);self.progress.set_progress(job['done'],job['total']);self.was_running=True;self.update_actions();return
                 self.importing=False;self.busy=False;self.stack.setCurrentIndex(1 if self.view=='deleted' else 4 if self.view=='keep' else 0);self.keep_back_button.hide();self.place_overlays()
+                if self.rating_active:
+                    self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate();self.timer.stop();self.progress.set_progress(0,0,False);self.was_running=False;self.update_actions();return
                 self.toast.hide();self.load(anchor=max(0,state['cursor']-1))
                 self.timer.stop();self.progress.set_progress(0,0,False)
                 self.was_running=False;self.update_actions()
@@ -578,6 +605,8 @@ class Window(QMainWindow):
                 self.progress.set_progress(job['done'], job['total'])
             else:
                 self.timer.stop(); self.progress.set_progress(0, 0, False)
+            if self.rating_active:
+                self.was_running=running;self.update_actions();return
             if first:
                 self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 4 if self.view=='keep' else 0)); self.place_overlays()
                 if state['root'] or running: self.load(anchor=max(0, state['cursor'] - 1))
@@ -624,6 +653,7 @@ class Window(QMainWindow):
 
     # ---- queue ------------------------------------------------------------
     def switch(self, view):
+        if self.rating_active:return
         self.updates.touch()
         if self.busy or view == self.view and not self.fetching: self.segments.set_current(self.view); return
         self.reset_zoom(); self.view = view; self.segments.set_current(view)
@@ -632,6 +662,7 @@ class Window(QMainWindow):
         self.place_overlays(); self.load(); self.refresh_state(0)
 
     def load(self, anchor=0, target_id=None):
+        if self.rating_active:return
         self.generation += 1; generation = self.generation; view = self.view; library = self.library
         # Previews that failed (a disconnected drive, say) are retried whenever the queue reloads.
         self.fetching = True; self.queue = []; self.image_errors.clear(); self.update_actions(); self.update_display_size()
@@ -725,6 +756,7 @@ class Window(QMainWindow):
             self.cache.pop(old); self.cache_size.pop(old,None); self.sources.pop(old,None)
 
     def prefetch(self):
+        if self.rating_active:return
         if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or self.display_size is None: return
         self.refill()  # custom horizons can exceed the first 1,200 metadata rows
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
@@ -836,11 +868,15 @@ class Window(QMainWindow):
         row=self.strip.index_of(pid)
         if row>=0:
             preview=self.thumbnail(pid)
+            self.strip.set_preview_width(pid,preview)
             if self.queue and pid==self.queue[0]['id']:self.strip.adapt_to_preview(preview)
             self.strip.photo_model.changed(row)
         self.refresh_chrome()
 
     def update_actions(self):
+        self.rating_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running())
+        if self.rating_active and self.rating_page.writing:
+            self.open_button.setEnabled(False);self.export_button.setEnabled(False);return
         running = self.job_running(); reviewing = self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4)
         allowed = bool(self.queue) and self.ready() and not self.busy and not running and reviewing
         for button, enabled in [(self.keep_button, allowed and self.queue[0]['status']!=1), (self.delete_button, allowed),
@@ -918,6 +954,7 @@ class Window(QMainWindow):
 
     # ---- actions ------------------------------------------------------------
     def act(self, action):
+        if self.rating_active:return
         self.updates.touch()
         if action not in ('keep', 'delete') or self.closing or self.view=='keep' and self.stack.currentIndex()==4: return
         if not (self.keep_button if action=='keep' else self.delete_button).isEnabled():
@@ -944,6 +981,7 @@ class Window(QMainWindow):
         self.op((lambda: library.mark(pid, 1)) if action == 'keep' else (lambda: library.trash(pid)), done, failed)
 
     def next_photo(self):
+        if self.rating_active:return
         self.updates.touch()
         if self.busy or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or not self.queue: return
         ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
@@ -1087,6 +1125,7 @@ class Window(QMainWindow):
         self.submit(lambda: full_qimage(library.preview_image(pid, 0)), loaded, failed, self.detail_pool)
 
     def focus_left(self):
+        if self.rating_active:return
         if self.queue and self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4): self.focus(self.queue[0])
 
     def save_cursor(self):
@@ -1134,6 +1173,8 @@ class Window(QMainWindow):
         if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
 
     def scan(self, folder=None):
+        if self.rating_page.writing:return
+        self.rating_page.deactivate()
         if folder is None: self.choose_source(); return
         if self.busy: return
         folder = str(folder); self.session_active=True; self.state_data=None; current = self.library.meta('root')
@@ -1382,6 +1423,7 @@ class Window(QMainWindow):
             if box.clickedButton() not in (keep,forget): event.ignore(); self.closing=False; self.uninstall_requested=False; return
             self.close_choice='keep' if box.clickedButton() is keep else 'forget'
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
+        self.rating_page.shutdown()
         self.closed = True
         self.op_pool.waitForDone()
         for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()

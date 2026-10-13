@@ -5,6 +5,9 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    if len(sys.argv)==3 and sys.argv[1]=='--rating-self-test':
+        from rating_diagnostics import run
+        sys.exit(run(sys.argv[2]))
     if len(sys.argv)==4 and sys.argv[1]=='--crash-watch':
         from crashlog import watch_process
         sys.exit(watch_process(int(sys.argv[2]),sys.argv[3]))

@@ -22,3 +22,6 @@ workspaces/
 folder-icons-ci.json
 large-import-*-ci.*
 large-import-*-ci-*.png
+
+windows-rating-probe.json
+ratings-*-ci*
