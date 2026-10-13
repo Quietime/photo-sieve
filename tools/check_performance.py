@@ -46,7 +46,9 @@ def rss_mb():
 
 def run(args):
     from PIL import Image
-    from PySide6.QtCore import QSettings, QTimer, Qt
+    from PySide6.QtCore import QSettings, QTimer, Qt, QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from app import Library
     from cache_policy import MAX_BYTES, prune_workspaces, expire_inactive_workspaces
@@ -141,12 +143,31 @@ def run(args):
             report['checks']['rapid_review']={'operations':80,'deleted':40,'kept':40,
                                                'elapsed_seconds':round(time.perf_counter()-begin,3),'maximum_record_backlog':backlog,
                                                'handler':distribution(handler)}
+            def held_restore(key,modifier,field):
+                window.activateWindow();window.setFocus();events=[0];maximum=[0]
+                timer=QTimer();timer.setTimerType(Qt.TimerType.PreciseTimer);timer.setInterval(25)
+                def repeated():
+                    events[0]+=1
+                    application.sendEvent(window,QKeyEvent(QEvent.Type.KeyPress,key,modifier,'',True))
+                    maximum[0]=max(maximum[0],window.pending_ops)
+                timer.timeout.connect(repeated)
+                QTest.keyPress(window,key,modifier);timer.start()
+                try:until(lambda:library.state()['counts'][field]==0)
+                finally:timer.stop();QTest.keyRelease(window,key,modifier)
+                until(lambda:not window.pending_ops and not window.restore_running)
+                stopped=library.state()['counts'];QTest.qWait(120)
+                assert library.state()['counts']==stopped,'Releasing the key must stop further restoration'
+                assert maximum[0]<=1,'Held restoration must never queue a backlog'
+                return {'repeat_events':events[0],'maximum_record_backlog':maximum[0],'release_stops':True}
             begin=time.perf_counter()
-            for _ in range(40): window.restore()
-            until(lambda:not window.pending_ops)
+            restore_flow=held_restore(Qt.Key.Key_Left,Qt.KeyboardModifier.NoModifier,'deleted')
             assert library.state()['counts']['deleted']==0
             assert all((photos/f'{pid:06}.jpg').is_file() for pid in initial)
-            report['checks']['rapid_restore']={'restored':40,'elapsed_seconds':round(time.perf_counter()-begin,3)}
+            report['checks']['rapid_restore']={'restored':40,'elapsed_seconds':round(time.perf_counter()-begin,3),**restore_flow}
+            begin=time.perf_counter()
+            undo_flow=held_restore(Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier,'keep')
+            assert library.state()['counts']['keep']==0
+            report['checks']['held_control_z']={'undone_keeps':40,'elapsed_seconds':round(time.perf_counter()-begin,3),**undo_flow}
 
             # Repeated resizes must converge to the final pane size, bounded by the chosen horizon.
             begin=time.perf_counter(); previous_size=window.display_size
@@ -189,7 +210,7 @@ def run(args):
             report['checks']['global_cache_budget']={'configured_bytes':MAX_BYTES,'scaled_bytes':3*4096,'removed_in_one_pass':removed,'oldest_first':True,'originals_preserved':True}
 
             # Diagnostic-only legacy indexed housekeeping helper and real records: mature kept previews expire, recent ones survive.
-            kept_id=initial[1]; row=library.photo(kept_id)
+            kept_id=initial[1];library.mark(kept_id,1); row=library.photo(kept_id)
             library.preview(kept_id,1600)
             old=library.cache_path(Path(row['path']),row['size'],row['mtime'],320)
             fresh=library.cache_path(Path(row['path']),row['size'],row['mtime'],1600)

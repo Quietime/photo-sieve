@@ -958,17 +958,30 @@ class Window(QMainWindow):
     def restore(self, photo_id=None, general=False):
         self.updates.touch()
         if not self.session_active or self.busy or self.closing or self.restore_running: return
+        if photo_id is None and not self.pending_ops:
+            if general and self.state_data and not self.state_data.get('can_undo'):return
+            if not general and self.counts.get('deleted')==0:return
         self.restore_running=True
         library = self.library; generation = self.generation
         def work():
             result = library.undo(only_delete=not general, photo_id=photo_id)
             try: result['photo'] = library.public(library.photo(result['id']))
             except Exception: result['photo'] = None
+            with library.connect() as db:result['can_undo']=bool(db.execute('SELECT 1 FROM history LIMIT 1').fetchone())
             return result
         def done(result):
             self.restore_running=False
             if generation != self.generation: return
             pid = result['id']; photo = result['photo']; self.delete_streak = 0;self.refresh_strip()
+            if self.state_data is not None:self.state_data['can_undo']=result['can_undo']
+            if self.counts and photo:
+                destination='keep' if photo['status']==1 else 'pending'
+                if result.get('restored'):
+                    self.counts['deleted']=max(0,self.counts.get('deleted',0)-1);self.counts['all']=self.counts.get('all',0)+1
+                else:
+                    source='pending' if destination=='keep' else 'keep';self.counts[source]=max(0,self.counts.get(source,0)-1)
+                self.counts[destination]=self.counts.get(destination,0)+1;self.refresh_chrome()
+
             if pid in self.deleted_items:
                 self.deleted_grid.takeItem(self.deleted_grid.row(self.deleted_items.pop(pid)))
                 self.deleted_rows = [p for p in self.deleted_rows if p['id'] != pid]
