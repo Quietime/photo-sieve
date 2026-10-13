@@ -93,9 +93,10 @@ class PhotoView(QGraphicsView):
     resized = Signal()
     zoom_changed = Signal()
 
-    def __init__(self, fit_factor=1.0):
+    def __init__(self, fit_factor=1.0, fit_height_factor=1.0):
         super().__init__()
         self.fit_factor = fit_factor
+        self.fit_height_factor = fit_height_factor
         self.setScene(QGraphicsScene(self)); self.item = None; self.text = None
         self.photo = None; self.pixmap = None; self.press = None
         self.detail = False; self.full_resolution = False; self.source_width = 0
@@ -131,7 +132,7 @@ class PhotoView(QGraphicsView):
     def fit_scale(self):
         rect = self.sceneRect(); view = self.viewport().size()
         if rect.width() <= 0 or rect.height() <= 0: return 1.0
-        scale = min(view.width() / rect.width(), view.height() / rect.height())
+        scale = min(view.width() / rect.width(), view.height() * self.fit_height_factor / rect.height())
         # A preview decoded for this pane size draws as a plain blit, without per-frame resampling.
         return (1.0 if 1.0 <= scale < 1.04 else scale) * self.fit_factor
 

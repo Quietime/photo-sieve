@@ -351,14 +351,15 @@ class Window(QMainWindow):
         pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
         for index in range(2):
             pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
-            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比（保留 / 删除不操作此图）')
+            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
+            role.setToolTip('保留 / 删除只操作左图，右图仅用于比较')
             role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22); pane.addWidget(role)
-            photo = PhotoView(fit_factor=1.0 if index == 0 else 0.6)
+            photo = PhotoView(fit_height_factor=1.0 if index == 0 else 0.6)
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
             name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
             detail = Elided('caption'); detail.setFixedHeight(20); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 1)
+            pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 2 if index == 0 else 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
         self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 10, 0, 8); actions.addStretch()
