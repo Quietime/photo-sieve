@@ -43,7 +43,8 @@ def main():
             try:
                 until(lambda:window.strip.count()==16 and window.keep_button.isEnabled());window.show();QTest.qWait(250)
                 until(lambda:all(pid in window.thumb_cache for pid in window.strip.visible_ids()))
-                QTest.qWait(250);window.grab().save(str(output/'mixed-filmstrip.png'))
+                until(lambda:not window.strip.layout_timer.isActive() and all(window.thumbnail(pid) is not None for pid in window.strip.visible_ids()))
+                window.grab().save(str(output/'mixed-filmstrip.png'))
                 for pid in window.strip.visible_ids():
                     rect=window.strip.visualRect(window.strip.photo_model.index(window.strip.index_of(pid)));pix=window.thumbnail(pid)
                     assert rect.width()>=round(68*pix.width()/pix.height()),(rect,pix.size())
@@ -53,12 +54,12 @@ def main():
                 window.toggle_rating();until(lambda:page.pid() is not None and page.star_buttons[0].isEnabled() and page.pane.pixmap is not None)
                 assert all(not key.isEnabled() for key in window.shortcuts);assert window.stack.currentIndex()==5
                 page.auto.setChecked(False);first=page.pid();path=Path(lib.photo(first)['path']);pixels=hashlib.sha256(Image.open(path).tobytes()).hexdigest()
-                window.activateWindow();page.setFocus();app.processEvents();QTest.keyClick(page,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
+                window.activateWindow();page.setFocus();app.processEvents();QTest.qWait(150);QTest.keyClick(page,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
                 if os.name=='nt':assert page.engine.run(path)['stars']==4
                 assert hashlib.sha256(Image.open(path).tobytes()).hexdigest()==pixels
                 assert lib.photo(first)['status']==1
                 report['checks'].append('rating_digit_shortcut_writes_native_stars_preserving_pixels_and_keep')
-                QTest.qWait(300);window.grab().save(str(output/'rating-all.png'))
+                until(lambda:all(pane.pixmap is not None for pane in page.panes));QTest.qWait(150);window.grab().save(str(output/'rating-all.png'))
                 assert len(page.panes)==2 and page.panes[1].photo['id']==page.ids[1]
                 page.toggle_gallery();until(lambda:all(pid in page.thumbs for pid in page.grid.visible_ids()));window.grab().save(str(output/'rating-gallery.png'));page.toggle_gallery()
                 assert page.star_buttons[3].shortcut=='4'

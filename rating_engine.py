@@ -2,6 +2,8 @@
 from concurrent.futures import ProcessPoolExecutor,TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 import faulthandler
+import logging
+from logging.handlers import RotatingFileHandler
 import multiprocessing
 import os
 from pathlib import Path
@@ -10,18 +12,23 @@ import time
 from native_rating import operate,RatingError
 
 FAULT_FILE=None
+LOGGER=logging.getLogger('native_rating_worker')
 
 def initialize(logs):
     global FAULT_FILE
     Path(logs).mkdir(parents=True,exist_ok=True)
     FAULT_FILE=open(Path(logs)/f'rating-worker-{os.getpid()}.fault.log','a',encoding='utf8')
     faulthandler.enable(file=FAULT_FILE,all_threads=True)
+    handler=RotatingFileHandler(Path(logs)/f'rating-worker-{os.getpid()}.log',maxBytes=2*1024*1024,backupCount=1,encoding='utf8');handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'));LOGGER.addHandler(handler);LOGGER.setLevel(logging.INFO)
 
 def job(path,stars,expected):
     faulthandler.dump_traceback_later(4 if stars is None else 10,repeat=True,file=FAULT_FILE)
     try:
         # The store itself checks expected stars before committing an undo.
-        return operate(path,stars,expected)
+        LOGGER.info('%s file=%s stars=%s','read' if stars is None else 'write',path,stars)
+        result=operate(path,stars,expected);LOGGER.info('verified stars=%s writable=%s',result['stars'],result['writable']);return result
+    except Exception:
+        LOGGER.exception('Windows rating handler failed');raise
     finally:faulthandler.cancel_dump_traceback_later()
 
 class RatingEngine:
