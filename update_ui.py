@@ -9,7 +9,7 @@ import os
 from PySide6.QtCore import QObject, Signal, QTimer, QSettings, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
-from ui_shell import QMessageBox
+from update_offer import UpdateOfferDialog
 from version import APP_VERSION
 import updater
 
@@ -78,17 +78,8 @@ class UpdateController(QObject):
         if accepted:self.download(release)
         else:self.show('已暂缓更新到 '+release['version']+'，可随时在 ⋯ 中检查更新',True)
     def ask(self,release):
-        box=QMessageBox(self.window);box.setWindowTitle('发现新版本')
-        box.setText(f"照片快筛 {release['version']} 已发布（当前 {APP_VERSION}）")
-        # The first few lines of the release notes, shortened; Qt's own details button would be labelled in English.
-        lines=[line.strip() for line in str(release.get('notes','')).splitlines() if line.strip()]
-        summary='\n'.join(line if len(line)<=46 else line[:45]+'…' for line in lines[:5])+('\n…' if len(lines)>5 else '')
-        box.setInformativeText('下载后自动安装并重启。照片、筛选记录和设置都会保留，装好后自动删除下载的安装包。'+('\n\n'+summary if summary else ''))
-        box.setStyleSheet('QLabel#qt_msgbox_label, QLabel#qt_msgbox_informativelabel { min-width: 420px; }')
-        accept=box.addButton('下载并更新',QMessageBox.ButtonRole.AcceptRole)
-        later=box.addButton('以后再说',QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(accept);box.setEscapeButton(later);box.exec()
-        return box.clickedButton() is accept
+        dialog=UpdateOfferDialog(release,self.window)
+        return dialog.exec()==UpdateOfferDialog.DialogCode.Accepted
     def download(self,release):
         if self.window.closed or self.running or self.staged or self.installing:return
         self.running=True;self.show('正在后台下载 '+release['version']+'，可以继续筛选',True)

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      checks:
+        description: Validation scope
+        type: choice
+        default: full
+        options: [full, update_ui]
 permissions:
   contents: write
 concurrency:
@@ -16,6 +22,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,16 +32,20 @@ jobs:
       - name: Install native dependencies
         run: python -m pip install -r requirements-desktop.txt 'pyinstaller>=6,<7'
       - name: Test library and updater
+        if: env.CHECK_SCOPE != 'update_ui'
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Test native interface, held keys and decoder processes
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tests/desktop_check.py
       - name: Test real Windows ratings and independent grading interface
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_ratings.py ratings-ui-ci
       - name: Verify grading at 150 percent Windows display scaling
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
@@ -43,27 +54,44 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_update_ui.py
+      - name: Verify changed update offer layout and interactions
+        if: env.CHECK_SCOPE == 'update_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_update_offer.py update-offer-ci
+      - name: Verify changed offer at 150 percent display scaling
+        if: env.CHECK_SCOPE == 'update_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_update_offer.py update-offer-hidpi-ci
       - name: Verify actual native Windows window frame and snapping support
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_windows_chrome.py
       - name: Open and screenshot every application interface
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_all_screens.py --output ui-screenshots-ci
       - name: Verify folder picker avoids RAW shell extensions
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_folder_icons.py --output folder-icons-ci.json
       - name: Verify 10 RAW import and full-resolution isolated decoding
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_large_import.py --photos 10 --output large-import-10-ci.json
       - name: Verify 16000 RAW import, real progress and bounded preloading
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_large_import.py --photos 16000 --output large-import-16000-ci.json
       - name: Verify native D3D11 compositor with RAW import and zoom
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_large_import.py --photos 10 --mode gpu --output large-import-gpu-ci.json
@@ -81,21 +109,35 @@ jobs:
             large-import-*-ci.*
             large-import-*-ci-*.png
             large-import-*-ci-logs/**
+            update-offer-ci/*
+            update-offer-hidpi-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Audit paging, review performance and cache limits
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_performance.py --output performance-ci.json
       - name: Build native EXE
         run: python -m PyInstaller --noconfirm --clean photo-sieve.spec
+      - name: Verify changed offer in packaged EXE
+        if: env.CHECK_SCOPE == 'update_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--update-offer-self-test', 'frozen-update-offer-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged update offer checks failed' }
+          if (!(Get-Content frozen-update-offer-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Update offer verification failed' }
       - name: Verify frozen isolated Windows rating helpers
+        if: env.CHECK_SCOPE != 'update_ui'
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--rating-self-test', 'frozen-ratings-ci.json' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Frozen system ratings failed' }
           if (!(Get-Content frozen-ratings-ci.json -Raw | ConvertFrom-Json).ok) { throw 'Frozen ratings verification failed' }
       - name: Verify normal frozen startup, real folder picker and repeated RAW switches
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_frozen_runtime.py --output frozen-runtime-ci.json
@@ -109,6 +151,7 @@ jobs:
             frozen-runtime-ci.json
             frozen-runtime-ci-*.png
             frozen-runtime-ci-logs/**
+            frozen-update-offer-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Create update package and checksums
@@ -125,10 +168,12 @@ jobs:
           $hash = (Get-FileHash release/PhotoSieve-Setup-Windows-x64.exe -Algorithm SHA256).Hash.ToLower()
           Add-Content release/SHA256SUMS.txt "$hash  PhotoSieve-Setup-Windows-x64.exe"
       - name: Verify installation at a chosen path and workspace preservation
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_installer.py
       - name: Verify packaged APP
+        if: env.CHECK_SCOPE != 'update_ui'
         env:
           QT_QPA_PLATFORM: offscreen
         shell: pwsh

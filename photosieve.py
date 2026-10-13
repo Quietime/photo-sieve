@@ -5,6 +5,9 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    if len(sys.argv)==3 and sys.argv[1]=='--update-offer-self-test':
+        from tools.check_update_offer import run
+        sys.exit(run(sys.argv[2]))
     if len(sys.argv)==3 and sys.argv[1]=='--apply-update':
         # The updater replaces Qt DLLs: it must not import the desktop or load a GUI runtime.
         from updater import helper_entry
