@@ -33,4 +33,4 @@ of the dynamically linked LGPL components.
 User-designated Quietime welcome artwork (assets/welcome-background.png): generated as a faithful visual reference recreation of the user-provided brand image, not a pixel copy. Quietime branding remains reserved to its owner; redistribution here is authorized by the user.
 
 pywin32 311: https://github.com/mhammond/pywin32
-  Windows property-system bindings; Python Software Foundation license.
+  Windows property-system bindings; Mark Hammond copyright and BSD-style redistribution terms, with component-specific notices.

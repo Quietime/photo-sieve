@@ -18,7 +18,7 @@ def initialize(logs):
     faulthandler.enable(file=FAULT_FILE,all_threads=True)
 
 def job(path,stars,expected):
-    faulthandler.dump_traceback_later(10,repeat=True,file=FAULT_FILE)
+    faulthandler.dump_traceback_later(4 if stars is None else 10,repeat=True,file=FAULT_FILE)
     try:
         # The store itself checks expected stars before committing an undo.
         return operate(path,stars,expected)

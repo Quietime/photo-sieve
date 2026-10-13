@@ -53,12 +53,16 @@ def main():
                 window.toggle_rating();until(lambda:page.pid() is not None and page.star_buttons[0].isEnabled() and page.pane.pixmap is not None)
                 assert all(not key.isEnabled() for key in window.shortcuts);assert window.stack.currentIndex()==5
                 page.auto.setChecked(False);first=page.pid();path=Path(lib.photo(first)['path']);pixels=hashlib.sha256(Image.open(path).tobytes()).hexdigest()
-                page.grade(4);until(lambda:not page.writing and page.info[first]['stars']==4)
+                window.activateWindow();page.setFocus();app.processEvents();QTest.keyClick(page,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
                 if os.name=='nt':assert page.engine.run(path)['stars']==4
                 assert hashlib.sha256(Image.open(path).tobytes()).hexdigest()==pixels
                 assert lib.photo(first)['status']==1
-                report['checks'].append('native_stars_preserve_pixels_keep_and_date')
+                report['checks'].append('rating_digit_shortcut_writes_native_stars_preserving_pixels_and_keep')
                 QTest.qWait(300);window.grab().save(str(output/'rating-all.png'))
+                assert len(page.panes)==2 and page.panes[1].photo['id']==page.ids[1]
+                page.toggle_gallery();until(lambda:all(pid in page.thumbs for pid in page.grid.visible_ids()));window.grab().save(str(output/'rating-gallery.png'));page.toggle_gallery()
+                assert page.star_buttons[3].shortcut=='4'
+                report['checks'].append('dual_photo_layout_gallery_and_visible_shortcut_badges')
                 page.undo();until(lambda:not page.writing and page.info[first]['stars']==0)
                 report['checks'].append('rating_undo_restores_original_system_value')
                 page.scope.setCurrentIndex(1);until(lambda:len(page.ids)==4 and page.star_buttons[0].isEnabled());QTest.qWait(250);window.grab().save(str(output/'rating-kept.png'))

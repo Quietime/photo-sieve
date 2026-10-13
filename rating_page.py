@@ -3,8 +3,10 @@ from collections import OrderedDict
 from pathlib import Path
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QStackedWidget
 from photo_grid import PhotoGrid
+from filmstrip import MixedFilmstrip
+from apple_ui import GlassDock
 from widgets import PhotoView
 from rating_records import RatingRecords
 from rating_engine import RatingEngine
@@ -19,7 +21,7 @@ class RatingPage(QWidget):
     def __init__(self,host):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
-        self.generation=0;self.active=False;self.writing=False;self.ids=[];self.index=0
+        self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.ids=[];self.index=0
         self.info={};self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
@@ -30,21 +32,28 @@ class RatingPage(QWidget):
         self.auto.toggled.connect(lambda value:QSettings('PhotoSieve','PhotoSieve').setValue('rating_auto_next',value))
         self.read_button=host.button('读取全部系统评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row)
         self.note=QLabel('星级写入照片的 Windows 属性；保留与删除标记独立。格式支持取决于 Windows 文件属性处理器。');self.note.setObjectName('caption');self.note.setWordWrap(True);layout.addWidget(self.note)
-        split=QSplitter();self.pane=PhotoView();self.pane.setMinimumWidth(400);split.addWidget(self.pane)
-        self.grid=PhotoGrid();self.grid.setMinimumWidth(280);self.grid.tile_height=180;self.grid.setGridSize(QSize(196,180));self.grid.setWordWrap(True);split.addWidget(self.grid);split.setStretchFactor(0,3);split.setStretchFactor(1,2);split.setSizes([800,500]);layout.addWidget(split,1)
-        self.name=QLabel('请选择照片文件夹');self.name.setAlignment(Qt.AlignmentFlag.AlignCenter);layout.addWidget(self.name)
+        self.gallery_button=host.button('缩略图库',self.toggle_gallery);row.insertWidget(row.count()-1,self.gallery_button)
+        self.body=QStackedWidget();layout.addWidget(self.body,1);review=QWidget();pair=QHBoxLayout(review);pair.setContentsMargins(0,0,0,0);pair.setSpacing(16)
+        self.panes=[];self.names=[]
+        for index in range(2):
+            column=QVBoxLayout();column.setSpacing(4);role=QLabel('左图 · 当前评级（星级写入此图）' if index==0 else '右图 · 下一张对比');role.setObjectName('caption');role.setAlignment(Qt.AlignmentFlag.AlignCenter);column.addWidget(role)
+            pane=PhotoView();column.addWidget(pane,1);name=QLabel('请选择照片文件夹');name.setAlignment(Qt.AlignmentFlag.AlignCenter);column.addWidget(name);pair.addLayout(column,1);self.panes.append(pane);self.names.append(name)
+            pane.clicked.connect(lambda photo,point,pane=pane:self.zoom(point,pane));pane.escape_requested.connect(self.unzoom);pane.next_requested.connect(lambda:self.move(1))
+        self.pane=self.panes[0];self.name=self.names[0];self.body.addWidget(review)
+        self.grid=PhotoGrid();self.grid.tile_height=180;self.grid.setGridSize(QSize(196,180));self.grid.setWordWrap(True);self.body.addWidget(self.grid)
         self.status=QLabel('尚未读取 Windows 系统评级');self.status.setWordWrap(True);self.status.setAlignment(Qt.AlignmentFlag.AlignCenter);self.status.setObjectName('caption');layout.addWidget(self.status)
-        controls=QHBoxLayout();controls.addStretch();self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
+        self.action_row=QWidget();outer_controls=QHBoxLayout(self.action_row);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(6,2,6,2);controls.setSpacing(4);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
         self.star_buttons=[]
         for star in range(1,6):
             button=host.button('★'*star,lambda _,star=star:self.grade(star));button.setAccessibleName(f'设置 {star} 星');controls.addWidget(button);self.star_buttons.append(button)
         self.clear_button=host.button('清除评级',lambda:self.grade(0));controls.addWidget(self.clear_button)
         self.undo_button=host.button('撤销评级',self.undo);controls.addWidget(self.undo_button)
-        self.next=host.button('下一张',lambda:self.move(1));controls.addWidget(self.next);controls.addStretch();layout.addLayout(controls)
+        self.next=host.button('下一张',lambda:self.move(1));controls.addWidget(self.next);outer_controls.addWidget(self.dock);outer_controls.addStretch();layout.addWidget(self.action_row);self.action_row.setVisible(host.actionbar_visible)
+        self.dock.register([self.previous]+self.star_buttons+[self.clear_button,self.undo_button,self.next])
+        self.strip=MixedFilmstrip();self.strip.icon_for=lambda pid:self.thumbs.get(pid,host.placeholder);self.strip.itemClicked.connect(lambda item:self.select(item.row));self.strip.horizontalScrollBar().valueChanged.connect(self.visible);layout.addWidget(self.strip)
         self.scope.currentIndexChanged.connect(self.reload);self.filter.currentIndexChanged.connect(self.reload)
-        self.grid.itemClicked.connect(lambda item:self.select(item.row));self.grid.verticalScrollBar().valueChanged.connect(self.visible)
+        self.grid.itemClicked.connect(lambda item:self.open_gallery_item(item));self.grid.verticalScrollBar().valueChanged.connect(self.visible)
         self.grid.icon_for=lambda pid:self.thumbs.get(pid,host.tile)
-        self.pane.clicked.connect(lambda photo,point:self.zoom(point));self.pane.escape_requested.connect(self.unzoom);self.pane.next_requested.connect(lambda:self.move(1))
         self.resize_timer=QTimer(self);self.resize_timer.setSingleShot(True);self.resize_timer.timeout.connect(self.show_current);self.pane.resized.connect(lambda:self.resize_timer.start(150))
         self.apply_keys(keys.load(QSettings('PhotoSieve','PhotoSieve'),ACTIONS,'rating_shortcuts/'))
     def apply_keys(self,chosen):
@@ -58,7 +67,7 @@ class RatingPage(QWidget):
                 if not key:continue
                 shortcut=QShortcut(QKeySequence(key),self);shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);shortcut.setAutoRepeat(repeat);shortcut.activated.connect(handlers[action]);self.shortcut_objects.append(shortcut)
         for button,action in [(self.previous,'previous'),(self.next,'next'),(self.clear_button,'clear'),(self.undo_button,'undo')]+[(b,f'star{i}') for i,b in enumerate(self.star_buttons,1)]:
-            button.setToolTip(' / '.join(keys.label(k) for k in chosen[action] if k) or '未设置快捷键')
+            button.variant='dock';button.setFixedHeight(32);button.set_shortcut(keys.first(chosen,action),' / '.join(keys.label(k) for k in chosen[action] if k) or '未设置快捷键')
     def edit_keys(self):
         dialog=keys.ShortcutDialog(self.host,self.chosen,ACTIONS,'照片分级快捷键','分级与照片筛选使用独立快捷键。每项允许留空，仅用按钮操作。')
         def saved(chosen):keys.save(QSettings('PhotoSieve','PhotoSieve'),chosen,'rating_shortcuts/');self.apply_keys(chosen);self.host.sync_shortcut_mode()
@@ -78,7 +87,7 @@ class RatingPage(QWidget):
         self.status.setText('正在读取分级列表…')
         def done(ids):
             if not self.valid(gen):return
-            self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear();self.grid.set_ids(ids);self.show_current();self.visible()
+            self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear();self.grid.set_ids(ids);self.strip.set_ids(ids);self.show_current();self.visible()
             if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部系统评级”刷新。')
             else:self.note.setText(f'{len(ids):,} 张照片 · 星级写入 Windows 属性，保留与删除标记独立；缩略图按需加载。')
         self.host.submit(lambda:records.ids(scope,stars),done,self.host.error)
@@ -86,28 +95,47 @@ class RatingPage(QWidget):
     def pid(self):return self.ids[self.index] if self.ids and 0<=self.index<len(self.ids) else None
     def select(self,index):
         if self.writing:return
-        self.index=index;self.pane.show_photo(None);self.show_current();self.setFocus()
+        self.index=index
+        for pane in self.panes:pane.show_photo(None)
+        self.show_current();self.setFocus()
     def move(self,delta):
         if self.writing or not self.ids:return
         self.select(max(0,min(len(self.ids)-1,self.index+delta)))
+    def open_gallery_item(self,item):
+        self.body.setCurrentIndex(0);self.gallery_button.setText('缩略图库');self.select(item.row)
+    def toggle_gallery(self):
+        self.body.setCurrentIndex(1-self.body.currentIndex());self.gallery_button.setText('返回双图' if self.body.currentIndex() else '缩略图库');self.visible();self.setFocus()
     def show_current(self):
         if not self.active:return
-        if self.pane.detail:return
         pid=self.pid()
-        if pid is None:self.pane.show_photo(None);self.name.setText('没有符合条件的照片');self.status.setText('可更换照片范围，或读取全部系统评级后再按星级筛选');self.update_controls();return
-        self.grid.setCurrentRow(self.index);self.grid.scrollTo(self.grid.photo_model.index(self.index));self.preview(pid,large=True);self.read(pid);self.update_controls()
+        if pid is None:
+            for pane,name in zip(self.panes,self.names):pane.show_photo(None);name.setText('没有符合条件的照片')
+            self.status.setText('可更换照片范围，或读取全部系统评级后再按星级筛选');self.update_controls();return
+        self.grid.setCurrentRow(self.index);self.grid.scrollTo(self.grid.photo_model.index(self.index));self.strip.setCurrentRow(self.index);self.strip.scrollTo(self.strip.photo_model.index(self.index))
+        for offset,pane in enumerate(self.panes):
+            if self.index+offset<len(self.ids):
+                target=self.ids[self.index+offset]
+                if not pane.detail:self.preview(target,large=True)
+            else:pane.show_photo(None);self.names[offset].setText('没有下一张')
+        self.read(pid);self.update_controls()
+    def install_preview(self,pid,photo,pix):
+        for offset,pane in enumerate(self.panes):
+            if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid and not pane.detail:
+                pane.show_photo(photo,pix);self.names[offset].setText(f'{photo["name"]}  ·  {self.index+offset+1:,} / {len(self.ids):,}')
     def visible(self,*_):
         if not self.active or not self.records:return
-        for pid in self.grid.visible_ids():self.preview(pid);self.read(pid)
+        for pid in (self.grid.visible_ids() if self.body.currentIndex() else self.strip.visible_ids()):self.preview(pid);self.read(pid)
     def preview(self,pid,large=False):
         key=(pid,large)
         if key in self.loading:return
         if large and pid in self.images:
-            photo,pix=self.images[pid];self.pane.show_photo(photo,pix);self.name.setText(f'{photo["name"]}  ·  {self.index+1:,} / {len(self.ids):,}');return
+            photo,pix=self.images[pid];self.install_preview(pid,photo,pix);return
         if not large and pid in self.thumbs:return
         if len(self.loading)>=6:return
         self.loading.add(key);gen=self.generation;library=self.library
-        if large:self.pane.show_photo({'id':pid},message='正在读取照片…')
+        if large:
+            for offset,pane in enumerate(self.panes):
+                if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid:pane.show_photo({'id':pid},message='正在读取照片…')
         width=max(300,min(1600,self.pane.width()));height=max(200,min(1200,self.pane.height()))
         def work():
             from desktop import display_image
@@ -118,13 +146,14 @@ class RatingPage(QWidget):
             if large:
                 self.images[pid]=(photo,pix)
                 while len(self.images)>3:self.images.popitem(last=False)
-                if pid==self.pid():self.pane.show_photo(photo,pix);self.name.setText(f'{photo["name"]}  ·  {self.index+1:,} / {len(self.ids):,}')
+                self.install_preview(pid,photo,pix)
             else:
-                self.thumbs[pid]=QIcon(pix)
+                self.thumbs[pid]=QIcon(pix);self.strip.set_preview_width(pid,pix)
                 while len(self.thumbs)>128:self.thumbs.popitem(last=False)
                 self.grid.captions[pid]=photo['name']+'\n'+self.star_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
                 if row>=0:self.grid.photo_model.changed(row)
-            if self.pid() and self.pid() not in self.images:self.preview(self.pid(),True)
+            for target in self.ids[self.index:self.index+2]:
+                if target not in self.images:self.preview(target,True)
             self.visible()
         def failed(message):
             if not self.valid(gen):return
@@ -141,13 +170,17 @@ class RatingPage(QWidget):
     def read(self,pid,force=False):
         if pid in self.reading or len(self.reading)>=2 or self.writing:return
         if pid in self.info and not force:return
-        self.reading.add(pid);gen=self.generation;records=self.records
+        self.reading.add(pid);gen=self.generation;read_revision=self.read_revision;records=self.records
         def work():
             cached={} if force else records.cached([pid])
             return cached.get(pid) or records.read(pid,self.engine)
         def done(info):
             if not self.valid(gen):return
-            self.reading.discard(pid);self.info[pid]=info;self.update_caption(pid);self.update_controls();self.pump_reads();self.visible()
+            self.reading.discard(pid)
+            if read_revision!=self.read_revision:
+                if not self.writing:self.visible()
+                return
+            self.info[pid]=info;self.update_caption(pid);self.update_controls();self.pump_reads();self.visible()
         def failed(message):done({'state':'error','stars':None,'writable':False,'error':message})
         self.host.submit(work,done,failed,self.pool,100 if pid==self.pid() else 0)
     def update_caption(self,pid):
@@ -175,8 +208,10 @@ class RatingPage(QWidget):
         self.host.submit(lambda:records.ids(scope),done,self.host.error)
     def pump_reads(self):
         if not self.scanning or self.writing or self.remaining is None:return
-        while self.remaining and len(self.reading)<2:self.read(self.remaining.pop(),True)
-        self.read_button.setText(f'停止读取 · {self.total-len(self.remaining)-len(self.reading):,} / {self.total:,}')
+        while self.remaining and len(self.reading)<2:
+            if self.remaining[-1] in self.reading:break
+            self.read(self.remaining.pop(),True)
+        self.read_button.setText(f'停止读取 · {max(0,self.total-len(self.remaining)-len(self.reading)):,} / {self.total:,}')
         if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部系统评级');self.reload()
     def grade(self,stars):
         info=self.info.get(self.pid())
@@ -187,25 +222,27 @@ class RatingPage(QWidget):
         if self.writing or not self.records or not self.undo_button.isEnabled():return
         records=self.records;self.change(lambda:records.undo(self.engine),advance=False)
     def change(self,work,advance=True):
-        self.writing=True;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
+        self.writing=True;self.read_revision+=1;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
         def done(result):
             self.writing=False;pid=result['photo_id'];self.info[pid]=result;self.images.pop(pid,None);self.update_caption(pid)
             if advance and self.auto.isChecked():self.move(1)
             elif not advance and pid in self.ids:self.select(self.ids.index(pid))
-            self.update_controls();self.host.update_actions();self.host.toast.show_message('已写入 Windows 系统评级：'+self.star_text(result),'info')
+            self.update_controls();self.visible();self.host.update_actions();self.host.toast.show_message('已写入 Windows 系统评级：'+self.star_text(result),'info')
             if self.filter.currentIndex():self.reload()
         def failed(message):self.writing=False;self.update_controls();self.host.update_actions();self.host.error(message)
         self.host.op(work,done,failed)
-    def zoom(self,point=None):
-        if not self.pane.pixmap:return
-        if self.pane.detail:self.unzoom();return
-        self.pane.zoom_at(point);pid=self.pid();gen=self.generation;library=self.library
+    def zoom(self,point=None,pane=None):
+        pane=pane or self.pane
+        if not pane.pixmap:return
+        if pane.detail:pane.unzoom(self.show_current);return
+        pane.zoom_at(point);pid=pane.photo['id'];gen=self.generation;library=self.library
         def work():
             from desktop import full_qimage
             return full_qimage(library.preview_image(pid,0))
         def done(image):
-            if self.valid(gen) and pid==self.pid() and self.pane.detail:self.pane.install_full_image(QPixmap.fromImage(image))
+            if self.valid(gen) and pane.photo and pid==pane.photo['id'] and pane.detail:pane.install_full_image(QPixmap.fromImage(image))
         self.host.submit(work,done,self.host.error,self.host.detail_pool)
     def unzoom(self):
-        if self.pane.detail:self.pane.unzoom(self.show_current)
+        for pane in self.panes:
+            if pane.detail:pane.unzoom(self.show_current)
     def shutdown(self):self.deactivate();self.engine.close();self.pool.clear();self.pool.waitForDone()
