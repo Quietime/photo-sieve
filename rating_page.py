@@ -224,7 +224,7 @@ class RatingPage(QWidget):
     def change(self,work,advance=True):
         self.writing=True;self.read_revision+=1;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
         def done(result):
-            self.writing=False;pid=result['photo_id'];self.info[pid]=result;self.images.pop(pid,None);self.update_caption(pid)
+            self.writing=False;pid=result['photo_id'];self.info[pid]=result;self.update_caption(pid)
             if advance and self.auto.isChecked():self.move(1)
             elif not advance and pid in self.ids:self.select(self.ids.index(pid))
             self.update_controls();self.visible();self.host.update_actions();self.note.setText('已写入 Windows 系统评级：'+self.star_text(result)+' · 保留 / 删除标记不变')
