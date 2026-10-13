@@ -1,5 +1,6 @@
 """Custom widgets: photo pane with animated in-place zoom, transition ghosts, toast, segmented control."""
 from __future__ import annotations
+import math
 
 from PySide6.QtCore import Qt, Signal, QPointF, QRect, QRectF, QSize, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QTransform
@@ -29,6 +30,38 @@ class WelcomePage(QWidget):
                 painter.drawPixmap(target,self.background,source)
 
 
+class CapsuleProgress(QProgressBar):
+    """Accessible QProgressBar values with one fully rounded, clipped moving capsule."""
+    def __init__(self):
+        super().__init__();self.phase=0.0;self.timer=QTimer(self);self.timer.setInterval(33);self.timer.timeout.connect(self.tick)
+        self.setTextVisible(False);self.setStyleSheet('QProgressBar {background:transparent;border:0;}')
+    def busy(self):return self.minimum()==self.maximum()==0
+    def sync_animation(self):
+        active=self.busy() and self.isVisible() and not theme.REDUCED_MOTION
+        if active and not self.timer.isActive():self.timer.start()
+        elif not active:self.timer.stop()
+    def setRange(self,minimum,maximum):
+        super().setRange(minimum,maximum)
+        if hasattr(self,'timer'):self.sync_animation();self.update()
+    def showEvent(self,event):super().showEvent(event);self.sync_animation()
+    def hideEvent(self,event):self.timer.stop();super().hideEvent(event)
+    def tick(self):
+        self.sync_animation();self.phase=(self.phase+33/2200)%1;self.update()
+    def paintEvent(self,event):
+        painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing);painter.setPen(Qt.PenStyle.NoPen)
+        track=QRectF(self.rect()).adjusted(.5,.5,-.5,-.5);radius=track.height()/2
+        clip=QPainterPath();clip.addRoundedRect(track,radius,radius)
+        painter.fillPath(clip,QColor('#292A2E'));painter.setClipPath(clip)
+        if self.busy():
+            width=min(track.width(),max(track.height(),track.width()*.5))
+            position=.5 if theme.REDUCED_MOTION else .5-.5*math.cos(2*math.pi*self.phase)
+            fill=QRectF(track.left()+(track.width()-width)*position,track.top(),width,track.height())
+        else:
+            fraction=max(0,min(1,(self.value()-self.minimum())/max(1,self.maximum()-self.minimum())))
+            if not fraction:return
+            fill=QRectF(track.left(),track.top(),min(track.width(),max(track.height(),track.width()*fraction)),track.height())
+        painter.setBrush(QColor(theme.LABEL if theme.HIGH_CONTRAST else theme.BLUE));painter.drawRoundedRect(fill,radius,radius)
+
 class ImportPage(QWidget):
     """Import messages have their own page, separate from welcome controls."""
     def __init__(self):
@@ -36,8 +69,7 @@ class ImportPage(QWidget):
         column=QVBoxLayout(self);column.setContentsMargins(48,32,48,48);column.setSpacing(20);column.addStretch()
         self.title=QLabel('正在打开照片文件夹');self.title.setObjectName('heading');self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.folder=QLabel();self.folder.setObjectName('caption');self.folder.setWordWrap(True);self.folder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.bar=QProgressBar();self.bar.setFixedHeight(18);self.bar.setTextVisible(False)
-        self.bar.setStyleSheet('QProgressBar { background:#2C2C2E; border:0; border-radius:8px; } QProgressBar::chunk { background:#0A84FF; border-radius:8px; }')
+        self.bar=CapsuleProgress();self.bar.setAccessibleName('照片导入进度');self.bar.setFixedHeight(18);self.bar.setTextVisible(False)
         self.count=QLabel();self.count.setObjectName('lead');self.count.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint=QLabel('导入完成后开始显示照片');hint.setObjectName('caption');hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         for widget in (self.title,self.folder,self.bar,self.count,hint):
