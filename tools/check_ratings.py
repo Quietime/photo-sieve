@@ -54,7 +54,7 @@ def main():
                 window.toggle_rating();until(lambda:page.pid() is not None and page.star_buttons[0].isEnabled() and page.pane.pixmap is not None)
                 assert all(not key.isEnabled() for key in window.shortcuts);assert window.stack.currentIndex()==5
                 page.auto.setChecked(False);first=page.pid();path=Path(lib.photo(first)['path']);pixels=hashlib.sha256(Image.open(path).tobytes()).hexdigest()
-                window.activateWindow();page.setFocus();app.processEvents();QTest.qWait(150);QTest.keyClick(page,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
+                window.activateWindow();window.more_button.setFocus();app.processEvents();QTest.qWait(150);QTest.keyClick(window.more_button,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
                 if os.name=='nt':assert page.engine.run(path)['stars']==4
                 assert hashlib.sha256(Image.open(path).tobytes()).hexdigest()==pixels
                 assert lib.photo(first)['status']==1
@@ -66,6 +66,8 @@ def main():
                 report['checks'].append('dual_photo_layout_gallery_and_visible_shortcut_badges')
                 page.undo();until(lambda:not page.writing and page.info[first]['stars']==0)
                 report['checks'].append('rating_undo_restores_original_system_value')
+                page.auto.setChecked(True);page.grade(0);assert page.index==1;page.auto.setChecked(False);page.select(0)
+                report['checks'].append('confirm_same_rating_advances_without_rewriting_metadata')
                 page.scope.setCurrentIndex(1);until(lambda:len(page.ids)==4 and page.star_buttons[0].isEnabled());QTest.qWait(250);window.grab().save(str(output/'rating-kept.png'))
                 page.grade(5);until(lambda:not page.writing and page.info[page.pid()]['stars']==5)
                 page.filter.setCurrentIndex(6);until(lambda:len(page.ids)==1 and page.pane.pixmap is not None);window.grab().save(str(output/'rating-filter.png'))

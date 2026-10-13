@@ -1,4 +1,4 @@
-照片快筛 · 原生 Windows 桌面版 4.1.1
+照片快筛 · 原生 Windows 桌面版 4.1.2
 
 1. 双击 PhotoSieve-Setup-Windows-x64.exe，选择安装位置。安装后从桌面快捷方式启动。
    无需浏览器、无需安装 Python。请保留 _internal 文件夹。

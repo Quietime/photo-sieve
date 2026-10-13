@@ -65,7 +65,7 @@ class RatingPage(QWidget):
         for action,_,_,repeat in ACTIONS:
             for key in chosen[action]:
                 if not key:continue
-                shortcut=QShortcut(QKeySequence(key),self);shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);shortcut.setAutoRepeat(repeat);shortcut.activated.connect(handlers[action]);self.shortcut_objects.append(shortcut)
+                shortcut=QShortcut(QKeySequence(key),self);shortcut.setContext(Qt.ShortcutContext.WindowShortcut);shortcut.setAutoRepeat(repeat);shortcut.activated.connect(handlers[action]);self.shortcut_objects.append(shortcut)
         for button,action in [(self.previous,'previous'),(self.next,'next'),(self.clear_button,'clear'),(self.undo_button,'undo')]+[(b,f'star{i}') for i,b in enumerate(self.star_buttons,1)]:
             button.variant='dock';button.setFixedHeight(32);button.set_shortcut(keys.first(chosen,action),' / '.join(keys.label(k) for k in chosen[action] if k) or '未设置快捷键')
     def edit_keys(self):
@@ -217,7 +217,9 @@ class RatingPage(QWidget):
     def grade(self,stars):
         info=self.info.get(self.pid())
         if self.host.busy or self.host.job_running() or self.writing or not info or info['state']!='ready' or not info['writable']:return
-        if info['stars']==stars:return
+        if info['stars']==stars:
+            if self.auto.isChecked():self.move(1)
+            return
         pid=self.pid();records=self.records;self.change(lambda:records.write(pid,stars,self.engine))
     def undo(self):
         if self.writing or not self.records or not self.undo_button.isEnabled():return
