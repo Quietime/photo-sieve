@@ -65,10 +65,10 @@ class UpdaterTest(unittest.TestCase):
         UpdateController.report_previous(controller)
         self.assertIn('已安装新版',controller.show.call_args.args[0])
         self.assertIn('自动启动失败',controller.show.call_args.args[0])
-    def test_helper_retries_early_exit_and_confirms_a_live_normal_window(self):
+    def test_legacy_plan_retries_early_exit_and_confirms_a_live_normal_window(self):
         from unittest.mock import Mock
         stage=self.new.parent.parent;plan=stage/'plan.json'
-        plan.write_text(json.dumps({'target':str(self.old),'pid':123,'verify_restart':True}))
+        plan.write_text(json.dumps({'target':str(self.old),'pid':123}))
         attempts=[]
         def start(arguments,cwd):
             child=Mock();child.pid=500+len(attempts);attempts.append(arguments)

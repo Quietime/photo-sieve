@@ -326,7 +326,8 @@ def run_helper(plan_path):
     except Exception as error:result['error']=str(error);logger.exception('Installation failed; transaction rolled back')
     arguments=[str(target/'PhotoSieve.exe'),*plan.get('arguments',[])]
     marker=plan_path.parent/'restart-ready.json'
-    verify=bool(plan.get('verify_restart') and result['ok'])
+    # Existing installed versions do not include this field in their update plans.
+    verify=bool(plan.get('verify_restart','--self-test-output' not in plan.get('arguments',[])) and result['ok'])
     if verify:arguments.extend(['--update-restart-marker',str(marker)])
     try:
         # Old DLL handles and the single-instance lock may settle just after process exit.
