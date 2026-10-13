@@ -28,8 +28,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "dist\install-payload\PhotoSieve\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
-Name: "{autoprograms}\照片快筛"; Filename: "{app}\PhotoSieve.exe"; IconFilename: "{app}\PhotoSieve.exe"; IconIndex: 0; AppUserModelID: "Quietime.PhotoSieve"
-Name: "{autodesktop}\照片快筛"; Filename: "{app}\PhotoSieve.exe"; IconFilename: "{app}\PhotoSieve.exe"; IconIndex: 0; AppUserModelID: "Quietime.PhotoSieve"
+Name: "{autoprograms}\照片快筛"; Filename: "{app}\PhotoSieve.exe"; IconFilename: "{app}\_internal\assets\photosieve.ico"; IconIndex: 0; AppUserModelID: "Quietime.PhotoSieve"
+Name: "{autodesktop}\照片快筛"; Filename: "{app}\PhotoSieve.exe"; IconFilename: "{app}\_internal\assets\photosieve.ico"; IconIndex: 0; AppUserModelID: "Quietime.PhotoSieve"
 [Run]
 Filename: "{app}\PhotoSieve.exe"; Description: "启动照片快筛"; Flags: nowait postinstall skipifsilent
 

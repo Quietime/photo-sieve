@@ -136,7 +136,9 @@ class UpdateController(QObject):
             return
         try:
             data=json.loads(result.read_text('utf-8'))
-            self.show('已更新至 '+data['version'] if data['ok'] else '更新失败，已恢复旧版：'+data.get('error',''),True)
+            if data.get('restart_error'):
+                self.show('已安装新版；上次自动启动失败：'+data['restart_error'],True)
+            else:self.show('已更新至 '+data['version'] if data['ok'] else '更新失败，已恢复旧版：'+data.get('error',''),True)
             if not data['ok']:self.failed_version=data['version']
         except (ValueError,OSError,KeyError,TypeError):pass
         self.settings.remove('last_update_stage')

@@ -11,6 +11,7 @@ import time
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from updater import BACKUP, cleanup_backups, intact, unpack
 from version import UPDATE_ASSET
+from tools.raw_fixture import write_raw
 
 if os.name!='nt':raise SystemExit('This integration check requires Windows')
 # The stage lives in the temporary folder (C: on GitHub's runners, like %LOCALAPPDATA%) and the installed APP in the
@@ -51,6 +52,44 @@ with tempfile.TemporaryDirectory(prefix='photo-sieve-update-check-') as temporar
         assert (target/BACKUP/'stage'/'PhotoSieve.exe').is_file(),'The old version is kept beside the APP until the next start'
         assert intact(target) and cleanup_backups(target) and not (target/BACKUP).exists(),'A complete update deletes the backup'
         print('PASS: frozen Windows helper waits, replaces, preserves photos and records, restarts APP')
+        # The historical check above uses a sleep process and a self-test restart.
+        # This one uses the actual GUI/controller, loaded RAW decoders and crash monitor.
+        normal_stage=base/'normal-stage';normal_stage.mkdir()
+        normal_source=unpack(Path('release')/UPDATE_ASSET,normal_stage/'new')
+        photos=base/'normal-raw';photos.mkdir()
+        for index in range(10):write_raw(photos/f'{index:03}.arw')
+        check_plan=base/'normal-check.json';check_plan.write_text(json.dumps({'folder':str(photos),'source':str(normal_source)}))
+        env=os.environ.copy();env['QT_QPA_PLATFORM']='windows';env['QT_WIDGETS_RHI']='0'
+        old_gui=subprocess.Popen([str(target/'PhotoSieve.exe'),'--update-check-plan',str(check_plan)],env=env,cwd=target)
+        try:
+            assert old_gui.wait(timeout=150)==0,'Real old GUI exits after production updater handoff'
+            deadline=time.monotonic()+120
+            while not (normal_stage/'result.json').exists():
+                if time.monotonic()>deadline:raise RuntimeError('Normal update/restart did not finish')
+                time.sleep(.1)
+            result=json.loads((normal_stage/'result.json').read_text('utf-8'))
+            assert result['ok'] and not result.get('restart_error'),result
+            restarted=result['restart'];assert restarted['visible'] and restarted['pid']!=old_gui.pid
+            assert Path(restarted['executable']).resolve()==(target/'PhotoSieve.exe').resolve()
+            assert Path(restarted['runtime']).resolve()==(target/'_internal').resolve(),'Restart loads installed DLLs, not staged/old runtime'
+            assert restarted['taskbar']['app_id']=='Quietime.PhotoSieve'
+            assert Path(restarted['taskbar']['icon_resource'].rsplit(',',1)[0]).is_file()
+            import ctypes
+            from ctypes import wintypes as W
+            from tools.windows_icon_check import check_photo_icon
+            api=ctypes.WinDLL('user32');api.SendMessageW.argtypes=[W.HWND,W.UINT,W.WPARAM,W.LPARAM];api.SendMessageW.restype=ctypes.c_ssize_t
+            check_photo_icon(api.SendMessageW(restarted['window'],0x7F,1,0))
+            api.PostMessageW.argtypes=[W.HWND,W.UINT,W.WPARAM,W.LPARAM]
+            api.PostMessageW(restarted['window'],0x0010,0,0)
+            from crashlog import _alive
+            deadline=time.monotonic()+30
+            while _alive(restarted['pid']) and time.monotonic()<deadline:time.sleep(.1)
+            assert not _alive(restarted['pid']),'Restarted GUI remains responsive and accepts normal close'
+            assert (target/'photos/user.jpg').read_bytes()==b'unchanged original'
+            assert Path(result['log']).is_file()
+            print('PASS: actual GUI idle update, RAW decoders and watcher exit, visible normal restart, fresh installed runtime, taskbar identity/icon, responsive close',flush=True)
+        finally:
+            if old_gui.poll() is None:old_gui.kill();old_gui.wait()
         # Let the restarted self-test process release DLLs before TemporaryDirectory cleanup.
         time.sleep(3)
     finally:

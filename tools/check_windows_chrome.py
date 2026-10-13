@@ -30,6 +30,11 @@ with tempfile.TemporaryDirectory() as temporary:
         frame=window.window_frame; handle=int(window.winId()); assert frame.native
         assert not window.windowIcon().pixmap(32,32).isNull(),'The actual app icon decodes successfully'
         assert len(frame.native_icons)==2,'Small and large native icons are loaded'
+        assert frame.taskbar_identity['app_id']=='Quietime.PhotoSieve'
+        assert Path(frame.taskbar_identity['icon_resource'].rsplit(',',1)[0]).is_file(),'Explorer group points to the real app icon'
+        shell=ctypes.WinDLL('shlwapi');shell.SHLoadIndirectString.argtypes=[W.LPCWSTR,W.LPWSTR,W.UINT,ctypes.c_void_p]
+        display=ctypes.create_unicode_buffer(256)
+        assert shell.SHLoadIndirectString('照片快筛',display,256,None)==0 and display.value=='照片快筛','Shell resolves the relaunch display name'
         for kind,icon in enumerate(frame.native_icons):
             check_photo_icon(api.SendMessageW(handle,0x7F,kind,0))
         style=api.GetWindowLongPtrW(handle,-16); assert style&0x00CF0000==0x00CF0000
@@ -54,6 +59,11 @@ with tempfile.TemporaryDirectory() as temporary:
         assert window.isMaximized(),'Windows caption double-click maximizes the actual HWND'
         assert all(not g.isVisible() for g in frame.grips),('Maximized windows do not resize at their edges',window.size(),window.minimumSizeHint(),[g.isVisible() for g in frame.grips])
         window.showNormal(); application.processEvents()
+        window.showMinimized();application.processEvents();window.showNormal();application.processEvents()
+        from win32com.propsys import propsys,pscon
+        store=propsys.SHGetPropertyStoreForWindow(int(window.winId()))
+        assert store.GetValue(pscon.PKEY_AppUserModel_ID).GetValue()=='Quietime.PhotoSieve'
+        assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchIconResource).GetValue()==frame.taskbar_identity['icon_resource']
         assert frame.dwm_round or not window.mask().isEmpty(),'Native DWM rounding or older-Windows round region is enabled'
         window.show_menu(); assert not window.more_panel.isWindow()
         directory=Path('ui-screenshots-windows'); directory.mkdir(exist_ok=True)

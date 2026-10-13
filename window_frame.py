@@ -34,7 +34,7 @@ class ResizeGrip(QWidget):
 
 class WindowFrame(QObject):
     def __init__(self,window,chrome):
-        super().__init__(window); self.window=window; self.chrome=chrome; self.native=False; self.dwm_round=False
+        super().__init__(window); self.window=window; self.chrome=chrome; self.native=False; self.native_handle=None; self.dwm_round=False
         self.grips=[]; E=Qt.Edge; C=Qt.CursorShape
         for edges,cursor in [(E.LeftEdge,C.SizeHorCursor),(E.RightEdge,C.SizeHorCursor),
             (E.TopEdge,C.SizeVerCursor),(E.BottomEdge,C.SizeVerCursor),
@@ -63,24 +63,32 @@ class WindowFrame(QObject):
             # A native WM_SIZE can reach the filter before Qt commits its final window state.
             self.state_timer.start(0)
         if event.type()==QEvent.Type.Show: self.enable_native()
+        elif event.type()==QEvent.Type.WinIdChange:QTimer.singleShot(0,self.enable_native)
         return False
 
     def enable_native(self):
-        if self.native or os.name!='nt': return
+        if os.name!='nt': return
         from ctypes import wintypes as W
         api=ctypes.WinDLL('user32',use_last_error=True)
         api.IsWindow.argtypes=[W.HWND]; api.IsWindow.restype=W.BOOL
         handle=int(self.window.winId())
+        if self.native and handle==self.native_handle:return
         if not api.IsWindow(handle): return  # offscreen tests have no real HWND
         api.GetWindowLongPtrW.argtypes=[W.HWND,ctypes.c_int]; api.GetWindowLongPtrW.restype=ctypes.c_ssize_t
         api.SetWindowLongPtrW.argtypes=[W.HWND,ctypes.c_int,ctypes.c_ssize_t]; api.SetWindowLongPtrW.restype=ctypes.c_ssize_t
         api.SetWindowPos.argtypes=[W.HWND,W.HWND,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,W.UINT]
-        self.native=True; self.api=api
+        self.native=True; self.native_handle=handle; self.api=api
         # The system needs these styles for snap/maximize/edge resizing; NCCALCSIZE keeps its title bar invisible.
         style=api.GetWindowLongPtrW(handle,-16)
         api.SetWindowLongPtrW(handle,-16,style|0x00CF0000)
         api.SetWindowPos(handle,None,0,0,0,0,0x0027)
         self.install_icons(handle)
+        try:
+            from app_identity import set_taskbar_identity
+            self.taskbar_identity=set_taskbar_identity(handle)
+        except Exception:
+            import crashlog
+            crashlog.LOGGER.exception('Could not set Windows taskbar identity')
         try:
             preference=ctypes.c_int(2)
             dwm=ctypes.WinDLL('dwmapi'); dwm.DwmSetWindowAttribute.argtypes=[W.HWND,W.DWORD,ctypes.c_void_p,W.DWORD]

@@ -5,6 +5,7 @@ from collections import OrderedDict, deque
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 import hashlib
+import json
 import math
 import multiprocessing
 import os
@@ -1481,6 +1482,8 @@ def main():
     parser.add_argument('--self-test-output', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--runtime-check-output',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--runtime-check-folders',nargs='+',help=argparse.SUPPRESS)
+    parser.add_argument('--update-restart-marker',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--update-check-plan',type=Path,help=argparse.SUPPRESS)
     args = parser.parse_args(); settings = QSettings('PhotoSieve', 'PhotoSieve')
     if os.name=='nt':
         import ctypes
@@ -1511,9 +1514,20 @@ def main():
             library = Library(directory, args.cache_mb or settings.value('cache_mb',0,type=int)); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory)
             screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
             window.move(screen.center()-window.rect().center());window.show()
+            if args.update_restart_marker:
+                def confirm_restart():
+                    temporary=args.update_restart_marker.with_suffix('.tmp')
+                    temporary.write_text(json.dumps({'pid':os.getpid(),'version':APP_VERSION,'window':int(window.winId()),'visible':window.isVisible(),
+                        'executable':sys.executable,'runtime':getattr(sys,'_MEIPASS',''),'taskbar':getattr(window.window_frame,'taskbar_identity',{})}),encoding='utf-8')
+                    temporary.replace(args.update_restart_marker)
+                    QTimer.singleShot(1500,window.updates.report_previous)
+                QTimer.singleShot(300,confirm_restart)
             crashlog.event('waiting_for_folder',gpu=COMPOSITING['gpu'])
             crashlog.install_gui_watchdog(application)
-            if args.runtime_check_output:
+            if args.update_check_plan:
+                from update_runtime_check import install
+                install(window,args.update_check_plan)
+            elif args.runtime_check_output:
                 from runtime_check import install
                 install(window,args.runtime_check_output,args.runtime_check_folders or [])
             elif args.folder: QTimer.singleShot(100, lambda: window.scan(args.folder))

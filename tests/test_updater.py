@@ -46,6 +46,42 @@ class UpdaterTest(unittest.TestCase):
         self.assertEqual((self.base/'backup/PhotoSieve.exe').read_bytes(),b'old')
         for name in ['photos/image.jpg','library.sqlite3','.photo-sieve-trash/deleted.raw','notes.txt']:
             self.assertEqual((self.old/name).read_bytes(),b'user data')
+    def test_restart_uses_fresh_runtime_environment(self):
+        with patch.dict('os.environ',{'PYINSTALLER_RESET_ENVIRONMENT':'0'}),patch('updater.subprocess.Popen') as launch:
+            updater.independent_process(['app.exe'],self.old)
+        options=launch.call_args.kwargs
+        self.assertEqual(options['env']['PYINSTALLER_RESET_ENVIRONMENT'],'1')
+        self.assertTrue(options['close_fds'])
+        self.assertEqual(options['cwd'],self.old)
+    def test_restart_failure_is_not_labeled_a_rollback(self):
+        # Successful replacement with a failed restart is distinct from reverting program files.
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from update_ui import UpdateController
+        result=self.base/'reported';result.mkdir()
+        (result/'result.json').write_text(json.dumps({'ok':True,'version':'99.0.0','restart_error':'启动退出'}))
+        settings=Mock();settings.value.return_value=str(result)
+        controller=SimpleNamespace(settings=settings,show=Mock(),failed_version=None)
+        UpdateController.report_previous(controller)
+        self.assertIn('已安装新版',controller.show.call_args.args[0])
+        self.assertIn('自动启动失败',controller.show.call_args.args[0])
+    def test_helper_retries_early_exit_and_confirms_a_live_normal_window(self):
+        from unittest.mock import Mock
+        stage=self.new.parent.parent;plan=stage/'plan.json'
+        plan.write_text(json.dumps({'target':str(self.old),'pid':123,'verify_restart':True}))
+        attempts=[]
+        def start(arguments,cwd):
+            child=Mock();child.pid=500+len(attempts);attempts.append(arguments)
+            child.poll.return_value=1 if len(attempts)==1 else None
+            if len(attempts)==2:
+                (stage/'restart-ready.json').write_text(json.dumps({'pid':child.pid,'version':'3.0.0','visible':True,'executable':str(self.old/'PhotoSieve.exe')}))
+                child.wait.side_effect=updater.subprocess.TimeoutExpired(arguments,1)
+            return child
+        with patch.object(updater.sys,'executable',str(self.new/'PhotoSieve.exe')),patch('updater.wait_for_parent'),patch('updater.independent_process',side_effect=start),patch('updater.time.sleep'):
+            self.assertEqual(updater.run_helper(plan),0)
+        result=json.loads((stage/'result.json').read_text())
+        self.assertTrue(result['ok']);self.assertEqual(result['restart']['pid'],501)
+        self.assertEqual(len(attempts),2);self.assertTrue(Path(result['log']).is_file())
     def test_backup_beside_the_app_is_deleted_only_when_the_install_is_complete(self):
         # The helper keeps the old version inside the APP folder: a move to %LOCALAPPDATA% would fail across drives.
         backup=self.old/updater.BACKUP/'v99.0.0-stage'

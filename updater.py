@@ -7,6 +7,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, build_opener, HTTPRedirectHandler, urlopen
@@ -290,19 +292,72 @@ def wait_for_parent(pid, ready, timeout=180):
     finally:api.CloseHandle(handle)
 
 
+def independent_process(arguments, cwd):
+    """A new frozen application, never a worker inheriting its parent's PyInstaller runtime."""
+    environment=os.environ.copy();environment['PYINSTALLER_RESET_ENVIRONMENT']='1'
+    flags=0
+    if os.name=='nt':
+        flags=subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.DETACHED_PROCESS
+    return subprocess.Popen(arguments,cwd=cwd,env=environment,creationflags=flags,close_fds=True)
+
+
+def helper_entry(plan_path):
+    try:return run_helper(plan_path)
+    except Exception:
+        Path(plan_path).with_name('helper-error.txt').write_text(traceback.format_exc(),encoding='utf-8')
+        return 1
+
+
 def run_helper(plan_path):
     plan_path=Path(plan_path).resolve();plan=json.loads(plan_path.read_text('utf-8'))
     source=Path(sys.executable).resolve().parent;target=Path(plan['target']).resolve()
     if source.parent.parent!=plan_path.parent or source==target or target==Path.home() or target==Path(target.anchor):raise ValueError('更新任务目录无效')
-    validate_install(source)
+    logs=target/'workspaces'/'logs'/'updates';logs.mkdir(parents=True,exist_ok=True)
+    logger=logging.getLogger('photosieve.update');logger.setLevel(logging.INFO)
+    handler=logging.FileHandler(logs/(plan_path.parent.name+'.log'),encoding='utf-8');logger.addHandler(handler)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logger.info('Helper started pid=%s source=%s target=%s parent=%s',os.getpid(),source,target,plan['pid'])
+    manifest=validate_install(source)
     wait_for_parent(plan['pid'],plan_path.parent/'ready')
+    logger.info('Old application exited; replacing installed files')
     result={'version':APP_VERSION,'ok':False}
     try:
         install_transaction(source,target,target/BACKUP/plan_path.parent.name);result['ok']=True
-    except Exception as error:result['error']=str(error)
-    (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+    except Exception as error:result['error']=str(error);logger.exception('Installation failed; transaction rolled back')
     arguments=[str(target/'PhotoSieve.exe'),*plan.get('arguments',[])]
-    subprocess.Popen(arguments,cwd=target)
+    marker=plan_path.parent/'restart-ready.json'
+    verify=bool(plan.get('verify_restart') and result['ok'])
+    if verify:arguments.extend(['--update-restart-marker',str(marker)])
+    try:
+        # Old DLL handles and the single-instance lock may settle just after process exit.
+        for attempt in range(3):
+            marker.unlink(missing_ok=True)
+            child=independent_process(arguments,target);logger.info('Restart attempt %s pid=%s',attempt+1,child.pid)
+            if not verify:break
+            deadline=time.monotonic()+60
+            while not marker.exists() and child.poll() is None and time.monotonic()<deadline:time.sleep(.1)
+            if marker.exists():
+                confirmation=json.loads(marker.read_text('utf-8'))
+                if not confirmation.get('visible') or confirmation['version']!=manifest['version'] or confirmation['pid']!=child.pid:
+                    raise RuntimeError('更新后的窗口启动确认不匹配')
+                if Path(confirmation['executable']).resolve()!=target/'PhotoSieve.exe':raise RuntimeError('重启应用的安装位置不匹配')
+                try:child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    result['restart']=confirmation;logger.info('Restarted window confirmed: %s',confirmation);break
+                logger.warning('Window exited immediately after startup: %s',child.returncode)
+            if child.poll() is None:raise RuntimeError('更新后的应用未在 60 秒内确认启动，请查看应用日志')
+            logger.warning('Restart exited before window ready: %s',child.returncode)
+            if attempt==2:raise RuntimeError('更新后的应用启动失败，退出码 '+str(child.returncode))
+            time.sleep(1)
+    except Exception as error:
+        result['restart_error']=str(error);logger.exception('Restart failed')
+        result['log']=str(logs/(plan_path.parent.name+'.log'))
+        (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+        if os.name=='nt':ctypes.windll.user32.MessageBoxW(None,'更新启动失败：'+str(error)+'\n可以从安装目录重新打开应用。日志：'+str(logs),'照片快筛更新',0x10)
+    result['log']=str(logs/(plan_path.parent.name+'.log'))
+    (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+    handler.flush();logger.removeHandler(handler);handler.close()
+    if result.get('restart_error'):return 1
     return 0 if result['ok'] else 1
 
 
@@ -310,9 +365,9 @@ def launch_helper(source, target, arguments):
     source,target=Path(source),Path(target);managed_files(target)
     stage=source.parent.parent
     plan=stage/'plan.json'
-    plan.write_text(json.dumps({'target':str(target),'pid':os.getpid(),'arguments':arguments}),encoding='utf-8')
+    plan.write_text(json.dumps({'target':str(target),'pid':os.getpid(),'arguments':arguments,'verify_restart':True}),encoding='utf-8')
     # Launch from the staged NEW installation, so it can replace every old DLL.
-    process=subprocess.Popen([str(source/'PhotoSieve.exe'),'--apply-update',str(plan)],cwd=source)
+    process=independent_process([str(source/'PhotoSieve.exe'),'--apply-update',str(plan)],source)
     start=time.monotonic()
     while not (stage/'ready').is_file():
         if process.poll() is not None:raise RuntimeError('更新安装器启动失败，原程序未修改')
