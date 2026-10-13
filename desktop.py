@@ -33,7 +33,7 @@ from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel,
 import machine
 from cache_policy import prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
-from filmstrip import Filmstrip
+from filmstrip import Filmstrip,MixedFilmstrip
 from photo_grid import PhotoGrid
 from rating_page import RatingPage
 from window_frame import WindowFrame
@@ -370,7 +370,7 @@ class Window(QMainWindow):
         for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button): control.setFixedHeight(30)
         self.actionbar.register((self.keep_button,self.delete_button,self.restore_button,self.next_button))
         actions.addWidget(self.actionbar); actions.addStretch(); column.addWidget(self.action_row); self.action_row.setVisible(self.actionbar_visible)
-        self.strip = Filmstrip(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
+        self.strip = MixedFilmstrip(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
         self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(100)
         self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

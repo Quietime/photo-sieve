@@ -245,9 +245,9 @@ def run(output):
                 audit.check('filmstrip_click_jumps_to_distant_photo',True)
                 portrait=window.strip.item(28)
                 QTest.mouseClick(window.strip.viewport(),Qt.MouseButton.LeftButton,pos=window.strip.visualItemRect(portrait).center())
-                audit.until(lambda:len(window.queue)==2 and all(pane.pixmap is not None for pane in window.photos) and window.strip.tile_width<=60)
+                audit.until(lambda:len(window.queue)==2 and all(pane.pixmap is not None for pane in window.photos) and window.strip.widths.get(window.queue[0]['id'],116)<=60)
                 audit.screenshot('04p_portrait_compact_filmstrip',window)
-                audit.check('portrait_filmstrip_removes_landscape_sized_gaps',window.strip.tile_width<=60 and window.strip.count()==30)
+                audit.check('portrait_filmstrip_removes_landscape_sized_gaps',window.strip.widths.get(window.queue[0]['id'],116)<=60 and window.strip.count()==30)
                 window.load();audit.until(lambda:len(window.queue)==30 and window.keep_button.isEnabled())
                 def ordering(dialog):
                     combo=dialog.findChild(QComboBox);dates=dialog.findChildren(QDateEdit);enabled=dialog.findChild(QCheckBox)

@@ -52,3 +52,9 @@ class Ratings(unittest.TestCase):
         class Broken:
             def run(self,*_):raise RatingError('unsupported')
         result=self.records.read(self.pid,Broken());self.assertEqual(result['state'],'error');self.assertIsNone(result['stars']);self.assertEqual(self.records.ids(stars=0),[])
+
+    def test_database_commit_failure_rolls_back_metadata_and_fingerprint(self):
+        old=self.path.read_bytes();row=dict(self.library.photo(self.pid))
+        with self.library.connect() as db:db.execute("CREATE TRIGGER fail_rating BEFORE INSERT ON rating_history BEGIN SELECT RAISE(ABORT,'disk failure'); END")
+        with self.assertRaises(Exception):self.records.write(self.pid,4,self.engine)
+        self.assertEqual(self.path.read_bytes(),old);self.assertEqual(dict(self.library.photo(self.pid)),row)

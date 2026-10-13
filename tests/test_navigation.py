@@ -55,6 +55,27 @@ class NavigationTest(unittest.TestCase):
         self.assertIn(99999,strip.visible_ids())
         strip.close();strip.deleteLater();application.processEvents()
 
+    def test_mixed_strip_keeps_each_orientation_scroll_and_hit_testing(self):
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QPixmap,QIcon
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from filmstrip import Filmstrip
+        application=QApplication.instance() or QApplication([])
+        from filmstrip import MixedFilmstrip
+        strip=MixedFilmstrip();strip.enable_mixed_layout();strip.resize(1000,100);strip.set_ids(list(range(100000)))
+        portrait=QPixmap(45,68);landscape=QPixmap(104,68)
+        portrait.fill(Qt.GlobalColor.blue);landscape.fill(Qt.GlobalColor.red)
+        strip.icon_for=lambda pid:QIcon(portrait if pid%2==0 else landscape)
+        for pid in (0,2,99998):strip.set_preview_width(pid,portrait)
+        strip.relayout_mixed();strip.show();application.processEvents()
+        self.assertLess(strip.visualRect(strip.photo_model.index(0)).width(),strip.visualRect(strip.photo_model.index(1)).width())
+        bar=strip.horizontalScrollBar();bar.setValue(bar.maximum());application.processEvents()
+        self.assertIn(99999,strip.visible_ids());self.assertLess(len(strip.visible_ids()),25)
+        clicks=[];strip.itemClicked.connect(lambda item:clicks.append(item.data(256)))
+        QTest.mouseClick(strip.viewport(),Qt.MouseButton.LeftButton,pos=strip.visualItemRect(strip.item(99999)).center())
+        self.assertEqual(clicks,[99999]);strip.close();strip.deleteLater();application.processEvents()
+
     def test_virtual_strip_can_jump_to_last_of_100000_rows_without_all_thumbnails(self):
         from PySide6.QtWidgets import QApplication
         from filmstrip import Filmstrip
