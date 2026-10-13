@@ -55,15 +55,17 @@ class ApplePrimitivesTest(unittest.TestCase):
     def test_reduced_motion_has_no_magnification(self):
         theme.REDUCED_MOTION=True;self.keep.set_response(1.)
         self.assertEqual(self.keep.hover,0.);self.assertIsNone(self.keep.motion)
-    def test_segmented_control_supports_keyboard_navigation(self):
+    def test_segmented_control_only_switches_on_mouse_click(self):
         from widgets import Segmented
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import Qt,QPoint
         from PySide6.QtTest import QTest
         control=Segmented([('pending','未筛选'),('keep','保留'),('deleted','已删除')]);control.set_counts({})
         control.changed.connect(lambda value:control.set_current(value,False));control.show();application.processEvents()
-        QTest.keyClick(control,Qt.Key.Key_Right);self.assertEqual(control.index,1)
-        QTest.keyClick(control,Qt.Key.Key_End);self.assertEqual(control.index,2)
-        QTest.keyClick(control,Qt.Key.Key_Home);self.assertEqual(control.index,0)
+        self.assertEqual(control.focusPolicy(),Qt.FocusPolicy.NoFocus)
+        for key in (Qt.Key.Key_Right,Qt.Key.Key_Left,Qt.Key.Key_End,Qt.Key.Key_Home,Qt.Key.Key_Down,Qt.Key.Key_Space):
+            QTest.keyClick(control,key);self.assertEqual(control.index,0)
+        QTest.mouseClick(control,Qt.MouseButton.LeftButton,pos=QPoint(2+round(control.segment_width()*1.5),16))
+        self.assertEqual(control.index,1)
         control.close();control.deleteLater()
     def test_accessibility_respects_os_preferences_and_user_overrides(self):
         with tempfile.TemporaryDirectory() as temporary:

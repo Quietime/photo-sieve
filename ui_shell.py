@@ -27,7 +27,9 @@ class FolderIconProvider(QFileIconProvider):
     def type(self,info):return '文件夹' if info.isDir() else '文件'
 
 def app_icon():
-    return QIcon(str(Path(__file__).parent / 'assets' / 'photosieve.ico'))
+    assets=Path(__file__).parent/'assets'
+    icon=QIcon(str(assets/'photosieve.png'))
+    return icon if not icon.pixmap(32,32).isNull() else QIcon(str(assets/'photosieve.ico'))
 
 class CacheSpinBox(QSpinBox):
     """Native editable number field with clear, theme-independent step arrows."""

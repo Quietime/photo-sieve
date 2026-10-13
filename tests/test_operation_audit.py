@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from PIL import Image
-from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtCore import QSettings, QTimer, Qt, QPoint
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
@@ -79,6 +79,27 @@ class OperationAuditTest(unittest.TestCase):
         until(lambda: self.window.counts.get('deleted') == 70)
         self.window.switch('deleted')
         until(lambda: not self.window.fetching and self.window.deleted_grid.count() == 60)
+
+    def test_right_keep_after_clicking_categories_never_changes_category(self):
+        chosen=keys.defaults();chosen['keep']=['Right',''];chosen['next']=['','']
+        self.window.apply_shortcuts(chosen)
+        # Reproduce a recent category click before using the custom key.
+        for index in (1,0):
+            QTest.mouseClick(self.window.segments,Qt.MouseButton.LeftButton,
+                pos=QPoint(2+round(self.window.segments.segment_width()*(index+.5)),16))
+            until(lambda:self.window.view==('keep' if index else 'pending') and not self.window.fetching)
+        until(lambda:self.window.keep_button.isEnabled())
+        left=self.window.queue[0]['id']
+        QTest.keyClick(self.window,Qt.Key.Key_Right)
+        until(lambda:self.library.photo(left)['status']==1)
+        self.settle()
+        self.assertEqual(self.window.view,'pending')
+        remaining=self.window.queue[0]['id']
+        QTest.keyClick(self.window,Qt.Key.Key_Down)
+        until(lambda:self.library.state()['counts']['deleted']==1)
+        self.assertEqual(self.library.photo(remaining,include_deleted=True)['present'],0)
+        self.settle()
+        self.assertEqual(self.window.view,'pending')
 
     def test_hidden_dock_keeps_shortcuts_and_persists_preference(self):
         self.window.show_menu()

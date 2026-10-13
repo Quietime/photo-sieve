@@ -76,12 +76,31 @@ class WindowFrame(QObject):
         style=api.GetWindowLongPtrW(handle,-16)
         api.SetWindowLongPtrW(handle,-16,style|0x00CF0000)
         api.SetWindowPos(handle,None,0,0,0,0,0x0027)
+        self.install_icons(handle)
         try:
             preference=ctypes.c_int(2)
             dwm=ctypes.WinDLL('dwmapi'); dwm.DwmSetWindowAttribute.argtypes=[W.HWND,W.DWORD,ctypes.c_void_p,W.DWORD]
             self.dwm_round=dwm.DwmSetWindowAttribute(handle,33,ctypes.byref(preference),ctypes.sizeof(preference))==0
             self.place()
         except (AttributeError,OSError): pass
+
+    def install_icons(self,handle):
+        """Set both actual HWND icons after native frame creation, independent of Qt's ICO plugin."""
+        from pathlib import Path
+        from ctypes import wintypes as W
+        api=self.api
+        api.LoadImageW.argtypes=[W.HINSTANCE,W.LPCWSTR,W.UINT,ctypes.c_int,ctypes.c_int,W.UINT]
+        api.LoadImageW.restype=W.HANDLE
+        api.SendMessageW.argtypes=[W.HWND,W.UINT,W.WPARAM,W.LPARAM];api.SendMessageW.restype=ctypes.c_ssize_t
+        api.DestroyIcon.argtypes=[W.HANDLE];api.DestroyIcon.restype=W.BOOL
+        path=str(Path(__file__).parent/'assets'/'photosieve.ico')
+        self.native_icons=[]
+        for kind,size in ((0,16),(1,32)):
+            icon=api.LoadImageW(None,path,1,size,size,0x10)
+            if icon:
+                self.native_icons.append(icon);api.SendMessageW(handle,0x80,kind,icon)
+        handles=tuple(self.native_icons)
+        self.window.destroyed.connect(lambda: [api.DestroyIcon(icon) for icon in handles])
 
     def native_event(self,message):
         if not self.native: return None

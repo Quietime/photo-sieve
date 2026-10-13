@@ -11,6 +11,7 @@ import json
 if os.name!='nt': raise SystemExit('Windows only')
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from updater import intact
+from windows_icon_check import check_photo_icon
 
 with tempfile.TemporaryDirectory(prefix='photosieve-installer-') as temporary:
     base=Path(temporary); target=base/'Selected installation location'
@@ -22,6 +23,11 @@ with tempfile.TemporaryDirectory(prefix='photosieve-installer-') as temporary:
     shell.ExtractIconExW.argtypes=[ctypes.c_wchar_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint]
     shell.ExtractIconExW.restype=ctypes.c_uint
     assert shell.ExtractIconExW(str(exe),-1,None,None,0)>0,'EXE contains an actual Windows icon resource'
+    native_icon=ctypes.c_void_p()
+    assert shell.ExtractIconExW(str(exe),0,ctypes.byref(native_icon),None,1)==1
+    try:check_photo_icon(native_icon.value)
+    finally:
+        api=ctypes.WinDLL('user32');api.DestroyIcon.argtypes=[ctypes.c_void_p];api.DestroyIcon(native_icon)
     diagnostics=base/'installed-diagnostics.json'
     subprocess.run([str(exe),'--self-test-output',str(diagnostics)],check=True,timeout=120)
     assert json.loads(diagnostics.read_text('utf-8'))['ok']

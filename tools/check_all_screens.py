@@ -187,7 +187,7 @@ def run(output):
                 audit.screenshot('01_start_empty', window)
                 audit.screenshot('01a_window_chrome_icons', window.window_chrome)
                 audit.check('startup_empty', window.stack.currentIndex() == 2 and not window.queue)
-                audit.check('main_icon_present', not window.windowIcon().isNull())
+                audit.check('main_icon_present', not window.windowIcon().pixmap(32,32).isNull())
                 window.toast.show_message('启动状态提示 · 不覆盖选择文件夹控件','info')
                 audit.screenshot('01c_welcome_toast_layout',window)
                 welcome=window.stack.widget(2)

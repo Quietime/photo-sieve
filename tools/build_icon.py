@@ -14,6 +14,7 @@ def build():
         d.line(points,fill='#1279F4',width=24,joint='curve')
     d.ellipse((376,466,456,546),fill='#1279F4')
     assets=ROOT/'assets'; assets.mkdir(exist_ok=True)
+    image.save(assets/'photosieve.png')
     image.save(assets/'photosieve.ico',sizes=[(s,s) for s in (16,24,32,48,64,128,256)])
 
 if __name__=='__main__': build()

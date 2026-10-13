@@ -304,7 +304,7 @@ class Segmented(GlassSurface):
     def __init__(self, items):
         super().__init__(); self.items = items; self.counts = {}; self.index = 0; self.position = 0.0; self.animation = None; self.width_cache = 0
         self.setFixedHeight(32); self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setAccessibleName('筛选视图：未筛选、保留、已删除')
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.setAccessibleName('筛选视图：未筛选、保留、已删除')
         font = QFont(self.font()); font.setPixelSize(13); self.setFont(font)
 
     def label(self, i):
@@ -333,19 +333,6 @@ class Segmented(GlassSurface):
         def step(value): self.position = value; self.update()
         def finished(): self.animation = None
         self.animation = animate(self, 250, step, theme.EASE, finished, self.position, index)
-
-    def event(self, event):
-        if event.type()==QEvent.Type.ShortcutOverride and event.key() in (Qt.Key.Key_Left,Qt.Key.Key_Right,Qt.Key.Key_Home,Qt.Key.Key_End):
-            event.accept();return True
-        return super().event(event)
-
-    def keyPressEvent(self, event):
-        key=event.key()
-        if key in (Qt.Key.Key_Left,Qt.Key.Key_Right,Qt.Key.Key_Home,Qt.Key.Key_End):
-            index=0 if key==Qt.Key.Key_Home else len(self.items)-1 if key==Qt.Key.Key_End else max(0,min(len(self.items)-1,self.index+(1 if key==Qt.Key.Key_Right else -1)))
-            if index!=self.index:self.changed.emit(self.items[index][0])
-            event.accept();return
-        super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
         index = int((event.position().x() - 2) // self.segment_width())

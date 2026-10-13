@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QPoint
 from app import Library
 from desktop import Window, STYLE
+from windows_icon_check import check_photo_icon
 
 if os.name!='nt': raise SystemExit('Windows only')
 application=QApplication([]); application.setStyleSheet(STYLE); application.setQuitOnLastWindowClosed(False)
@@ -26,6 +27,10 @@ with tempfile.TemporaryDirectory() as temporary:
     window.resize(1000,720); window.move(140,100); window.show()
     for _ in range(20): application.processEvents(); time.sleep(.01)
     frame=window.window_frame; handle=int(window.winId()); assert frame.native
+    assert not window.windowIcon().pixmap(32,32).isNull(),'The actual app icon decodes successfully'
+    assert len(frame.native_icons)==2,'Small and large native icons are loaded'
+    for kind,icon in enumerate(frame.native_icons):
+        check_photo_icon(api.SendMessageW(handle,0x7F,kind,0))
     style=api.GetWindowLongPtrW(handle,-16); assert style&0x00CF0000==0x00CF0000
     width,height=window.width(),window.height(); dpr=window.devicePixelRatioF()
     def hit(x,y):
@@ -52,7 +57,7 @@ with tempfile.TemporaryDirectory() as temporary:
     window.show_menu(); assert not window.more_panel.isWindow()
     directory=Path('ui-screenshots-windows'); directory.mkdir(exist_ok=True)
     window.grab().save(str(directory/'native-window-menu.png'))
-    result={'ok':True,'platform':'windows','dpr':dpr,'checks':['eight native resize directions','system caption hit test for move/snap','custom window controls remain client content','no system title-bar gap','native maximize/restore','rounded normal window','embedded more panel']}
+    result={'ok':True,'platform':'windows','dpr':dpr,'checks':['actual small and large native taskbar icons','eight native resize directions','system caption hit test for move/snap','custom window controls remain client content','no system title-bar gap','native maximize/restore','rounded normal window','embedded more panel']}
     Path('windows-chrome-ci.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     window.close(); application.processEvents()
 print('PASS: native Windows resize, snap-capable caption, maximize/restore, rounded corners, centered custom controls')

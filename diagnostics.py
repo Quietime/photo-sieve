@@ -30,7 +30,9 @@ def run(application, output):
             rows=lib.list_photos('pending');assert len(rows)==9
             assert lib.decode(photos/'heic.heic',320).size==(320,213)
             window=Window(lib,check_updates=False,decoders=Decoders(2));window.show();wait(lambda:window.keep_button.isEnabled())
-            assert not window.windowIcon().isNull()
+            assert not window.windowIcon().pixmap(32,32).isNull()
+            if window.window_frame.native:
+                assert len(window.window_frame.native_icons)==2,'Both native taskbar/window icons are installed'
             result['checks'].append('application icon loaded from packaged resources')
             assert window.photos[0].pixmap and window.photos[1].photo
             result['checks'].append('native dual-image UI, HEIC, decoder processes')
