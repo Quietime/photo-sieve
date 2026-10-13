@@ -308,6 +308,12 @@ def helper_entry(plan_path):
         return 1
 
 
+def write_update_result(stage,result):
+    temporary=stage/'result.tmp'
+    temporary.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+    temporary.replace(stage/'result.json')
+
+
 def run_helper(plan_path):
     plan_path=Path(plan_path).resolve();plan=json.loads(plan_path.read_text('utf-8'))
     source=Path(sys.executable).resolve().parent;target=Path(plan['target']).resolve()
@@ -353,10 +359,10 @@ def run_helper(plan_path):
     except Exception as error:
         result['restart_error']=str(error);logger.exception('Restart failed')
         result['log']=str(logs/(plan_path.parent.name+'.log'))
-        (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+        write_update_result(plan_path.parent,result)
         if os.name=='nt':ctypes.windll.user32.MessageBoxW(None,'更新启动失败：'+str(error)+'\n可以从安装目录重新打开应用。日志：'+str(logs),'照片快筛更新',0x10)
     result['log']=str(logs/(plan_path.parent.name+'.log'))
-    (plan_path.parent/'result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+    write_update_result(plan_path.parent,result)
     handler.flush();logger.removeHandler(handler);handler.close()
     if result.get('restart_error'):return 1
     return 0 if result['ok'] else 1
