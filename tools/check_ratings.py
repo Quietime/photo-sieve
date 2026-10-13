@@ -70,7 +70,7 @@ def main():
                 page.grade(5);until(lambda:not page.writing and page.info[page.pid()]['stars']==5)
                 page.filter.setCurrentIndex(6);until(lambda:len(page.ids)==1 and page.pane.pixmap is not None);window.grab().save(str(output/'rating-filter.png'))
                 report['checks'].append('kept_scope_and_native_star_filter')
-                page.zoom();until(lambda:page.pane.full_resolution);assert page.pane.detail;window.grab().save(str(output/'rating-focus.png'));page.unzoom();QTest.qWait(400)
+                page.zoom();until(lambda:page.pane.full_resolution);assert page.pane.detail and page.pane.pixmap.devicePixelRatioF()==window.devicePixelRatioF();window.grab().save(str(output/'rating-focus.png'));page.unzoom();QTest.qWait(400)
                 window.show_menu();app.processEvents();assert all(not key.isEnabled() for key in page.shortcut_objects);window.more_panel.hide();app.processEvents();assert all(key.isEnabled() for key in page.shortcut_objects);assert all(not key.isEnabled() for key in window.shortcuts)
                 report['checks'].append('mode_shortcuts_stay_isolated_after_menu')
                 from rating_page import ACTIONS

@@ -22,7 +22,7 @@ class RatingPage(QWidget):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
         self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.ids=[];self.index=0
-        self.info={};self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
+        self.info={};self.source_widths={};self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
@@ -121,7 +121,7 @@ class RatingPage(QWidget):
     def install_preview(self,pid,photo,pix):
         for offset,pane in enumerate(self.panes):
             if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid and not pane.detail:
-                pane.show_photo(photo,pix);self.names[offset].setText(f'{photo["name"]}  ·  {self.index+offset+1:,} / {len(self.ids):,}')
+                pane.show_photo(photo,pix);pane.source_width=self.source_widths.get(pid,pix.width());self.names[offset].setText(f'{photo["name"]}  ·  {self.index+offset+1:,} / {len(self.ids):,}')
     def visible(self,*_):
         if not self.active or not self.records:return
         for pid in (self.grid.visible_ids() if self.body.currentIndex() else self.strip.visible_ids()):self.preview(pid);self.read(pid)
@@ -136,16 +136,17 @@ class RatingPage(QWidget):
         if large:
             for offset,pane in enumerate(self.panes):
                 if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid:pane.show_photo({'id':pid},message='正在读取照片…')
-        width=max(300,min(1600,self.pane.width()));height=max(200,min(1200,self.pane.height()))
+        dpr=self.devicePixelRatioF();width=max(300,min(1600,round(self.pane.width()*dpr)));height=max(200,min(1200,round(self.pane.height()*dpr)))
         def work():
             from desktop import display_image
-            photo=library.public(library.photo(pid));result=display_image(library.preview_image(pid,1600 if large else 320),width if large else 176,height if large else 118,(8,8));return photo,result
+            photo=library.public(library.photo(pid));result=display_image(library.preview_image(pid,1600 if large else 320),width if large else round(176*dpr),height if large else round(118*dpr),(8,8));return photo,result
         def done(value):
             if not self.valid(gen):return
-            self.loading.discard(key);photo,result=value;pix=QPixmap.fromImage(result[0][0])
+            self.loading.discard(key);photo,result=value;pix=QPixmap.fromImage(result[0][0]);pix.setDevicePixelRatio(dpr)
             if large:
-                self.images[pid]=(photo,pix)
-                while len(self.images)>3:self.images.popitem(last=False)
+                self.source_widths[pid]=result[2][0];self.images[pid]=(photo,pix)
+                while len(self.images)>3:
+                    old,_=self.images.popitem(last=False);self.source_widths.pop(old,None)
                 self.install_preview(pid,photo,pix)
             else:
                 self.thumbs[pid]=QIcon(pix);self.strip.set_preview_width(pid,pix)
@@ -240,7 +241,8 @@ class RatingPage(QWidget):
             from desktop import full_qimage
             return full_qimage(library.preview_image(pid,0))
         def done(image):
-            if self.valid(gen) and pane.photo and pid==pane.photo['id'] and pane.detail:pane.install_full_image(QPixmap.fromImage(image))
+            if self.valid(gen) and pane.photo and pid==pane.photo['id'] and pane.detail:
+                pixmap=QPixmap.fromImage(image);pixmap.setDevicePixelRatio(self.devicePixelRatioF());pane.install_full_image(pixmap)
         self.host.submit(work,done,self.host.error,self.host.detail_pool)
     def unzoom(self):
         for pane in self.panes:

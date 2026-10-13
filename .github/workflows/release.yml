@@ -34,6 +34,11 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_ratings.py ratings-ui-ci
+      - name: Verify grading at 150 percent Windows display scaling
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_ratings.py ratings-hidpi-ci
       - name: Test update UI idle and restart behavior
         env:
           QT_QPA_PLATFORM: offscreen
@@ -71,6 +76,7 @@ jobs:
             windows-chrome-ci.json
             ui-screenshots-ci/*
             ratings-ui-ci/*
+            ratings-hidpi-ci/*
             folder-icons-ci.json
             large-import-*-ci.*
             large-import-*-ci-*.png
@@ -142,6 +148,7 @@ jobs:
             performance-ci.json
             ui-screenshots-ci/*
             ratings-ui-ci/*
+            ratings-hidpi-ci/*
             ui-screenshots-windows/*
           retention-days: 14
       - name: Publish a new version to GitHub Releases
