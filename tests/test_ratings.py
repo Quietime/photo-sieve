@@ -58,3 +58,14 @@ class Ratings(unittest.TestCase):
         with self.library.connect() as db:db.execute("CREATE TRIGGER fail_rating BEFORE INSERT ON rating_history BEGIN SELECT RAISE(ABORT,'disk failure'); END")
         with self.assertRaises(Exception):self.records.write(self.pid,4,self.engine)
         self.assertEqual(self.path.read_bytes(),old);self.assertEqual(dict(self.library.photo(self.pid)),row)
+
+    def test_external_changes_invalidate_cached_system_stars_and_disable_writes(self):
+        self.records.read(self.pid,self.engine)
+        self.path.write_bytes(self.path.read_bytes()+b'external metadata')
+        self.assertEqual(self.records.cached([self.pid]),{})
+        self.assertFalse(self.records.read(self.pid,self.engine)['writable'])
+
+    def test_removed_photo_history_does_not_offer_impossible_rating_undo(self):
+        self.records.write(self.pid,4,self.engine)
+        with self.library.connect() as db:db.execute('UPDATE photos SET present=0 WHERE id=?',(self.pid,))
+        with self.assertRaises(RatingError):self.records.undo(self.engine)

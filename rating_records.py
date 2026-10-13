@@ -32,7 +32,10 @@ class RatingRecords:
             for start in range(0,len(ids),400):
                 batch=ids[start:start+400]
                 if not batch:continue
-                for row in db.execute('SELECT c.* FROM rating_cache c JOIN photos p ON p.id=c.photo_id AND p.size=c.size AND p.mtime=c.mtime WHERE c.photo_id IN ('+','.join('?' for _ in batch)+')',batch):result[row['photo_id']]=dict(row)
+                for row in db.execute('SELECT c.*,p.path FROM rating_cache c JOIN photos p ON p.id=c.photo_id AND p.size=c.size AND p.mtime=c.mtime WHERE c.photo_id IN ('+','.join('?' for _ in batch)+')',batch):
+                    try:stat=Path(row['path']).stat()
+                    except OSError:continue
+                    if (stat.st_size,stat.st_mtime_ns)==(row['size'],row['mtime']):result[row['photo_id']]=dict(row)
         return result
     def cache(self,pid,stat,result=None,error=''):
         with self.library.connect() as db:
@@ -43,6 +46,8 @@ class RatingRecords:
             try:result=engine.run(photo['path'])
             except Exception as exc:
                 self.cache(pid,stat,error=str(exc));return {'photo_id':pid,'state':'error','stars':None,'writable':False,'error':str(exc)}
+            if (stat.st_size,stat.st_mtime_ns)!=(photo['size'],photo['mtime']):
+                result=dict(result,writable=False,reason='原文件已改变，请重新扫描文件夹后再评级')
             self.cache(pid,stat,result)
             return {'photo_id':pid,'state':'ready',**result,'error':result.get('reason','')}
     def write(self,pid,stars,engine,expected=None,history=True):
@@ -80,7 +85,7 @@ class RatingRecords:
                     except OSError as exc:raise RatingError('评级失败，原文件备份保留在 '+str(backup)+'；请先检查恢复原文件。') from exc
                     raise
     def undo(self,engine):
-        with self.library.connect() as db:row=db.execute('SELECT * FROM rating_history ORDER BY seq DESC LIMIT 1').fetchone()
+        with self.library.connect() as db:row=db.execute('SELECT h.* FROM rating_history h JOIN photos p ON p.id=h.photo_id WHERE p.present=1 ORDER BY h.seq DESC LIMIT 1').fetchone()
         if not row:raise RatingError('没有可以撤销的评级')
         result=self.write(row['photo_id'],row['before'],engine,expected=row['after'],history=False)
         with self.library.connect() as db:db.execute('DELETE FROM rating_history WHERE seq=?',(row['seq'],))

@@ -78,6 +78,11 @@ def main():
                 dialog=keys.ShortcutDialog(window,page.chosen,ACTIONS,'照片分级快捷键');dialog.show();QTest.qWait(250);dialog.grab().save(str(output/'rating-shortcuts.png'));dialog.close()
                 window.toggle_rating();assert all(key.isEnabled() for key in window.shortcuts);assert all(not key.isEnabled() for key in page.shortcut_objects)
                 report['checks'].append('return_to_culling_without_rating_key_conflicts')
+                window.toggle_rating();until(lambda:len(page.ids)==1 and page.star_buttons[0].isEnabled())
+                lib.export_kept(base/'export','move');window.poll();until(lambda:not lib.job['running'] and len(page.ids)==0)
+                assert not page.star_buttons[0].isEnabled() and not page.undo_button.isEnabled()
+                if os.name=='nt':assert page.engine.run(base/'export'/'000.jpg')['stars']==5
+                report['checks'].append('move_export_preserves_native_stars_and_refreshes_grading_inventory')
             finally:window.prompt_on_close=False;window.close();app.processEvents()
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(report,ensure_ascii=False))
 if __name__=='__main__':main()

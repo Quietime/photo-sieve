@@ -77,7 +77,7 @@ class RatingPage(QWidget):
         if not self.host.session_active:return
         if self.library is not self.host.library:
             self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.thumbs.clear();self.images.clear()
-        self.reload()
+        self.images.clear();self.thumbs.clear();self.reload()
     def deactivate(self):
         self.active=False;self.generation+=1;self.scanning=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
     def reload(self,*_):
@@ -187,14 +187,14 @@ class RatingPage(QWidget):
         text=self.grid.captions.get(pid,'照片 #'+str(pid)).split('\n')[0];self.grid.captions[pid]=text+'\n'+self.star_text(self.info.get(pid));row=self.grid.index_of(pid)
         if row>=0:self.grid.photo_model.changed(row)
     def update_controls(self):
-        info=self.info.get(self.pid());writable=bool(info and info['state']=='ready' and info['writable']);allowed=writable and not self.writing
+        info=self.info.get(self.pid());writable=bool(info and info['state']=='ready' and info['writable']);allowed=writable and not self.writing and not self.host.busy and not self.host.job_running()
         for button in self.star_buttons+[self.clear_button]:button.setEnabled(allowed)
         self.previous.setEnabled(bool(self.ids) and self.index>0 and not self.writing);self.next.setEnabled(bool(self.ids) and self.index+1<len(self.ids) and not self.writing)
         self.scope.setEnabled(not self.writing);self.filter.setEnabled(not self.writing);self.read_button.setEnabled(bool(self.records) and not self.writing)
         undo=False
         if self.records:
-            with self.library.connect() as db:undo=bool(db.execute('SELECT 1 FROM rating_history LIMIT 1').fetchone())
-        self.undo_button.setEnabled(undo and not self.writing)
+            with self.library.connect() as db:undo=bool(db.execute('SELECT 1 FROM rating_history h JOIN photos p ON p.id=h.photo_id WHERE p.present=1 LIMIT 1').fetchone())
+        self.undo_button.setEnabled(undo and not self.writing and not self.host.busy and not self.host.job_running())
         if self.writing:self.status.setText('正在安全写入并验证 Windows 星级…')
         elif info:self.status.setText('Windows 系统评级：'+self.star_text(info)+(' · '+info.get('error','') if info.get('error') else ' · 点击星级写入，0 清除'))
         elif self.pid():self.status.setText('正在读取 Windows 系统评级…')
@@ -215,7 +215,7 @@ class RatingPage(QWidget):
         if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部系统评级');self.reload()
     def grade(self,stars):
         info=self.info.get(self.pid())
-        if self.writing or not info or info['state']!='ready' or not info['writable']:return
+        if self.host.busy or self.host.job_running() or self.writing or not info or info['state']!='ready' or not info['writable']:return
         if info['stars']==stars:return
         pid=self.pid();records=self.records;self.change(lambda:records.write(pid,stars,self.engine))
     def undo(self):

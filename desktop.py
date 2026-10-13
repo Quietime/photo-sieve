@@ -607,6 +607,8 @@ class Window(QMainWindow):
             else:
                 self.timer.stop(); self.progress.set_progress(0, 0, False)
             if self.rating_active:
+                if not running and (self.was_running or old and job.get('revision')!=old['job'].get('revision')):
+                    self.rating_page.images.clear();self.rating_page.thumbs.clear();self.rating_page.reload()
                 self.was_running=running;self.update_actions();return
             if first:
                 self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 4 if self.view=='keep' else 0)); self.place_overlays()
@@ -876,6 +878,7 @@ class Window(QMainWindow):
 
     def update_actions(self):
         self.rating_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running())
+        if self.rating_active:self.rating_page.update_controls()
         if self.rating_active and self.rating_page.writing:
             self.open_button.setEnabled(False);self.export_button.setEnabled(False);return
         running = self.job_running(); reviewing = self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4)
