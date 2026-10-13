@@ -42,10 +42,14 @@ with tempfile.TemporaryDirectory() as temporary,patch.dict('os.environ',{'LOCALA
         controller.settings.setValue('automatic_updates',False);controller.startup_check()
         assert not check_release.called,'Turning off the startup check must keep the APP from asking GitHub'
         controller.settings.setValue('automatic_updates',True)
-        # At startup the offer waits until review pauses, and declining downloads nothing.
+        # Startup results appear even while input remains active; declining downloads nothing.
         controller.ask=lambda offered:(asked.append(offered['version']),False)[1]
-        controller.last_activity=time.monotonic()+60;controller.startup_check();wait(lambda:controller.offer is not None)
+        controller.last_activity=time.monotonic()+60;controller.startup_check();wait(lambda:bool(asked))
         check_release.assert_called_once_with('')
+        assert asked==['99.0.0'] and controller.offer is None and not download.called,'Startup must prompt without waiting for idle'
+        asked.clear()
+        # Later background checks still wait until review pauses.
+        controller.check(False);wait(lambda:controller.offer is not None)
         controller.tick();assert not asked,'The offer must not interrupt a held key'
         controller.last_activity=time.monotonic()-3;controller.tick()
         assert asked==['99.0.0'] and controller.offer is None and not download.called,'Declining must not download'
@@ -96,4 +100,4 @@ with tempfile.TemporaryDirectory() as temporary,patch.dict('os.environ',{'LOCALA
         offered=[];after.ask=lambda o:(offered.append(o['version']),False)[1]
         after.check();wait(lambda:not after.running and offered);assert offered==['99.0.0']
     restarted.close()
-    print('PASS: offer waits for a pause and for dialogs, decline, single prompt, background download, failed launch, busy guard, idle install, preserved library, cleanup after restart, no re-offer after a failure')
+    print('PASS: immediate startup prompt, later offer waits for a pause and for dialogs, decline, single prompt, background download, failed launch, busy guard, idle install, preserved library, cleanup after restart, no re-offer after a failure')

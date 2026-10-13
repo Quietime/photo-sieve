@@ -21,7 +21,7 @@ class UpdateController(QObject):
     progress = Signal(int, int)
     def __init__(self, window, check_on_start=True):
         super().__init__(window);self.window=window;self.settings=QSettings('PhotoSieve','PhotoSieve')
-        self.running=False;self.staged=None;self.offer=None;self.asking=False;self.installing=False
+        self.running=False;self.staged=None;self.offer=None;self.offer_immediate=False;self.asking=False;self.installing=False
         self.last_activity=time.monotonic();self.status='';self.tidy_tries=0;self.failed_version=None
         self.progress.connect(lambda done,total:self.show(f'正在下载更新：{done*100//max(1,total)}%'))
         self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(1000)
@@ -48,8 +48,8 @@ class UpdateController(QObject):
         if toast:self.window.toast.show_message(message,'info',3200)
     def auto_enabled(self):return self.settings.value('automatic_updates',True,type=bool)
     def startup_check(self):
-        if self.auto_enabled():self.check(False)
-    def check(self,manual=True):
+        if self.auto_enabled():self.check(False,startup=True)
+    def check(self,manual=True,startup=False):
         if self.window.closed or self.running or self.installing or self.asking:return
         if self.staged:
             self.show('新版已下载；停止操作 3 秒后自动重启完成更新。',manual);return
@@ -64,12 +64,13 @@ class UpdateController(QObject):
             if self.asking or self.staged or self.installing:return   # a prompt or an update is already under way
             if not manual and release['version']==self.failed_version:
                 self.show('新版本 '+release['version']+' 上次未能安装，可在 ⋯ 中检查更新重试');return
-            self.offer=release;self.show('发现新版本 '+release['version'])
+            self.offer=release;self.offer_immediate=startup;self.show('发现新版本 '+release['version'])
             if manual:self.offer_now()   # asked for: answer at once; otherwise tick waits for a pause in review
+            elif startup:self.tick()   # Startup results surface immediately, even while the mouse is active.
         self.window.submit(lambda:updater.check_release(token),checked,failed)
     def offer_now(self):
         if self.running or self.staged or self.asking or self.installing:return   # the offer waits for these
-        release,self.offer=self.offer,None
+        release,self.offer=self.offer,None;self.offer_immediate=False
         if not release or self.window.closed:return
         self.asking=True
         try:accepted=self.ask(release)
@@ -103,7 +104,7 @@ class UpdateController(QObject):
         panel=getattr(w,'more_panel',None)
         if QApplication.activeModalWidget() or QApplication.activePopupWidget() or (panel is not None and panel.isVisible()):
             self.touch();return   # an export dialog, folder picker or menu is open: wait until it closes and review pauses
-        if self.offer and not self.running and not w.busy and self.idle_seconds()>=ASK_IDLE:self.offer_now()
+        if self.offer and not self.running and not w.busy and (self.offer_immediate or self.idle_seconds()>=ASK_IDLE):self.offer_now()
         elif self.staged and self.idle_seconds()>=INSTALL_IDLE:self.install()
     def install(self):
         w=self.window
