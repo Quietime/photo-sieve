@@ -1,7 +1,7 @@
 """Frameless appearance with Windows' own resize, move and screen-edge snapping."""
 import ctypes
 import os
-from PySide6.QtCore import Qt, QObject, QEvent, QPoint, QRect, QRectF, QSize
+from PySide6.QtCore import Qt, QObject, QEvent, QPoint, QRect, QRectF, QSize,QTimer
 from PySide6.QtGui import QRegion, QPainterPath
 from PySide6.QtWidgets import QWidget, QAbstractButton
 
@@ -41,6 +41,7 @@ class WindowFrame(QObject):
             (E.TopEdge|E.LeftEdge,C.SizeFDiagCursor),(E.TopEdge|E.RightEdge,C.SizeBDiagCursor),
             (E.BottomEdge|E.LeftEdge,C.SizeBDiagCursor),(E.BottomEdge|E.RightEdge,C.SizeFDiagCursor)]:
             self.grips.append(ResizeGrip(window,edges,cursor))
+        self.state_timer=QTimer(self);self.state_timer.setSingleShot(True);self.state_timer.timeout.connect(self.place)
         window.installEventFilter(self); self.place()
 
     def place(self):
@@ -57,7 +58,10 @@ class WindowFrame(QObject):
             self.window.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def eventFilter(self,watched,event):
-        if event.type() in (QEvent.Type.Resize,QEvent.Type.WindowStateChange): self.place()
+        if event.type() in (QEvent.Type.Resize,QEvent.Type.WindowStateChange):
+            self.place()
+            # A native WM_SIZE can reach the filter before Qt commits its final window state.
+            self.state_timer.start(0)
         if event.type()==QEvent.Type.Show: self.enable_native()
         return False
 

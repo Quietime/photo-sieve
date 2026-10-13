@@ -3,7 +3,7 @@ from collections import OrderedDict
 from pathlib import Path
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QStackedWidget
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QStackedWidget,QScrollArea
 from photo_grid import PhotoGrid
 from filmstrip import MixedFilmstrip
 from apple_ui import GlassDock
@@ -26,13 +26,13 @@ class RatingPage(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
-        self.scope=QComboBox();self.scope.addItems(['全部照片','保留照片']);row.addWidget(self.scope)
-        self.filter=QComboBox();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);row.addWidget(self.filter)
-        self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));row.addWidget(self.auto)
+        options=QHBoxLayout();self.scope=QComboBox();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
+        self.filter=QComboBox();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
+        self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));options.addWidget(self.auto)
         self.auto.toggled.connect(lambda value:QSettings('PhotoSieve','PhotoSieve').setValue('rating_auto_next',value))
-        self.read_button=host.button('读取全部系统评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row)
+        self.read_button=host.button('读取全部系统评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row);layout.addLayout(options)
         self.note=QLabel('星级写入照片的 Windows 属性；保留与删除标记独立。格式支持取决于 Windows 文件属性处理器。');self.note.setObjectName('caption');self.note.setWordWrap(True);layout.addWidget(self.note)
-        self.gallery_button=host.button('缩略图库',self.toggle_gallery);row.insertWidget(row.count()-1,self.gallery_button)
+        self.gallery_button=host.button('缩略图库',self.toggle_gallery);options.addWidget(self.gallery_button);options.addStretch()
         self.body=QStackedWidget();layout.addWidget(self.body,1);review=QWidget();pair=QHBoxLayout(review);pair.setContentsMargins(0,0,0,0);pair.setSpacing(16)
         self.panes=[];self.names=[]
         for index in range(2):
@@ -42,7 +42,7 @@ class RatingPage(QWidget):
         self.pane=self.panes[0];self.name=self.names[0];self.body.addWidget(review)
         self.grid=PhotoGrid();self.grid.tile_height=180;self.grid.setGridSize(QSize(196,180));self.grid.setWordWrap(True);self.body.addWidget(self.grid)
         self.status=QLabel('尚未读取 Windows 系统评级');self.status.setWordWrap(True);self.status.setAlignment(Qt.AlignmentFlag.AlignCenter);self.status.setObjectName('caption');layout.addWidget(self.status)
-        self.action_row=QWidget();outer_controls=QHBoxLayout(self.action_row);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(6,2,6,2);controls.setSpacing(4);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
+        self.action_row=QScrollArea();self.action_row.setWidgetResizable(True);self.action_row.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded);self.action_row.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.action_row.setFixedHeight(52);self.action_row.setStyleSheet('QScrollArea {background:transparent;border:0;}');action_content=QWidget();self.action_row.setWidget(action_content);outer_controls=QHBoxLayout(action_content);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(6,2,6,2);controls.setSpacing(4);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
         self.star_buttons=[]
         for star in range(1,6):
             button=host.button('★'*star,lambda _,star=star:self.grade(star));button.setAccessibleName(f'设置 {star} 星');controls.addWidget(button);self.star_buttons.append(button)
@@ -227,7 +227,7 @@ class RatingPage(QWidget):
             self.writing=False;pid=result['photo_id'];self.info[pid]=result;self.images.pop(pid,None);self.update_caption(pid)
             if advance and self.auto.isChecked():self.move(1)
             elif not advance and pid in self.ids:self.select(self.ids.index(pid))
-            self.update_controls();self.visible();self.host.update_actions();self.host.toast.show_message('已写入 Windows 系统评级：'+self.star_text(result),'info')
+            self.update_controls();self.visible();self.host.update_actions();self.note.setText('已写入 Windows 系统评级：'+self.star_text(result)+' · 保留 / 删除标记不变')
             if self.filter.currentIndex():self.reload()
         def failed(message):self.writing=False;self.update_controls();self.host.update_actions();self.host.error(message)
         self.host.op(work,done,failed)
