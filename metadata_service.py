@@ -43,4 +43,4 @@ class MetadataService(QObject):
         h.submit(work,done,failed,self.pool,-5)
 
     def shutdown(self):
-        self.stopped.set();self.timer.stop();self.host.metadata_reader.close();self.pool.clear();self.pool.waitForDone()
+        self.stopped.set();self.timer.stop();self.host.metadata_reader.close();self.pool.waitForDone()

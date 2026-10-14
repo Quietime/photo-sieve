@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [full, update_ui, features, review_ui, deletion]
+        options: [full, update_ui, features, review_ui, deletion, responsiveness]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'features'
+        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness'
         run: python tools/prepare_feature_fixtures.py
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
@@ -84,6 +84,17 @@ jobs:
           python -m unittest tests.test_delete_sharing tests.test_photo_metadata -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_fast_delete.py deletion-ui-ci
+      - name: Test changed responsiveness and file coordination
+        if: env.CHECK_SCOPE == 'responsiveness'
+        env:
+          QT_QPA_PLATFORM: windows
+          PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
+        run: |
+          python -m unittest tests.test_faces tests.test_face_service tests.test_metadata_service tests.test_photo_metadata tests.test_delete_sharing -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_review_details.py review-ui-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_fast_delete.py deletion-ui-ci --count 500 --raw-fixture feature-fixtures/sony.ARW
       - name: Test library and updater
         if: env.CHECK_SCOPE == 'full'
         run: python -m unittest discover -s tests -p 'test_*.py' -v
@@ -212,12 +223,14 @@ jobs:
           if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
           if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
       - name: Verify rapid deletion in packaged EXE
-        if: env.CHECK_SCOPE == 'deletion'
+        if: env.CHECK_SCOPE == 'deletion' || env.CHECK_SCOPE == 'responsiveness'
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--delete-sharing-self-test', 'deletion-frozen-ci' -Wait -PassThru
+          $arguments = @('--delete-sharing-self-test', 'deletion-frozen-ci')
+          if ($env:CHECK_SCOPE -eq 'responsiveness') { $arguments += @('500', 'feature-fixtures/sony.ARW') }
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList $arguments -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged concurrent deletion failed' }
           if (!(Get-Content deletion-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged concurrent deletion verification failed' }
       - name: Verify frozen isolated Windows rating helpers

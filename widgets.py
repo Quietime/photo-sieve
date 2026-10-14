@@ -308,7 +308,7 @@ class Toast(QWidget):
         if changed: self.reposition(); self.update()
         self.raise_()
         if not self.isVisible() or self.leaving:
-            self.leaving = False; self.show(); self.run(self.opacity, 1.0, 200)
+            self.leaving = False; self.show(); self.run(self.opacity, 1.0, 80)
         self.timer.start(duration)
 
     def leave(self):

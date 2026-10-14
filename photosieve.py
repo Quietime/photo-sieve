@@ -5,9 +5,9 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
-    if len(sys.argv)==3 and sys.argv[1]=='--delete-sharing-self-test':
+    if 3<=len(sys.argv)<=5 and sys.argv[1]=='--delete-sharing-self-test':
         from tools.check_fast_delete import run
-        run(sys.argv[2]);sys.exit(0)
+        run(sys.argv[2],int(sys.argv[3]) if len(sys.argv)>3 else 24,sys.argv[4] if len(sys.argv)>4 else None);sys.exit(0)
     if len(sys.argv)==3 and sys.argv[1]=='--review-ui-self-test':
         from tools.check_review_details import run
         run(sys.argv[2]);sys.exit(0)
