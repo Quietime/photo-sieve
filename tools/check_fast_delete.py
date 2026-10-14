@@ -73,7 +73,16 @@ def run(output,count=24,raw_fixture=None):
                     deleted.append(window.queue[0]['id']);QTest.keyClick(window,Qt.Key.Key_Down);application.processEvents();peak_pending=max(peak_pending,window.pending_ops)
                     assert window.queue[0]['id']!=deleted[-1],'Delete key did not advance'
                 key_seconds=time.monotonic()-key_start
-                until(lambda:not window.pending_ops and not window.inflight)
+                # Durable filesystem/SQLite commits vary considerably on Windows.
+                # Require ongoing progress, rather than the 24-photo fixed wait.
+                drain_start=time.monotonic();last_progress=drain_start;previous=window.pending_ops;progress=[]
+                while window.pending_ops or window.inflight:
+                    application.processEvents();QTest.qWait(5);now=time.monotonic()
+                    if window.pending_ops<previous:
+                        previous=window.pending_ops;last_progress=now
+                        progress.append([round(now-key_start,3),previous])
+                    if now-last_progress>30:raise AssertionError('Deletion made no progress for 30 seconds')
+                    if now-drain_start>max(120,count*.8):raise AssertionError('Deletion exceeded bounded total drain time')
                 complete_seconds=time.monotonic()-key_start
                 assert not errors,errors
                 assert deleted==expected,'Deletion skipped or reordered photos'
@@ -93,7 +102,7 @@ def run(output,count=24,raw_fixture=None):
                     with held_file(path):locked.set();time.sleep(.12)
                 thread=threading.Thread(target=external);thread.start();assert locked.wait(2)
                 result=window.library.trash(target);thread.join(2);assert Path(result['backup']).exists()
-                report={'ok':True,'platform':application.platformName(),'deleted':count,'imported':total,'peak_pending':peak_pending,'in_order':deleted==expected,'format':'Sony ARW' if raw_fixture else 'generated JPEG','key_seconds':round(key_seconds,3),'complete_seconds':round(complete_seconds,3),'external_handle_move':True,'metadata_reads':reader.count,'errors':errors,'checks':['rapid_keyboard_delete_with_active_metadata_handle','all_deleted_backups_match_original_bytes','one_history_entry_per_photo','no_unfinished_moves','external_share_lock_retry']}
+                report={'ok':True,'platform':application.platformName(),'deleted':count,'imported':total,'peak_pending':peak_pending,'in_order':deleted==expected,'format':'Sony ARW' if raw_fixture else 'generated JPEG','key_seconds':round(key_seconds,3),'complete_seconds':round(complete_seconds,3),'drain_progress':progress,'external_handle_move':True,'metadata_reads':reader.count,'errors':errors,'checks':['rapid_keyboard_delete_with_active_metadata_handle','all_deleted_backups_match_original_bytes','one_history_entry_per_photo','no_unfinished_moves','external_share_lock_retry']}
             except BaseException as exc:
                 import faulthandler
                 with (output/'threads.txt').open('w') as stream:faulthandler.dump_traceback(file=stream,all_threads=True)
