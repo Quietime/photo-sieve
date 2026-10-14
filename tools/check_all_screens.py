@@ -311,7 +311,7 @@ def run(output):
 
                 panel = audit.open_menu(window, '12_more_options')
                 titles=[label.text() for label in panel.findChildren(QLabel) if label.objectName()=='sectionTitle']
-                audit.check('settings_have_four_clear_categories',titles==['照片管理','界面与操作','性能与缓存','更新与诊断'])
+                audit.check('settings_have_mode_and_global_categories',panel.windowTitle()=='照片筛选设置' and all(title in titles for title in ['照片管理','筛选界面与操作','筛选预加载','应用全局']))
                 names=[control.text() for control in panel.findChildren(QAbstractButton) if control.objectName()=='menuItem']
                 audit.check('settings_have_no_duplicate_controls',len(names)==len(set(names)))
                 audit.click(audit.button(panel,'显示底部操作栏'))
@@ -351,7 +351,7 @@ def run(output):
                     audit.check('restore_shortcut_defaults', dialog.chosen() == keys.defaults())
                     audit.click(audit.button(dialog, '保存'))
                 panel = audit.open_menu(window, '13a_menu_before_shortcuts')
-                audit.modal('13_shortcuts', lambda: audit.click(audit.button(panel, '快捷键…')), shortcuts)
+                audit.modal('13_shortcuts', lambda: audit.click(audit.button(panel, '筛选快捷键…')), shortcuts)
 
                 def cache(dialog):
                     fields = dialog.findChildren(QSpinBox)

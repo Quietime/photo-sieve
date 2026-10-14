@@ -49,7 +49,7 @@ class RatingPage(QWidget):
             button=host.button('★'*star,lambda _,star=star:self.grade(star));button.setAccessibleName(f'设置 {star} 星');controls.addWidget(button);self.star_buttons.append(button)
         self.clear_button=host.button('清除评级',lambda:self.grade(0));controls.addWidget(self.clear_button)
         self.undo_button=host.button('撤销评级',self.undo);controls.addWidget(self.undo_button)
-        self.next=host.button('下一张',lambda:self.move(1));controls.addWidget(self.next);outer_controls.addWidget(self.dock);outer_controls.addStretch();layout.addWidget(self.action_row);self.action_row.setVisible(host.actionbar_visible)
+        self.next=host.button('下一张',lambda:self.move(1));controls.addWidget(self.next);outer_controls.addWidget(self.dock);outer_controls.addStretch();layout.addWidget(self.action_row);self.action_row.setVisible(host.rating_actionbar_visible)
         self.dock.register([self.previous]+self.star_buttons+[self.clear_button,self.undo_button,self.next])
         self.strip=MixedFilmstrip();self.strip.icon_for=lambda pid:self.thumbs.get(pid,host.placeholder);self.strip.itemClicked.connect(lambda item:self.select(item.row));self.strip.horizontalScrollBar().valueChanged.connect(self.visible);layout.addWidget(self.strip)
         self.scope.currentIndexChanged.connect(self.reload);self.filter.currentIndexChanged.connect(self.reload)

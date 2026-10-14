@@ -183,6 +183,12 @@ class Work(QRunnable):
             self.signals.fail.emit(str(getattr(e, 'detail', str(e))))
 
 
+class ModeSettings:
+    """The two work modes share storage, never each other's display choices."""
+    def __init__(self,settings,mode):self.settings=settings;self.prefix=mode+'/'
+    def value(self,name,default=None,**kwargs):return self.settings.value(self.prefix+name,default,**kwargs)
+
+
 class Window(QMainWindow):
     VIEWS = [('pending', '未筛选'), ('keep', '保留'), ('deleted', '已删除')]
     cache_changed=Signal(object)
@@ -200,7 +206,10 @@ class Window(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint); self.setWindowIcon(app_icon())
         settings=QSettings('PhotoSieve','PhotoSieve')
         self.rating_active=False
-        self.actionbar_visible=settings.value('show_actionbar',True,type=bool)
+        for name,default in [('show_actionbar',True),('show_fps',False),('reduced_motion',False),('reduced_transparency',False)]:
+            if not settings.contains('review/'+name):settings.setValue('review/'+name,settings.value(name,default,type=bool))
+        self.actionbar_visible=settings.value('review/show_actionbar',True,type=bool)
+        self.rating_actionbar_visible=settings.value('rating/show_actionbar',True,type=bool)
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
         self.cache_clearing=False;self.importing=False;self.import_revision=None
@@ -230,7 +239,7 @@ class Window(QMainWindow):
         self.state_timer = QTimer(self); self.state_timer.setSingleShot(True); self.state_timer.timeout.connect(self.poll)
         self.chrome_timer = QTimer(self); self.chrome_timer.setSingleShot(True); self.chrome_timer.timeout.connect(self.paint_chrome); self.burst = False
         self.resize_timer = QTimer(self); self.resize_timer.setSingleShot(True); self.resize_timer.timeout.connect(self.resized)
-        theme.configure_accessibility(QSettings('PhotoSieve', 'PhotoSieve'))
+        theme.configure_accessibility(self.mode_settings('review'))
         self.uninstall_requested=False
         self.build(); self.window_frame=WindowFrame(self,self.window_chrome); self.update_actions()
         self.face_panel=FacePanel(self.face_container);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
@@ -238,6 +247,7 @@ class Window(QMainWindow):
         self.metadata_service=MetadataService(self)
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
+        self.apply_mode_preferences()
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
         self.maintenance_running=False; self.maintenance_timer=QTimer(self)
         self.maintenance_timer.timeout.connect(self.maintain_cache); self.maintenance_timer.start(30000)
@@ -309,7 +319,7 @@ class Window(QMainWindow):
     def toggle_rating(self):
         if self.busy or self.pending_ops or self.job_running():return
         if getattr(self,'more_panel',None):self.more_panel.hide()
-        self.rating_active=not self.rating_active;self.segments.setVisible(not self.rating_active)
+        self.rating_active=not self.rating_active;self.apply_mode_preferences();self.segments.setVisible(not self.rating_active)
         self.rating_button.setText('返回照片筛选' if self.rating_active else '照片分级')
         if self.rating_active:
             self.generation+=1;self.fetching=False;self.reset_zoom();self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate()
@@ -427,17 +437,19 @@ class Window(QMainWindow):
         self.deleted_grid.setUniformItemSizes(True); self.deleted_grid.setIconSize(QSize(176, 118)); self.deleted_grid.setGridSize(QSize(196, 158))
         self.deleted_grid.setTextElideMode(Qt.TextElideMode.ElideMiddle); self.deleted_grid.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.deleted_grid.itemClicked.connect(lambda item:self.album.open(item.data(ROLE)))
-        self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.deleted_grid.itemClicked.connect(self.open_deleted_item)
+        self.deleted_grid.itemDoubleClicked.connect(lambda item:not self.busy and self.album.open(item.data(ROLE)))
         self.deleted_grid.itemSelectionChanged.connect(self.deleted_selection_changed)
         self.deleted_grid.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.deleted_grid.verticalScrollBar().valueChanged.connect(self.maybe_more_deleted); grid_layout.addWidget(self.deleted_grid, 1)
-        footer = QHBoxLayout(); self.deleted_note = QLabel('已删除相册 · 单击照片查看大图')
+        footer = QHBoxLayout(); self.deleted_note = QLabel('单击查看大图 · 开启多选后可批量操作')
         self.deleted_note.setObjectName('caption'); footer.addWidget(self.deleted_note, 1)
+        self.deleted_multiselect=self.button('多选',lambda:None);self.deleted_multiselect.setCheckable(True);self.deleted_multiselect.toggled.connect(self.toggle_deleted_multiselect);footer.addWidget(self.deleted_multiselect)
         self.select_all_deleted = self.button('全选', self.select_deleted); footer.addWidget(self.select_all_deleted)
-        self.purge_selected = self.button('彻底删除所选', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
-        self.restore_selected = self.button('恢复所选', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
-        for control in (self.select_all_deleted,self.purge_selected,self.restore_selected):control.hide()
+        self.purge_selected = self.button('批量删除', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
+        self.restore_selected = self.button('批量恢复', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
+        self.clear_deleted=self.button('一键清空',lambda:self.purge_selection(clear_all=True),'plain');footer.addWidget(self.clear_deleted)
+        self.clear_deleted.setToolTip('永久删除全部待删除区照片；执行前会再次确认')
         self.stack.addWidget(deleted)
 
         empty = WelcomePage(); hero = QVBoxLayout(empty); hero.setContentsMargins(24,24,24,24); hero.setSpacing(12); hero.addStretch()
@@ -462,51 +474,88 @@ class Window(QMainWindow):
         self.toast.positioner=self.place_overlays
         grip_row=QHBoxLayout(); grip_row.setContentsMargins(0,0,2,2); grip_row.addStretch(); grip_row.addWidget(QSizeGrip(self)); outer.addLayout(grip_row)
 
+    def mode_settings(self,mode=None):
+        return ModeSettings(QSettings('PhotoSieve','PhotoSieve'),mode or ('rating' if self.rating_active else 'review'))
+
+    def apply_mode_preferences(self):
+        theme.configure_accessibility(self.mode_settings())
+        self.action_row.setVisible(self.actionbar_visible)
+        self.rating_page.action_row.setVisible(self.rating_actionbar_visible)
+        self.show_fps(self.mode_settings().value('show_fps',False,type=bool),persist=False)
+        self.finish_motion();self.actionbar.update();self.rating_page.dock.update();self.segments.update()
+
     def show_menu(self):
         self.updates.touch()
-        if getattr(self,'more_panel',None) and self.more_panel.isVisible(): self.more_panel.close(); return
-        if getattr(self,'more_panel',None): self.more_panel.deleteLater()
-        menu = self.more_panel = SettingsPanel(self,self.more_button)
-        menu.addSection('照片管理', '整理当前文件夹中的照片')
+        if getattr(self,'more_panel',None) and self.more_panel.isVisible():self.more_panel.close();return
+        if getattr(self,'more_panel',None):self.more_panel.deleteLater()
+        menu=self.more_panel=SettingsPanel(self,self.more_button)
+        title='照片分级设置' if self.rating_active else '照片筛选设置'
+        menu.setWindowTitle(title);menu.setAccessibleName(title)
+        for label in menu.findChildren(QLabel):
+            if label.text()=='更多选项':label.setText(title);break
+        if self.rating_active:self.add_rating_settings(menu)
+        else:self.add_review_settings(menu)
+        self.add_application_settings(menu)
+        menu.exec()
+
+    def add_review_settings(self,menu):
+        menu.addSection('照片管理','仅调整照片筛选')
         if self.session_active:
-            ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(self.session_active and not self.busy and not self.rating_active);ordering.triggered.connect(self.edit_ordering)
+            ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(not self.busy);ordering.triggered.connect(self.edit_ordering)
             rescan=menu.addAction('重新扫描当前文件夹');root=self.state_data and self.state_data.get('root')
             rescan.setEnabled(bool(root) and not self.busy and not self.pending_ops);rescan.triggered.connect(lambda:self.scan(root))
         menu.addAction('人脸预览…').triggered.connect(self.face_settings)
-        menu.addSection('界面与操作', '调整显示方式和键盘操作')
-        dock=QAction('显示底部操作栏',menu);dock.setCheckable(True);dock.setChecked(self.actionbar_visible)
-        dock.toggled.connect(self.set_actionbar_visible);menu.addAction(dock)
-        menu.addAction('快捷键…').triggered.connect(self.edit_shortcuts)
-        fps=QAction('显示帧率',menu);fps.setCheckable(True);fps.setChecked(self.fps_label is not None);fps.toggled.connect(self.show_fps);menu.addAction(fps)
-        reduced=QAction('减少动态效果',menu);reduced.setCheckable(True);reduced.setChecked(theme.REDUCED_MOTION)
-        reduced.toggled.connect(lambda enabled:self.set_accessibility('reduced_motion',enabled));menu.addAction(reduced)
-        menu.addSection('性能与缓存', '管理预加载、缓存空间和渲染方式')
+        self.add_mode_display_settings(menu,'review')
+        menu.addSection('筛选预加载','仅用于筛选照片和人脸预览')
         menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
+
+    def add_rating_settings(self,menu):
+        menu.addSection('分级操作','星级、范围和评级读取在分级页面中操作')
+        menu.addAction('分级快捷键…').triggered.connect(self.rating_page.edit_keys)
+        self.add_mode_display_settings(menu,'rating')
+
+    def add_mode_display_settings(self,menu,mode):
+        menu.addSection('分级界面与操作' if mode=='rating' else '筛选界面与操作','这些显示选项只影响当前工作模式')
+        dock=QAction('显示底部操作栏',menu);dock.setCheckable(True)
+        dock.setChecked(self.rating_actionbar_visible if mode=='rating' else self.actionbar_visible)
+        dock.toggled.connect(lambda enabled:self.set_actionbar_visible(enabled,mode));menu.addAction(dock)
+        if mode=='review':menu.addAction('筛选快捷键…').triggered.connect(self.edit_shortcuts)
+        prefs=self.mode_settings(mode)
+        fps=QAction('显示帧率',menu);fps.setCheckable(True);fps.setChecked(prefs.value('show_fps',False,type=bool))
+        fps.toggled.connect(lambda enabled:self.show_fps(enabled,mode=mode));menu.addAction(fps)
+        for name,text in [('reduced_motion','减少动态效果'),('reduced_transparency','减少透明效果')]:
+            action=QAction(text,menu);action.setCheckable(True);action.setChecked(prefs.value(name,False,type=bool))
+            action.toggled.connect(lambda enabled,name=name:self.set_accessibility(name,enabled,mode));menu.addAction(action)
+
+    def add_application_settings(self,menu):
+        menu.addSection('应用全局','缓存清理、GPU、更新和日志适用于整个应用')
         clear=menu.addAction('一键清理全部缓存');clear.setEnabled(not self.busy and not self.pending_ops and not self.rating_page.writing);clear.triggered.connect(self.clear_cache)
-        gpu=QAction('GPU 合成',menu);gpu.setToolTip('切换后重启应用生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
+        gpu=QAction('GPU 合成（应用级）',menu);gpu.setToolTip('应用统一渲染设置，切换后重启生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
         gpu.setChecked(QSettings('PhotoSieve','PhotoSieve').value('gpu_compositing',False,type=bool));gpu.toggled.connect(self.set_gpu);menu.addAction(gpu)
-        menu.addSection('更新与诊断', '获取新版本或查看运行日志')
         menu.addAction('检查更新').triggered.connect(lambda:self.updates.check())
         automatic=QAction('自动检查更新',menu);automatic.setCheckable(True);automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
         menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
-        menu.exec()
 
-    def set_actionbar_visible(self, enabled):
-        self.actionbar_visible=bool(enabled)
-        settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue('show_actionbar',self.actionbar_visible);settings.sync()
-        self.action_row.setVisible(self.actionbar_visible)
-        self.rating_page.action_row.setVisible(self.actionbar_visible)
-        self.centralWidget().layout().activate()
-        self.place_overlays()
+    def set_actionbar_visible(self,enabled,mode=None):
+        mode=mode or ('rating' if self.rating_active else 'review');enabled=bool(enabled)
+        settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue(mode+'/show_actionbar',enabled)
+        if mode=='rating':self.rating_actionbar_visible=enabled;self.rating_page.action_row.setVisible(enabled)
+        else:
+            self.actionbar_visible=enabled;self.action_row.setVisible(enabled)
+            settings.setValue('show_actionbar',enabled)  # Upgrade compatibility belongs to review only.
+        settings.sync();self.centralWidget().layout().activate();self.place_overlays()
         QTimer.singleShot(0,self.update_display_size)
 
-    def set_accessibility(self, name, enabled):
-        settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue(name,bool(enabled));settings.sync()
-        theme.configure_accessibility(settings);self.finish_motion();self.actionbar.update();self.segments.update()
-        for control in self.actionbar.controls:control.set_response(0.);control.update()
+    def set_accessibility(self,name,enabled,mode=None):
+        mode=mode or ('rating' if self.rating_active else 'review')
+        settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue(mode+'/'+name,bool(enabled));settings.sync()
+        if mode!=('rating' if self.rating_active else 'review'):return
+        theme.configure_accessibility(self.mode_settings(mode));self.finish_motion();self.actionbar.update();self.rating_page.dock.update();self.segments.update()
+        for dock in (self.actionbar,self.rating_page.dock):
+            for control in dock.controls:control.set_response(0.);control.update()
 
     def cache_dialog(self):
         dialog=QDialog(self); dialog.setWindowTitle('预加载与缓存'); dialog.setMinimumSize(600,460)
@@ -580,7 +629,11 @@ class Window(QMainWindow):
         QSettings('PhotoSieve', 'PhotoSieve').setValue('gpu_compositing', bool(enabled))
         self.toast.show_message(('GPU 合成' if enabled else 'CPU 合成') + '将在下次启动时生效', 'info', 2600)
 
-    def show_fps(self, enabled):
+    def show_fps(self,enabled,persist=True,mode=None):
+        mode=mode or ('rating' if self.rating_active else 'review')
+        if persist:
+            settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue(mode+'/show_fps',bool(enabled));settings.sync()
+        if mode!=('rating' if self.rating_active else 'review'):return
         if not enabled:
             if self.fps_label: self.removeEventFilter(self); self.fps_timer.stop(); self.fps_label.deleteLater(); self.fps_label = None
             return
@@ -643,6 +696,8 @@ class Window(QMainWindow):
         def done(state):
             self.state_pending = False
             if library is not self.library: self.poll(); return
+            if state['job']['revision']!=library.job['revision'] or state['job']['running'] and not library.job['running']:
+                self.poll();return
             if not self.session_active:
                 self.state_data = dict(state, root='', cursor=0, counts={}); self.counts={}; self.stack.setCurrentIndex(5 if self.rating_active else 2); self.show_counts(); self.update_actions(); return
             first = self.state_data is None; old = self.state_data; self.state_data = state; job = state['job']; running = job['running']
@@ -995,6 +1050,10 @@ class Window(QMainWindow):
         self.refresh_chrome()
 
     def update_actions(self):
+        if hasattr(self,'clear_deleted'):
+            available=not self.busy and not self.pending_ops and not self.job_running()
+            self.clear_deleted.setEnabled(available and bool(self.counts.get('deleted')))
+            self.deleted_multiselect.setEnabled(available)
         opened=self.session_active and not self.importing and self.stack.currentIndex()!=2
         resume_available=not self.session_active and self.resume_button.isEnabled()
         self.resume_button.setVisible(resume_available);self.welcome_resume.setVisible(resume_available)
@@ -1184,15 +1243,25 @@ class Window(QMainWindow):
         if not items: return
         ids=[item.data(ROLE) for item in items]
         all_selected=getattr(self,'all_deleted_selected',False) and len(ids)==self.deleted_grid.count()
-        if len(ids)==1 and not all_selected: self.restore(photo_id=ids[0]); return
-        library=self.library
-        self.busy=True; self.update_actions(); self.timer.start(900)
+        self.run_deleted_job(lambda:self.library.restore_deleted(None if all_selected else ids),'所选照片已恢复')
+
+    def run_deleted_job(self,start,message):
+        if self.busy or self.pending_ops or self.job_running():return
+        self.busy=True;self.deleted_grid.setEnabled(False);self.update_actions();self.timer.start(180)
         def work():
-            library.restore_deleted(None if all_selected else ids)
-            while library.job['running']: time.sleep(.01)
-            return library.job
-        def done(_): self.busy=False; self.poll(); self.timer.start(900)
-        def failed(message): self.busy=False; self.update_actions(); self.error(message)
+            start()
+            while self.library.job['running']:time.sleep(.01)
+            return dict(self.library.job),self.library.state()
+        def done(payload):
+            result,state=payload
+            self.busy=False;self.deleted_grid.setEnabled(True);self.all_deleted_selected=False
+            self.state_data=state;self.counts=dict(state['counts']);self.was_running=False
+            self.show_counts();self.load();self.timer.start(180)
+            errors=result.get('errors',[])
+            self.toast.show_message(f'已完成，{len(errors)} 项失败；未完成的照片仍保留' if errors else message,'error' if errors else 'info',3000)
+            self.update_actions()
+        def failed(error):
+            self.busy=False;self.deleted_grid.setEnabled(True);self.update_actions();self.error(error)
         self.op(work,done,failed)
 
     def uninstaller_path(self):
@@ -1419,25 +1488,47 @@ class Window(QMainWindow):
         self.reset_zoom();self.stack.setCurrentIndex(4);self.keep_back_button.hide();self.place_overlays();self.update_actions();self.load_kept_grid()
 
     # ---- deleted grid ----------------------------------------------------------
+    def open_deleted_item(self,item):
+        if self.busy:return
+        if self.deleted_multiselect.isChecked() or QApplication.keyboardModifiers() & (Qt.KeyboardModifier.ControlModifier|Qt.KeyboardModifier.ShiftModifier):return
+        self.album.open(item.data(ROLE))
+
+    def toggle_deleted_multiselect(self,enabled):
+        self.deleted_multiselect.setText('完成多选' if enabled else '多选')
+        self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection if enabled else QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.deleted_selection_changed()
+
     def select_deleted(self):
-        self.all_deleted_selected=True; self.deleted_grid.selectAll()
-        self.toast.show_message(f'已选中全部 {self.counts.get("deleted",0):,} 张已删除照片（包含尚未加载的照片）','info')
+        if self.busy or self.job_running():return
+        if getattr(self,'all_deleted_selected',False):
+            self.all_deleted_selected=False;self.deleted_grid.clearSelection();self.deleted_selection_changed();return
+        self.deleted_multiselect.setChecked(True)
+        blocked=self.deleted_grid.blockSignals(True);self.deleted_grid.selectAll();self.deleted_grid.blockSignals(blocked)
+        self.all_deleted_selected=True;self.deleted_selection_changed()
+        self.toast.show_message(f'已选中全部 {self.counts.get("deleted",0):,} 张（包含尚未加载的照片）','info')
 
     def deleted_selection_changed(self):
-        if getattr(self,'all_deleted_selected',False) and len(self.deleted_grid.selectedItems())!=self.deleted_grid.count():
-            self.all_deleted_selected=False
+        selected=len(self.deleted_grid.selectedItems())
+        if getattr(self,'all_deleted_selected',False) and selected!=self.deleted_grid.count():self.all_deleted_selected=False
+        count=self.counts.get('deleted',selected) if getattr(self,'all_deleted_selected',False) else selected
+        self.deleted_note.setText(f'已选 {count:,} 张 · 双击查看大图' if self.deleted_multiselect.isChecked() or selected>1 else '单击查看大图 · 开启多选后可批量操作')
+        self.select_all_deleted.setText('取消全选' if getattr(self,'all_deleted_selected',False) else '全选')
         self.update_actions()
 
-    def purge_selection(self):
+    def purge_selection(self,clear_all=False):
+        if self.busy or self.pending_ops or self.job_running():return
         ids=[item.data(ROLE) for item in self.deleted_grid.selectedItems()]
-        if not ids: return
-        all_selected=getattr(self,'all_deleted_selected',False) and len(ids)==self.deleted_grid.count()
+        if not ids and not clear_all:return
+        all_selected=bool(clear_all or getattr(self,'all_deleted_selected',False) and len(ids)==self.deleted_grid.count())
         count=self.counts.get('deleted',len(ids)) if all_selected else len(ids)
-        box=QMessageBox(self); box.setWindowTitle('彻底删除照片')
-        box.setText(f'彻底删除 {count:,} 张暂存照片？'); box.setInformativeText('文件将永久删除，不进入 Windows 回收站，无法通过左键或撤回恢复。')
-        confirm=box.addButton('彻底删除',QMessageBox.ButtonRole.DestructiveRole); box.addButton('取消',QMessageBox.ButtonRole.RejectRole); box.exec()
+        if not count:return
+        box=QMessageBox(self);box.setWindowTitle('清空待删除区' if clear_all else '批量永久删除')
+        box.setText(f'永久删除{"全部 " if all_selected else "所选 "}{count:,} 张照片？')
+        box.setInformativeText('只处理待删除区中的照片。永久删除后无法恢复，不进入 Windows 回收站；保留与未筛选照片不会被删除。')
+        confirm=box.addButton('永久删除',QMessageBox.ButtonRole.DestructiveRole)
+        cancel=box.addButton('取消',QMessageBox.ButtonRole.RejectRole);box.setDefaultButton(cancel);box.setEscapeButton(cancel);box.exec()
         if box.clickedButton() is confirm:
-            self.submit(lambda:self.library.purge_deleted(None if all_selected else ids),lambda _:(self.poll(),self.timer.start(900)))
+            self.run_deleted_job(lambda:self.library.purge_deleted(None if all_selected else ids),'待删除区已清空' if clear_all else '所选照片已永久删除')
 
     def add_deleted(self, rows):
         previous=self.deleted_grid.blockSignals(True)

@@ -91,6 +91,7 @@ class ImportPage(QWidget):
 
 class PhotoView(QGraphicsView):
     clicked = Signal(object, object)
+    background_clicked = Signal()
     next_requested = Signal()
     escape_requested = Signal()
     resized = Signal()
@@ -101,7 +102,8 @@ class PhotoView(QGraphicsView):
         self.fit_factor = fit_factor
         self.fit_height_factor = fit_height_factor
         self.setScene(QGraphicsScene(self)); self.item = None; self.text = None
-        self.photo = None; self.pixmap = None; self.press = None
+        self.photo = None; self.pixmap = None; self.press = None; self.press_on_image=False; self.dragged=False
+        self.click_anchor=None
         self.detail = False; self.full_resolution = False; self.source_width = 0
         self.zoom_animation = None; self.pending_full = None; self.wheel_adjusted = False
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -121,6 +123,7 @@ class PhotoView(QGraphicsView):
 
     def show_photo(self, photo, pixmap=None, error='', message=''):
         self.stop_zoom(); self.pending_full = None; self.wheel_adjusted = False
+        self.click_anchor=None; self.press=None; self.press_on_image=False; self.dragged=False
         self.detail = False; self.full_resolution = False; self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.photo = photo; self.pixmap = pixmap; self.scene().clear(); self.item = self.text = None; self.resetTransform()
         if pixmap:
@@ -161,7 +164,9 @@ class PhotoView(QGraphicsView):
         if not self.pixmap: return
         self.detail = True; self.wheel_adjusted = False; self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         view = QPointF(point) if point is not None else QPointF(self.viewport().rect().center())
-        self.animate_scale(self.zoom_target(), self.mapToScene(view.toPoint()), view, done=self.apply_pending)
+        scene=self.mapToScene(view.toPoint());rect=self.sceneRect()
+        self.click_anchor=((scene.x()-rect.left())/max(1,rect.width()),(scene.y()-rect.top())/max(1,rect.height()),view)
+        self.animate_scale(self.zoom_target(),scene,view,done=self.apply_pending)
 
     def apply_pending(self):
         if self.pending_full is not None:
@@ -183,11 +188,15 @@ class PhotoView(QGraphicsView):
         if self.wheel_adjusted:
             self.zoom_changed.emit()
         else:
-            self.animate_scale(1.0, target, QPointF(self.viewport().rect().center()), 130, self.zoom_changed.emit)
+            if self.click_anchor is not None:
+                x,y,view=self.click_anchor;anchor=QPointF(rect.left()+x*rect.width(),rect.top()+y*rect.height())
+            else:anchor,view=target,QPointF(self.viewport().rect().center())
+            self.animate_scale(1.0,anchor,view,130,self.zoom_changed.emit)
 
     def unzoom(self, done):
         """Leave zoom immediately in state, then animate back to the fitted photo."""
         self.detail = False; self.full_resolution = False; self.pending_full = None
+        self.click_anchor=None
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         if not self.pixmap: done(); return
         rect = self.sceneRect(); target = self.fit_scale(); start = self.transform().m11()
@@ -211,16 +220,32 @@ class PhotoView(QGraphicsView):
         self.resized.emit()
 
     def mousePressEvent(self, event):
-        self.press = event.position()
+        self.press = event.position() if event.button()==Qt.MouseButton.LeftButton else None
+        self.press_on_image=self.image_at(event.position());self.dragged=False
         if event.button() == Qt.MouseButton.RightButton:
             self.next_requested.emit(); event.accept(); return
         super().mousePressEvent(event)
 
+    def image_at(self,point):
+        if self.item is None or self.pixmap is None:return False
+        scene=self.mapToScene(QPointF(point).toPoint())
+        return self.item.boundingRect().contains(self.item.mapFromScene(scene))
+
+    def mouseMoveEvent(self,event):
+        if self.press is not None and (event.position()-self.press).manhattanLength()>=5:
+            self.dragged=True;self.click_anchor=None
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event):
         # Finish Qt's drag before toggling; a drag must not count as a click.
-        click = event.button() == Qt.MouseButton.LeftButton and self.press is not None and (event.position() - self.press).manhattanLength() < 5
+        click = event.button() == Qt.MouseButton.LeftButton and self.press is not None and not self.dragged and (event.position() - self.press).manhattanLength() < 5
+        started_on_image=self.press_on_image
         point = event.position(); super().mouseReleaseEvent(event)
-        if click and self.photo: self.clicked.emit(self.photo, point)
+        self.press=None;self.press_on_image=False;self.dragged=False
+        if click:
+            on_image=self.image_at(point)
+            if started_on_image and on_image and self.photo:self.clicked.emit(self.photo,point)
+            elif not started_on_image and not on_image:self.background_clicked.emit()
 
     def wheelEvent(self, event):
         if not self.detail or not self.pixmap:
@@ -230,7 +255,7 @@ class PhotoView(QGraphicsView):
         if not steps:
             event.accept(); return
         view = event.position(); anchor = self.mapToScene(view.toPoint())
-        self.stop_zoom(); self.wheel_adjusted = True
+        self.stop_zoom(); self.wheel_adjusted = True;self.click_anchor=None
         # Smooth trackpad deltas and high-resolution wheels use fractional steps. Limits prevent huge render sizes.
         native = self.zoom_target(); current = self.transform().m11()
         scale = max(self.fit_scale(), min(native * 8, current * 1.2 ** max(-20, min(20, steps))))

@@ -67,9 +67,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          python -m unittest tests.test_photo_metadata tests.test_metadata_service tests.test_next_preview tests.test_preview_resolution tests.test_delete_sharing -v
+          python -m unittest tests.test_photo_metadata tests.test_metadata_service tests.test_next_preview tests.test_preview_resolution tests.test_delete_sharing tests.test_mode_settings tests.test_album_navigation tests.test_zoom tests.test_operation_audit.OperationAuditTest.test_restore_all_deleted_includes_photos_beyond_loaded_page tests.test_operation_audit.OperationAuditTest.test_deselect_after_select_all_is_preserved_when_next_page_loads tests.test_operation_audit.OperationAuditTest.test_restore_selected_restores_only_selected_photos -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_review_details.py review-ui-ci feature-fixtures/sony.ARW
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_mode_settings.py mode-settings-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_deleted_album.py deleted-album-ci
       - name: Verify changed review header at 150 percent scaling
         if: env.CHECK_SCOPE == 'review_ui'
         env:
@@ -196,6 +200,8 @@ jobs:
             small-dialogs-ci/*
             arw-rating-ci/*
             review-ui-ci/*
+            mode-settings-ci/*
+            deleted-album-ci/*
             review-hidpi-ci/*
             deletion-ui-ci/*
             cache-ui-ci/*
@@ -239,6 +245,10 @@ jobs:
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci', 'feature-fixtures/sony.ARW' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
           if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--mode-settings-self-test', 'mode-frozen-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Get-Content mode-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged independent settings failed' }
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-frozen-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Get-Content deleted-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged deleted album failed' }
       - name: Verify cache settings in packaged EXE
         if: env.CHECK_SCOPE == 'cache_ui'
         env:
@@ -285,6 +295,8 @@ jobs:
             features-frozen-ci/*
             arw-rating-frozen-ci/*
             review-frozen-ci/*
+            mode-frozen-ci/*
+            deleted-frozen-ci/*
             deletion-frozen-ci/*
           if-no-files-found: ignore
           retention-days: 14
