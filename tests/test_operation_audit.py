@@ -196,27 +196,15 @@ class OperationAuditTest(unittest.TestCase):
         self.assertTrue(all(self.window.strip.item(i).data(Qt.ItemDataRole.UserRole) != left
                             for i in range(self.window.strip.count())))
 
-    def test_general_undo_has_a_mouse_accessible_entry_when_shortcuts_are_empty(self):
-        self.window.apply_shortcuts({action: ['', ''] for action, _, _, _ in keys.ACTIONS})
-        kept = self.window.queue[0]['id']
-        self.window.keep_button.click()
+    def test_undo_menu_removed_and_keyboard_undo_preserved(self):
+        kept=self.window.queue[0]['id']
+        self.window.keep_button.click();self.settle();self.window.show_menu()
+        panel=self.window.more_panel
+        self.assertFalse([action for action in panel.findChildren(QAction) if '撤回上一步' in action.text()])
+        panel.close();self.window.activateWindow();self.window.setFocus();application.processEvents()
+        QTest.keyClick(self.window,Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier)
         self.settle()
-        self.window.show_menu()
-        panel = self.window.more_panel
-        entries = [action for action in panel.findChildren(QAction) if '撤回上一步' in action.text()]
-        buttons = [button for button in self.window.findChildren(QPushButton) if '撤回上一步' in button.text()]
-        self.assertTrue(entries or buttons,
-                        'The deletion-only Restore button cannot undo a kept photo without Ctrl+Z')
-        if entries:
-            self.assertTrue(entries[0].isEnabled())
-            entries[0].trigger()
-        else:
-            self.assertTrue(buttons[0].isEnabled())
-            buttons[0].click()
-        self.settle()
-        self.assertEqual(self.library.photo(kept)['status'], 0,
-                         'The mouse-only undo entry must actually undo the last kept photo')
-        panel.close()
+        self.assertEqual(self.library.photo(kept)['status'],0)
 
     def test_restore_all_deleted_includes_photos_beyond_loaded_page(self):
         self.deleted_pages()

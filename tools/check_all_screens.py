@@ -381,8 +381,7 @@ def run(output):
                     window.library.cache_limit == 128 * 1024 * 1024)
 
                 panel = audit.open_menu(window, '14c_menu_before_clear_cache')
-                audit.modal('14d_cache_before_clear', lambda: audit.click(audit.button(panel, '预加载与缓存…')),
-                    lambda dialog: audit.click(audit.button(dialog, '清理当前文件夹的预览缓存')))
+                audit.click(audit.button(panel,'一键清理全部缓存'))
                 audit.until(lambda: not window.cache_clearing and not window.busy)
                 audit.screenshot('14e_cache_cleared_feedback', window)
                 audit.check('cache_clear_preserves_originals_and_marks',
