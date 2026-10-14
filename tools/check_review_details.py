@@ -44,7 +44,9 @@ def run(output):
                 crop=Image.new('RGB',(140,180),'#c9ac87');draw=ImageDraw.Draw(crop)
                 draw.ellipse((20,10,120,170),fill='#e0b49a');draw.ellipse((42,57,55,66),fill='#334552');draw.ellipse((86,57,99,66),fill='#334552')
                 png=io.BytesIO();crop.save(png,'PNG');result={'faces':[{}],'imagebytes':png.getvalue()}
-                window.faces.enabled=True;window.face_changed(window.queue[0]['id'],result);application.processEvents()
+                from face_service import cache_key
+                window.faces.enabled=True;window.faces._synchronize();key=cache_key(window.queue[0]);window.faces._remember(key,result);window.faces._done.add(key)
+                window.face_changed(window.queue[0]['id'],result);application.processEvents()
                 panel=window.face_panel;check('face_and_metadata_share_right_header',panel.parentWidget() is window.face_container and window.details[1].parentWidget() is window.review_info)
                 check('header_sits_above_comparison',window.review_info.mapTo(window, QPoint()).y()+window.review_info.height()<=window.photos[1].mapTo(window,QPoint()).y())
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
@@ -54,6 +56,7 @@ def run(output):
                 application.sendEvent(panel,wheel);application.processEvents()
                 check('mouse_does_not_change_face',panel.grab().toImage()==before)
                 check('mouse_does_not_advance_or_zoom_photo',window.queue[0]['id']==pid and not any(p.detail for p in window.photos))
+                QTest.qWait(150);check('face_remains_visible_in_header',panel.isVisible())
                 window.grab().save(str(output/'review-header.png'))
                 window.next_photo();until(lambda:window.queue and window.queue[0]['name']=='1.jpg' and 'ISO 200' in window.details[1].text())
                 check('parameters_follow_left_photo_after_switch','12:01:30' in window.details[1].text() and 'ISO 100' not in window.details[1].text())
