@@ -90,9 +90,11 @@ jobs:
           QT_QPA_PLATFORM: windows
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: |
-          python -m unittest tests.test_faces tests.test_face_service tests.test_metadata_service tests.test_photo_metadata tests.test_delete_sharing tests.test_cache_plan tests.test_cache_index tests.test_capacity_cache tests.test_face_cache_policy -v
+          python -m unittest tests.test_faces tests.test_face_service tests.test_metadata_service tests.test_photo_metadata tests.test_delete_sharing tests.test_cache_plan tests.test_cache_index tests.test_capacity_cache tests.test_face_cache_policy tests.test_update_schedule -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_review_details.py review-ui-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_update_ui.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_cache_settings.py cache-ui-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

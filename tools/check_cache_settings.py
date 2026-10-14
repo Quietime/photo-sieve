@@ -11,6 +11,8 @@ from desktop import Window,STYLE,CacheSpinBox,QDialog
 from apple_ui import AppleButton
 
 def run(output):
+    import faulthandler
+    faulthandler.dump_traceback_later(40,exit=True)
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
     def until(condition):
@@ -62,9 +64,22 @@ def run(output):
                 assert not list(library.cache.glob('*.jpg'))
                 assert hashlib.sha256(source.read_bytes()).hexdigest()==fingerprint and library.photo(1)['status']==1
                 checks.append('scheduled_cleanup_expires_old_processed_previews_preserves_source_and_records')
+                library.preview(1,1600)
+                other=Library(base/'libraries'/'inactive');(other.cache/'face-old.png').write_bytes(b'derived face')
+                window.metadata_service.cache['stale']='metadata'
+                window.session_active=True;window.show_menu();application.processEvents()
+                texts=[button.text() for button in window.more_panel.action_controls]
+                assert not any('撤回上一步' in text or '撤销评级' in text for text in texts)
+                next(button for button in window.more_panel.action_controls if button.text()=='一键清理全部缓存').trigger()
+                window.session_active=False
+                until(lambda:not window.cache_clearing and not window.busy)
+                assert not list(library.cache.glob('*.jpg')) and not (other.cache/'face-old.png').exists()
+                assert 'stale' not in window.metadata_service.cache
+                assert hashlib.sha256(source.read_bytes()).hexdigest()==fingerprint and library.photo(1)['status']==1
+                checks.append('one_click_menu_clears_photo_face_metadata_caches_and_removes_undo_entry')
                 report={'ok':True,'platform':application.platformName(),'checks':checks,'memory_count':window.ahead_target,'disk_horizon':window.disk_horizon,'face_ahead':window.faces.effective_ahead,'face_ram':window.faces.ram_limit}
             finally:window.prompt_on_close=False;window.close();application.processEvents()
-    (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print('PASS linked cache settings and scheduled cleanup')
+    (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print('PASS linked cache settings and scheduled cleanup');faulthandler.cancel_dump_traceback_later()
 
 if __name__=='__main__':
     from multiprocessing import freeze_support

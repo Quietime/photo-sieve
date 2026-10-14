@@ -106,4 +106,27 @@ class CacheIndexTest(unittest.TestCase):
         self.library.cleanup_processed_cache()
         with self.library.connect() as db:self.assertEqual([r[0] for r in db.execute('SELECT cache_key FROM face_metadata')],['valid'])
 
+    def test_one_click_clears_all_workspace_derived_caches_only(self):
+        from cache_policy import clear_workspace_caches
+        from face_service import SCHEMA
+        other=Library(self.library.directory/'libraries'/'other')
+        for library in (self.library,other):
+            if library is other:
+                with library.connect() as db:db.execute('INSERT INTO photos(id,path,size,mtime) VALUES (1,?,?,?)',(str(self.source),self.row['size'],self.row['mtime']))
+            library.mark(1,1)
+            (library.cache/'photo.jpg').write_bytes(b'preview')
+            (library.cache/'face.png').write_bytes(b'crop')
+            (library.cache/'keep.json').write_text('records')
+            with library.connect() as db:
+                db.execute(SCHEMA);db.execute('INSERT INTO face_metadata VALUES (?,?,?,?,?,?,?)',('known',str(self.source),self.row['size'],self.row['mtime'],'model','[]','{}'))
+        before=hashlib.sha256(self.source.read_bytes()).hexdigest()
+        self.assertEqual(clear_workspace_caches(self.library.directory,self.library),4)
+        for library in (self.library,other):
+            self.assertEqual([p.name for p in library.cache.iterdir()],['keep.json'])
+            self.assertEqual(library.photo(1)['status'],1)
+            with library.connect() as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM history').fetchone()[0],1)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM face_metadata').fetchone()[0],0)
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(),before)
+
 if __name__=='__main__': unittest.main()

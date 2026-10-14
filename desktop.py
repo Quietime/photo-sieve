@@ -470,9 +470,6 @@ class Window(QMainWindow):
             rescan=menu.addAction('重新扫描当前文件夹');root=self.state_data and self.state_data.get('root')
             rescan.setEnabled(bool(root) and not self.busy and not self.pending_ops);rescan.triggered.connect(lambda:self.scan(root))
         menu.addAction('人脸预览…').triggered.connect(self.face_settings)
-        if self.rating_active or self.view=='pending' and self.session_active:
-            undo=menu.addAction('撤销评级' if self.rating_active else '撤回上一步');undo.setEnabled(self.rating_page.undo_button.isEnabled() if self.rating_active else self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
-            undo.triggered.connect(lambda:self.rating_page.undo() if self.rating_active else self.restore(general=True))
         menu.addSection('界面与操作', '调整显示方式和键盘操作')
         dock=QAction('显示底部操作栏',menu);dock.setCheckable(True);dock.setChecked(self.actionbar_visible)
         dock.toggled.connect(self.set_actionbar_visible);menu.addAction(dock)
@@ -482,11 +479,12 @@ class Window(QMainWindow):
         reduced.toggled.connect(lambda enabled:self.set_accessibility('reduced_motion',enabled));menu.addAction(reduced)
         menu.addSection('性能与缓存', '管理预加载、缓存空间和渲染方式')
         menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
+        clear=menu.addAction('一键清理全部缓存');clear.setEnabled(not self.busy and not self.pending_ops and not self.rating_page.writing);clear.triggered.connect(self.clear_cache)
         gpu=QAction('GPU 合成',menu);gpu.setToolTip('切换后重启应用生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
         gpu.setChecked(QSettings('PhotoSieve','PhotoSieve').value('gpu_compositing',False,type=bool));gpu.toggled.connect(self.set_gpu);menu.addAction(gpu)
         menu.addSection('更新与诊断', '获取新版本或查看运行日志')
         menu.addAction('检查更新').triggered.connect(lambda:self.updates.check())
-        automatic=QAction('启动时检查更新',menu);automatic.setCheckable(True);automatic.setChecked(self.updates.auto_enabled())
+        automatic=QAction('自动检查更新',menu);automatic.setCheckable(True);automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
@@ -527,7 +525,6 @@ class Window(QMainWindow):
             note.setText(f'当前窗口实际预加载上限 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。后台磁盘预读上限 {disk_count:,} 张。\n人脸跟随照片缓存：预识别后续 {face_disk} 张，内存最多 {face_ram} 份／64 MB，当前照片优先。后台预读设为 0 时，仅处理内存预加载范围。\n照片预览和人脸共用磁盘限额；达到限额按生成时间清除最旧 70%，已处理且生成超过 2 分钟的缓存自动清理。全部工作文件夹总上限 10 GB。照片与筛选记录会保留。')
         for field in (ahead,warm,disk):field.valueChanged.connect(estimate)
         estimate()
-        layout.addWidget(self.button('清理当前文件夹的预览缓存',lambda:(dialog.accept(),self.clear_cache())))
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
         def save():
             self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0; self.warm_count=warm.value(); self.library.cache_limit=disk.value()*1024*1024
@@ -537,19 +534,33 @@ class Window(QMainWindow):
         buttons.addWidget(self.button('保存',save,'primary')); layout.addLayout(buttons); dialog.exec()
 
     def clear_cache(self):
-        if self.cache_clearing or self.busy or self.job_running(): return
-        self.cache_clearing=True; library=self.library; self.busy=True; self.update_actions()
-        self.toast.show_message('正在清理预览缓存…','info')
+        if self.cache_clearing or self.busy or self.job_running() or self.pending_ops or self.rating_page.writing:return
+        from cache_policy import clear_workspace_caches
+        if getattr(self,'more_panel',None):self.more_panel.hide()
+        self.finish_motion()
+        self.cache_clearing=True;library=self.library;self.busy=True;self.update_actions()
+        rating_active=self.rating_page.active
+        if rating_active:self.rating_page.deactivate()
+        self.album.revision+=1
+        self.centralWidget().setEnabled(False)
+        self.toast.show_message('正在清理全部照片与人脸缓存…','info')
         def work():
-            for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool): pool.waitForDone()
-            return library.clear_preview_cache()
+            for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool):pool.waitForDone()
+            return clear_workspace_caches(self.data_root,library)
+        def resume():
+            self.cache_clearing=False;self.busy=False;self.centralWidget().setEnabled(True)
+            self.faces.clear_memory();self.face_panel.show_result(None);self.metadata_service.cache.clear()
+            for pane in (*self.photos,*self.rating_page.panes,self.album.pane):pane.show_photo(None)
+            self.album.preview=None
+            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.deleted_thumb_cache,self.image_errors,self.warmed,self.rating_page.images,self.rating_page.thumbs,self.rating_page.source_widths):store.clear()
+            if rating_active:
+                self.rating_page.active=True;self.rating_page.show_current();self.rating_page.visible()
+            elif self.stack.currentWidget() is self.album and self.album.photo:self.album.open(self.album.photo['id'])
+            else:self.render();self.prefetch();self.queue_kept_thumbnails();self.queue_deleted_thumbnails()
+            self.update_actions()
         def done(count):
-            self.cache_clearing=False; self.busy=False
-            self.faces.clear_memory()
-            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.image_errors,self.warmed): store.clear()
-            self.render(); self.prefetch(); self.queue_kept_thumbnails(); self.toast.show_message(f'已清理 {count:,} 个预览缓存，正在重新加载当前照片','info')
-        def failed(message):
-            self.cache_clearing=False; self.busy=False; self.update_actions(); self.prefetch(); self.error(message)
+            resume();self.maintain_cache();self.toast.show_message(f'已清理 {count:,} 个缓存文件；当前照片按需重新加载','info')
+        def failed(message):resume();self.error(message)
         self.submit(work,done,failed)
 
     def material_sources(self):

@@ -632,7 +632,7 @@ class Library:
                 db.execute("UPDATE trash_log SET result='staged' WHERE id=?", (entry,))
             return {'id': photo_id, 'path': str(path), 'backup': str(backup), 'staged': True}
 
-    def clear_preview_cache(self):
+    def clear_preview_cache(self, include_recognition=False):
         """Only derived JPEG/PNG previews; never the database, originals or deletion backups."""
         removed = 0
         with self.prune_lock, self.cache_lock:
@@ -642,6 +642,7 @@ class Library:
                     path.unlink(); removed += 1
             with self.connect() as db:
                 db.execute('DELETE FROM cache_index')
+                if include_recognition and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_metadata'").fetchone():db.execute('DELETE FROM face_metadata')
                 db.execute("INSERT OR REPLACE INTO meta VALUES ('cache_index_version','1')")
             self.cache_indexed.clear(); delta=-self.cache_bytes; self.cache_sizes.clear(); self.cache_bytes=0
         if delta and self.cache_changed: self.cache_changed(delta)

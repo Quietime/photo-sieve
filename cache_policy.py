@@ -109,3 +109,23 @@ def prune_workspaces(root, extra=None, limit=MAX_BYTES, cache_lock=None, include
             except OSError: continue
             total-=size; removed+=1
     return removed,total
+
+
+def clear_workspace_caches(root,active):
+    """Explicit user cleanup: only derived cache directories, never source/trash/ratings."""
+    removed=active.clear_preview_cache(include_recognition=True)
+    root=Path(root)
+    for project in [root,*root.glob('libraries/*')]:
+        cache=project/'cache';database=project/'library.sqlite3'
+        if project.resolve()==active.directory.resolve() or project.is_symlink() or cache.is_symlink():continue
+        if not cache.is_dir():continue
+        for path in cache.iterdir():
+            if path.suffix.lower() not in ('.jpg','.png') or path.is_symlink() or not path.is_file():continue
+            try:path.unlink();removed+=1
+            except FileNotFoundError:pass
+        if database.is_file():
+            with closing(sqlite3.connect(database,timeout=30)) as db:
+                with db:
+                    for table in ('cache_index','face_metadata'):
+                        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():db.execute('DELETE FROM '+table)
+    return removed
