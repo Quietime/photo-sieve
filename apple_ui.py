@@ -54,7 +54,7 @@ class AppleButton(QPushButton):
         metrics=self.fontMetrics();width=32 if self.symbol=='more' else 32+metrics.horizontalAdvance(self.text())
         if self.symbol and self.symbol!='more':width+=24
         if self.shortcut:width+=18+max(18,metrics.horizontalAdvance(self.shortcut))
-        return QSize(width,36)
+        return QSize(width-(12 if getattr(self,'compact',False) else 0),26 if getattr(self,'compact',False) else 36)
     def set_response(self,value):
         value=0. if theme.REDUCED_MOTION else max(0.,min(1.,value))
         if abs(value-self.hover)<.015:return
@@ -96,15 +96,17 @@ class AppleButton(QPushButton):
         metrics=self.fontMetrics();text_width=metrics.horizontalAdvance(self.text())
         badge_width=max(22,metrics.horizontalAdvance(self.shortcut)+12) if self.shortcut else 0
         symbol_only=bool(self.symbol and not self.text() and not self.shortcut)
-        content=text_width+(24 if self.symbol and self.symbol!='more' else 0)+(badge_width+10 if self.shortcut else 0)
+        compact=getattr(self,'compact',False);icon_space=20 if compact else 24;icon_size=14 if compact else 18
+        content=text_width+(icon_space if self.symbol and self.symbol!='more' else 0)+(badge_width+10 if self.shortcut else 0)
         x=(self.width()-content)/2
         if self.symbol:
             if symbol_only:icon(painter,self.symbol,QRectF(self.width()/2-9,self.height()/2-9,18,18),color)
-            else:icon(painter,self.symbol,QRectF(x,self.height()/2-9,18,18),color);x+=24
+            else:icon(painter,self.symbol,QRectF(x,self.height()/2-icon_size/2,icon_size,icon_size),color);x+=icon_space
         if self.symbol!='more':
             painter.setPen(color);painter.drawText(QRectF(x,0,text_width+2,self.height()),Qt.AlignmentFlag.AlignVCenter,self.text());x+=text_width+10
         if self.shortcut:
-            badge=QRectF(x,self.height()/2-10,badge_width,20)
+            badge_height=16 if compact else 20
+            badge=QRectF(x,self.height()/2-badge_height/2,badge_width,badge_height)
             painter.setBrush(QColor(255,255,255,18));painter.setPen(QPen(QColor(255,255,255,75 if theme.HIGH_CONTRAST else 32),1));painter.drawRoundedRect(badge,5,5)
             painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY));painter.drawText(badge,Qt.AlignmentFlag.AlignCenter,self.shortcut)
         if self.hasFocus():

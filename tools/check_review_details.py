@@ -26,18 +26,24 @@ def run(output):
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir()
         settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat)
-        settings.setValue('face_preview',False);settings.setValue('warm_count',0)
+        settings.setValue('face_preview',False);settings.setValue('warm_count',0);settings.setValue('last_folder',str(photos))
         for i in range(3):
             image=Image.new('RGB',(600,900) if i==0 else (900,600),['#687c93','#487864','#7d596a'][i])
             ImageDraw.Draw(image).text((40,40),'CURRENT' if i==0 else 'COMPARE',fill='white',font_size=35)
-            exif=Image.Exif();exif[34665]={33437:2.8+i,33434:1/(100+i*100),34855:100+i*100,36867:f'2026:10:14 12:0{i}:30'}
+            exif=Image.Exif();exif[34665]={33437:2.8+i,33434:1/(100+i*100),34855:100+i*100,36867:f'2026:10:14 12:0{i}:30',37386:85+i,42036:'FE 85mm F1.8'};exif[271]='Sony';exif[272]='ILCE-7M4'
             image.save(photos/f'{i}.jpg',exif=exif)
         with patch('desktop.QSettings',return_value=settings),patch('face_service.QSettings',return_value=settings),patch('update_ui.QSettings',return_value=settings):
             window=Window(Library(base/'workspace'),check_updates=False,start_empty=True)
             try:
-                window.faces.timer.stop();window.resize(1280,900);window.show();window.scan(photos)
+                window.faces.timer.stop();window.resize(1280,900);window.show();application.processEvents()
+                check('startup_has_resume_and_no_work_controls',window.resume_button.isVisible() and not window.rating_button.isVisible() and not window.segments.isVisible() and not hasattr(window,'export_button'))
+                window.grab().save(str(output/'startup.png'));window.show_menu()
+                check('startup_menu_has_no_folder_actions',not any('重新扫描' in a.text() or '排序与日期' in a.text() or '撤回' in a.text() for a in window.more_panel.action_controls));window.more_panel.hide();window.scan(photos)
                 until(lambda:len(window.queue)==3 and all(p['id'] in window.cache for p in window.queue[:2]) and 'ISO 100' in window.details[1].text())
                 check('metadata_is_current_left_photo','f/2.8' in window.details[1].text() and '12:00:30' in window.details[1].text() and 'ISO 200' not in window.details[1].text())
+                check('expanded_camera_information','Sony ILCE-7M4' in window.details[1].text() and 'FE 85mm F1.8' in window.details[1].text() and '85 mm' in window.details[1].text())
+                check('opened_folder_hides_resume_and_export',not window.resume_button.isVisible() and not hasattr(window,'export_button') and window.rating_button.isVisible() and window.segments.isVisible())
+                check('compact_action_dock',window.keep_button.height()==26 and window.actionbar.width()<510)
                 check('comparison_filename_hidden',not window.names[1].isVisible() and window.names[1].text()=='')
                 metadata=window.details[1].text();window.caption(1,window.queue[1],'comparison zoom information')
                 check('comparison_zoom_keeps_current_parameters',window.details[1].text()==metadata)

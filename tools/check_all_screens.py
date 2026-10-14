@@ -283,7 +283,6 @@ def run(output):
 
                 audit.segment(window, 1)
                 audit.until(lambda: window.kept_grid.count()==1 and all(pid in window.kept_thumb_cache for pid in window.kept_grid.visible_ids()))
-                audit.until(window.export_button.isEnabled)
                 audit.screenshot('05_kept_review', window)
                 audit.check('kept_hidden_from_filmstrip', window.strip.count() == 0)
                 audit.check('kept_category_is_a_thumbnail_gallery',window.stack.currentIndex()==4 and window.kept_grid.count()==1)
@@ -296,39 +295,6 @@ def run(output):
                 audit.screenshot('05d_kept_gallery_returned',window)
                 audit.check('kept_photo_opens_inside_app_and_returns_to_gallery',window.stack.currentIndex()==4)
 
-
-                def export_empty(dialog):
-                    audit.click(audit.button(dialog, '复制'))
-                    audit.screenshot('06b_export_target_validation', dialog)
-                    audit.check('missing_export_target_shows_error', any(label.isVisible() and
-                        '请先选择目标文件夹' in label.text() for label in dialog.findChildren(QLabel)))
-                    audit.click(audit.button(dialog, '取消'))
-                audit.modal('06_export_kept', lambda: audit.click(window.export_button), export_empty)
-
-                # Target selection is a nested modal reached through the actual export controls.
-                def export_target(dialog):
-                    audit.modal('07_export_target_picker', lambda: audit.click(audit.button(dialog, '选择…')))
-                    audit.click(audit.button(dialog, '取消'))
-                audit.modal('07a_export_before_target_picker', lambda: audit.click(window.export_button), export_target)
-
-                destination = base / 'test-export'
-                destination.mkdir()
-                def copy_kept(dialog):
-                    def choose_target(picker):
-                        picker.setDirectory(str(destination))
-                        picker.accept()
-                    audit.modal('07b_export_target_selected',
-                        lambda: audit.click(audit.button(dialog, '选择…')), choose_target)
-                    audit.screenshot('07c_export_ready_to_copy', dialog)
-                    audit.click(audit.button(dialog, '复制'))
-                    audit.until(lambda: not dialog.isVisible())
-                audit.modal('07d_export_before_copy', lambda: audit.click(window.export_button), copy_kept)
-                audit.until(lambda: not window.library.job['running'])
-                audit.check('copy_export_produces_photo', len(list(destination.rglob('photo_*'))) == 1)
-                window.poll()
-                audit.until(window.export_button.isEnabled)
-                audit.modal('07e_export_complete_summary', lambda: audit.click(window.export_button),
-                    lambda dialog: audit.click(audit.button(dialog, '取消')))
 
                 audit.segment(window, 2)
                 audit.until(lambda: window.deleted_grid.count() == 1)
@@ -431,7 +397,7 @@ def run(output):
                     application.processEvents()
                     fps=window.fps_label
                     rect=QRectF(fps.mapTo(window,QPoint(0,0)),fps.size())
-                    controls=[window.open_button,window.export_button,window.more_button,
+                    controls=[window.open_button,window.more_button,
                         *window.window_chrome.findChildren(QAbstractButton)]
                     audit.check(tag+'_no_button_overlap',all(not rect.intersects(
                         QRectF(button.mapTo(window,QPoint(0,0)),button.size())) for button in controls))
@@ -505,7 +471,7 @@ def run(output):
                         'busy': window.busy, 'fetching': window.fetching,
                         'counts': window.counts, 'job': window.library.job,
                         'state_job': (window.state_data or {}).get('job'),
-                        'export_enabled': window.export_button.isEnabled()}, default=str))
+                        'export_removed': not hasattr(window,'export_button')}, default=str))
                 audit.findings.append(type(error).__name__ + ': ' + str(error))
                 audit.checks.append({'name': 'complete_surface_walkthrough', 'passed': False, 'detail': str(error)})
             finally:

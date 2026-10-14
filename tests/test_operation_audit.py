@@ -305,7 +305,7 @@ class OperationAuditTest(unittest.TestCase):
         until(lambda:self.window.kept_grid.count()==4 and all(pid in self.window.kept_thumb_cache for pid in self.window.kept_grid.visible_ids()))
         self.assertEqual(self.window.stack.currentIndex(),4)
         self.assertEqual(self.window.strip.count(),0)
-        self.assertTrue(self.window.export_button.isEnabled())
+        self.assertFalse(hasattr(self.window,'export_button'))
         self.assertTrue(all(self.window.kept_grid.captions.get(pid) for pid in self.window.kept_grid.visible_ids()))
         self.window.open_kept_item(self.window.kept_grid.item(2))
         until(lambda:self.window.queue and self.window.queue[0]['id']==3 and self.window.delete_button.isEnabled())
@@ -318,13 +318,13 @@ class OperationAuditTest(unittest.TestCase):
         self.assertTrue(all(self.window.kept_grid.captions.get(pid) for pid in self.window.kept_grid.visible_ids()))
 
     def test_keep_category_disables_repeated_keep_but_can_delete_kept_photo(self):
-        self.assertFalse(self.window.export_button.isEnabled(), 'No kept photos means no useful export')
+        self.assertFalse(hasattr(self.window,'export_button'))
         first = self.window.queue[0]['id']
         self.window.keep_button.click()
         self.settle()
         self.window.poll()
         until(lambda: self.window.counts.get('keep') == 1)
-        self.assertTrue(self.window.export_button.isEnabled())
+        self.assertFalse(hasattr(self.window,'export_button'))
         self.window.switch('keep')
         until(lambda: not self.window.fetching and self.window.kept_grid.count()==1)
         self.assertEqual(self.window.stack.currentIndex(),4)
@@ -338,7 +338,7 @@ class OperationAuditTest(unittest.TestCase):
         self.settle()
         self.window.poll()
         until(lambda: self.window.counts.get('keep') == 0)
-        self.assertFalse(self.window.export_button.isEnabled())
+        self.assertFalse(hasattr(self.window,'export_button'))
         self.assertFalse(Path(self.library.photo(first, include_deleted=True)['path']).exists())
         self.window.restore()
         self.settle()

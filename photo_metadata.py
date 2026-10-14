@@ -3,32 +3,42 @@ from pathlib import Path
 from PIL import Image
 import json
 
+def _text(value):
+    if isinstance(value,bytes):value=value.decode('utf8',errors='replace')
+    text=str(value).strip('\x00 ') if value is not None else ''
+    return '' if not text or set(text)<=set('-? ') or text.casefold() in ('unknown','n/a') else text
+
+def format_info(aperture=None,exposure=None,iso=None,date=None,focal=None,make=None,model=None,lens=None):
+    lines=[];make=_text(make);model=_text(model);lens=_text(lens)
+    camera=(make+' '+model).strip() if make and make.casefold() not in model.casefold() else model or make
+    if camera:lines.append(camera)
+    if lens:lines.append(lens)
+    exposure_fields=[]
+    if aperture:exposure_fields.append(f'f/{float(aperture):g}')
+    if exposure:
+        seconds=float(exposure)
+        exposure_fields.append(f'1/{round(1/seconds)}s' if 0<seconds<1 else f'{seconds:g}s')
+    if exposure_fields:lines.append(' · '.join(exposure_fields))
+    sensitivity=[]
+    if focal:sensitivity.append(f'{float(focal):g} mm')
+    if iso:sensitivity.append('ISO '+str(iso[0] if isinstance(iso,tuple) else iso))
+    if sensitivity:lines.append(' · '.join(sensitivity))
+    if date:lines.append(_text(date).replace(':','-',2))
+    return '\n'.join(lines)
+
 def shooting_info(path):
     try:
         if Path(path).suffix.lower() in {'.arw','.cr2','.cr3','.nef','.nrw','.dng','.raf','.rw2','.orf','.pef','.srw'}:raise OSError('RAW metadata uses ExifTool')
         with Image.open(Path(path)) as image:
             main=image.getexif();exif=main.get_ifd(34665)
             get=lambda key:exif.get(key,main.get(key))
-            aperture=get(33437);exposure=get(33434);iso=get(34855);date=get(36867)
-            fields=[]
-            if aperture:fields.append(f'f/{float(aperture):g}')
-            if exposure:
-                seconds=float(exposure)
-                fields.append(f'1/{round(1/seconds)}s' if 0<seconds<1 else f'{seconds:g}s')
-            if iso:fields.append('ISO '+str(iso[0] if isinstance(iso,tuple) else iso))
-            if isinstance(date,bytes):date=date.decode('utf-8',errors='replace')
-            return ' · '.join(fields)+ ('\n'+str(date).replace(':','-',2) if date else '')
+            return format_info(get(33437),get(33434),get(34855),get(36867),get(37386),main.get(271),main.get(272),get(42036))
     except (OSError,ValueError,TypeError,ZeroDivisionError):
         try:
             from embedded_rating import _run
-            rows=json.loads(_run(['-j','-n','-FNumber','-ExposureTime','-ISO','-DateTimeOriginal','--',path],4))
-            row=rows[0];fields=[]
-            if row.get('FNumber'):fields.append(f"f/{float(row['FNumber']):g}")
-            seconds=float(row.get('ExposureTime',0))
-            if seconds:fields.append(f'1/{round(1/seconds)}s' if 0<seconds<1 else f'{seconds:g}s')
-            if row.get('ISO'):fields.append('ISO '+str(row['ISO']))
-            date=row.get('DateTimeOriginal')
-            return ' · '.join(fields)+ ('\n'+str(date).replace(':','-',2) if date else '')
+            rows=json.loads(_run(['-j','-n','-FNumber','-ExposureTime','-ISO','-DateTimeOriginal','-FocalLength','-Make','-Model','-LensModel','--',path],4))
+            row=rows[0]
+            return format_info(*(row.get(key) for key in ('FNumber','ExposureTime','ISO','DateTimeOriginal','FocalLength','Make','Model','LensModel')))
         except Exception:return ''
 
 class MetadataReader:

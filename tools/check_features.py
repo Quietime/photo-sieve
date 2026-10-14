@@ -76,7 +76,7 @@ def run(output):
         QTest.qWait(160)
         check(label + '_keyboard_and_actions_do_not_mutate', snapshot(window.library) == before)
         check(label + '_dock_hidden', not window.actionbar.isVisible())
-        check(label + '_export_hidden', not window.export_button.isVisible())
+        check(label + '_export_hidden', not hasattr(window,'export_button'))
         check(label + '_faces_hidden', not window.face_panel.isVisible())
         check(label + '_pending_decision_toast_hidden', not window.toast.isVisible())
 

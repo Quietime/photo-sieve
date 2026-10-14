@@ -145,18 +145,6 @@ def run(screenshot=None):
         QTest.qWait(200)
         assert w.toast.isVisible() and '硬盘' in w.toast.message and lib.photo(current)['status']==0
         ready(w)
-        # Export through the native sheet (no HTTP/browser).
-        copy=base/'输出副本';copy.mkdir();move=base/'移动照片';move.mkdir()
-        def do_export(destination,label):
-            from PySide6.QtCore import QTimer
-            def click():
-                dialog=application.activeModalWidget();assert isinstance(dialog,QDialog)
-                choose=next(b for b in dialog.findChildren(QPushButton) if b.text()=='选择…')
-                with patch.object(QFileDialog,'getExistingDirectory',return_value=str(destination)):choose.click()
-                next(b for b in dialog.findChildren(QPushButton) if b.text()==label).click()
-            QTimer.singleShot(100,click);w.export_dialog();until(lambda:not lib.job['running'] and not w.timer.isActive())
-        do_export(copy,'复制');assert len(list(copy.glob('*.jpg')))==1
-        do_export(move,'移动');assert len(list(move.glob('*.jpg')))==1;assert lib.state()['counts']['keep']==0
         # Rapid presses: every accepted press advances at once; records land in order.
         w.load();ready(w);start=time.monotonic();expected=[]
         for _ in range(45):

@@ -65,7 +65,10 @@ jobs:
         if: env.CHECK_SCOPE == 'review_ui'
         env:
           QT_QPA_PLATFORM: windows
-        run: python tools/check_review_details.py review-ui-ci
+        run: |
+          python -m unittest tests.test_photo_metadata -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_review_details.py review-ui-ci
       - name: Verify changed review header at 150 percent scaling
         if: env.CHECK_SCOPE == 'review_ui'
         env:
