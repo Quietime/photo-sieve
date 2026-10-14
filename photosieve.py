@@ -5,6 +5,9 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    if len(sys.argv)==3 and sys.argv[1]=='--review-ui-self-test':
+        from tools.check_review_details import run
+        run(sys.argv[2]);sys.exit(0)
     if len(sys.argv)==3 and sys.argv[1]=='--features-self-test':
         from pathlib import Path
         from tools.check_features import run

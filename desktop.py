@@ -231,7 +231,7 @@ class Window(QMainWindow):
         theme.configure_accessibility(QSettings('PhotoSieve', 'PhotoSieve'))
         self.uninstall_requested=False
         self.build(); self.window_frame=WindowFrame(self,self.window_chrome); self.update_actions()
-        self.face_panel=FacePanel(self.photos[0].viewport());self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
+        self.face_panel=FacePanel(self.face_container);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
@@ -366,12 +366,23 @@ class Window(QMainWindow):
             role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
             role.setToolTip('保留 / 删除只操作左图，右图仅用于比较')
             role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22); pane.addWidget(role)
+            if index==1:
+                self.review_info=QWidget();self.review_info.setFixedHeight(190)
+                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(4,4,4,4);info_row.setSpacing(16)
+                self.face_container=QWidget();self.face_container.setFixedWidth(160)
+                self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
+                info_row.addWidget(self.face_container)
+                self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                info_row.addWidget(self.current_metadata,1);pane.addWidget(self.review_info)
             photo = PhotoView(fit_height_factor=1.0 if index == 0 else 0.6)
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
             name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-            detail = DetailLabel() if index==1 else Elided('caption');detail.setObjectName('caption'); detail.setFixedHeight(40); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 2 if index == 0 else 1)
+            detail = self.current_metadata if index==1 else Elided('caption');detail.setObjectName('caption')
+            if index==0:
+                detail.setFixedHeight(40);detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop);pane.addWidget(name);pane.addWidget(detail)
+            else:name.hide()
+            pair.addLayout(pane, 2 if index == 0 else 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
         self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 10, 0, 8); actions.addStretch()
@@ -830,21 +841,21 @@ class Window(QMainWindow):
 
     def caption(self, index, photo, detail=None):
         if not photo: self.names[index].set_text(''); self.details[index].set_text(''); return
-        self.names[index].set_text(photo['name'])
+        self.names[index].set_text('' if index==1 and self.view=='pending' else photo['name'])
         folder = os.path.dirname(photo['relative'])
-        text = detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
+        text = '' if index==1 and self.view=='pending' else detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
         self.details[index].set_text(text)
 
     def show_shooting_info(self):
-        if self.view!='pending' or self.stack.currentIndex()!=0 or len(self.queue)<2:return
-        photo=self.queue[1];key=(photo['path'],photo['size'],photo['mtime']);library=self.library
+        if self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:return
+        photo=self.queue[0];key=(photo['path'],photo['size'],photo['mtime']);library=self.library
         if key in self.shot_cache:self.details[1].set_text(self.shot_cache[key]);return
         if key in self.shot_loading:return
         self.shot_loading.add(key)
         def done(text):
             self.shot_loading.discard(key);self.shot_cache[key]=text
             while len(self.shot_cache)>128:self.shot_cache.popitem(last=False)
-            if library is self.library and self.view=='pending' and self.stack.currentIndex()==0 and len(self.queue)>1 and self.queue[1]['id']==photo['id']:self.details[1].set_text(text)
+            if library is self.library and self.view=='pending' and self.stack.currentIndex()==0 and self.queue and self.queue[0]['id']==photo['id']:self.details[1].set_text(text)
         self.submit(lambda:self.metadata_reader.read(photo['path']),done,lambda _:done(''))
 
     def face_changed(self,pid,result):
@@ -855,9 +866,9 @@ class Window(QMainWindow):
 
     def face_settings(self):
         dialog=QDialog(self);dialog.setWindowTitle('人脸预览');dialog.setMinimumWidth(480);layout=QVBoxLayout(dialog)
-        enabled=QCheckBox('显示当前左图的原图人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
+        enabled=QCheckBox('显示当前左图的人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
         form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('向后预处理照片数',ahead);layout.addLayout(form)
-        note=QLabel('完全本地检测，导入期间即可开始。当前照片优先，后台只用一个检测进程。\n0 表示只处理当前照片。单击人脸小窗切换 100% / 适应小窗，滚轮可缩放。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
+        note=QLabel('完全本地检测，导入期间即可开始。当前照片优先，后台只用一个检测进程。\n0 表示只处理当前照片。人脸以圆角图片显示，不提供缩放操作。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
         row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
         def save():self.faces.configure(enabled.isChecked(),ahead.value());self.face_changed(self.queue[0]['id'] if self.queue else None,None);dialog.accept()
         row.addWidget(self.button('保存',save,'primary'));layout.addLayout(row);dialog.exec()

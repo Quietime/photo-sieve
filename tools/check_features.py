@@ -129,12 +129,12 @@ def run(output):
                 capture('02-folder-import', window)
                 until(lambda: not window.importing and not window.fetching and len(window.queue) == 8 and window.keep_button.isEnabled())
                 until(lambda: window.queue[0]['id'] in window.cache and window.queue[1]['id'] in window.cache)
-                until(lambda: 'ISO 200' in window.details[1].text())
+                until(lambda: 'ISO 100' in window.details[1].text())
                 check('resume_explicitly_imports_last_folder', window.session_active and len(window.queue) == 8)
-                check('right_metadata_matches_right_photo', window.queue[1]['name'] == 'photo_01.jpg' and
-                      'f/3.8' in window.details[1].text() and '1/200s' in window.details[1].text() and
-                      'ISO 200' in window.details[1].text() and '2026-10-14 12:01:30' in window.details[1].text())
-                check('metadata_is_not_left_photo', 'ISO 100' not in window.details[1].text())
+                check('right_header_metadata_matches_left_photo', window.queue[1]['name'] == 'photo_01.jpg' and
+                      'f/2.8' in window.details[1].text() and '1/100s' in window.details[1].text() and
+                      'ISO 100' in window.details[1].text() and '2026-10-14 12:00:30' in window.details[1].text())
+                check('metadata_is_not_right_photo', 'ISO 200' not in window.details[1].text())
                 capture('03-pending-right-camera-parameters', window)
 
                 # Deterministic GUI crop: native-pixel and event routing checks are independent
@@ -151,18 +151,18 @@ def run(output):
                 window.faces.enabled = True
                 current = window.queue[0]['id']
                 window.face_changed(current, result)
-                check('face_panel_belongs_to_left_photo_viewport', window.face_panel.parentWidget() is window.photos[0].viewport())
-                check('face_starts_at_native_100_percent', window.face_panel.isVisible() and not window.face_panel.fit and window.face_panel.scale == 1)
+                check('face_panel_belongs_to_left_photo_viewport', window.face_panel.parentWidget() is window.face_container)
+                check('face_is_passive_corner_image', window.face_panel.isVisible() and window.face_panel.toolTip()=='')
                 check('face_png_keeps_original_pixel_dimensions', window.face_panel.picture.width() == 320 and window.face_panel.picture.height() == 240)
                 capture('04-native-face-crop', window)
                 before = snapshot(window.library)
                 click(window.face_panel)
-                check('face_click_toggles_fit_without_zooming_main', window.face_panel.fit and not window.photos[0].detail)
+                check('face_click_does_not_zoom_main', not window.photos[0].detail)
                 event = QWheelEvent(QPointF(110,110), QPointF(window.face_panel.mapToGlobal(QPoint(110,110))),
                     QPoint(), QPoint(0,120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
                     Qt.ScrollPhase.NoScrollPhase, False)
                 application.sendEvent(window.face_panel, event)
-                check('face_wheel_only_zooms_face', not window.face_panel.fit and window.face_panel.scale > 1 and not window.photos[0].detail)
+                check('face_wheel_does_not_zoom_main', not window.photos[0].detail)
                 QTest.mouseClick(window.face_panel, Qt.MouseButton.RightButton, pos=QPoint(110,110))
                 check('face_click_and_wheel_do_not_advance_or_mutate', window.queue[0]['id'] == current and snapshot(window.library) == before)
                 window.face_changed(window.queue[1]['id'], {'faces': []})

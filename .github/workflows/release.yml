@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [full, update_ui, features]
+        options: [full, update_ui, features, review_ui]
 permissions:
   contents: write
 concurrency:
@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -61,6 +61,17 @@ jobs:
           QT_SCALE_FACTOR: '1.5'
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: python tools/check_features.py --output features-hidpi-ci
+      - name: Verify only changed review header
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_review_details.py review-ui-ci
+      - name: Verify changed review header at 150 percent scaling
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_review_details.py review-hidpi-ci
       - name: Test library and updater
         if: env.CHECK_SCOPE == 'full'
         run: python -m unittest discover -s tests -p 'test_*.py' -v
@@ -81,7 +92,7 @@ jobs:
           QT_SCALE_FACTOR: '1.5'
         run: python tools/check_ratings.py ratings-hidpi-ci
       - name: Test update UI idle and restart behavior
-        if: env.CHECK_SCOPE != 'features'
+        if: env.CHECK_SCOPE == 'full' || env.CHECK_SCOPE == 'update_ui'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_update_ui.py
@@ -146,6 +157,8 @@ jobs:
             features-hidpi-ci/*
             small-dialogs-ci/*
             arw-rating-ci/*
+            review-ui-ci/*
+            review-hidpi-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Audit paging, review performance and cache limits
@@ -176,6 +189,15 @@ jobs:
           if (!(Get-Content features-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged feature verification failed' }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--arw-self-test', 'feature-fixtures/sony.ARW', 'arw-rating-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged ARW verification failed' }
+      - name: Verify changed review header in packaged EXE
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
+          if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
       - name: Verify frozen isolated Windows rating helpers
         if: env.CHECK_SCOPE == 'full'
         shell: pwsh
@@ -201,6 +223,7 @@ jobs:
             frozen-update-offer-ci/*
             features-frozen-ci/*
             arw-rating-frozen-ci/*
+            review-frozen-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Create update package and checksums
