@@ -1,0 +1,41 @@
+name: Focused 500-photo Windows deletion test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+      QT_QPA_PLATFORM: windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Confirm application code matches released 4.2.4
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          paths=[str(p) for p in Path('.').glob('*.py')]+['assets','requirements.txt','requirements-desktop.txt','requirements-formats.txt']
+          subprocess.run(['git','diff','--exit-code','v4.2.4','HEAD','--',*paths],check=True)
+      - name: Install only runtime dependencies
+        run: python -m pip install -r requirements-desktop.txt
+      - name: Download public Sony ARW fixture
+        run: python tools/prepare_delete_fixture.py sony-delete-fixture.ARW
+      - name: Delete 500 Sony RAW files through actual GUI shortcuts
+        run: python tools/check_fast_delete.py deletion-500-ci --count 500 --raw-fixture sony-delete-fixture.ARW
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-500-deletion-evidence
+          path: deletion-500-ci/*
+          if-no-files-found: ignore
+          retention-days: 14

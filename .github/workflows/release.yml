@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows:
+    if: ${{ !contains(github.event.head_commit.message, '[tests-only]') }}
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
