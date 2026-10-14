@@ -550,6 +550,27 @@ class Library:
             result['errors'] = [dict(r) for r in db.execute("SELECT original,target,error FROM export_files WHERE batch_id=? AND result='failed' ORDER BY id LIMIT 100", (batch_id,))]
             return result
 
+    def read_metadata(self, photo_id, reader):
+        # The reader may wait for a child process: keep the same lock used by
+        # previews and trash until that child has closed the original file.
+        with self.file_locks[photo_id % len(self.file_locks)]:
+            row=self.photo(photo_id,include_deleted=True)
+            if not row['present']:return ''
+            return reader(row['path'])
+
+    @staticmethod
+    def rename_for_trash(source, target, timeout=1.2):
+        deadline=time.monotonic()+timeout;delay=.02
+        while True:
+            try:return os.rename(source,target)
+            except OSError as exc:
+                # Antivirus/indexers can retain a Windows sharing lock briefly.
+                # Do not retry permission errors or missing/changed files.
+                if getattr(exc,'winerror',None) not in (32,33):raise
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise
+                time.sleep(min(delay,remaining));delay=min(.15,delay*2)
+
     def trash(self, photo_id):
         # Windows cannot rename files while a preview decoder still holds them open.
         with self.file_locks[photo_id % len(self.file_locks)]:
@@ -581,7 +602,7 @@ class Library:
                     entry = db.execute('INSERT INTO trash_log(photo_id,path,deleted_at,result,backup) VALUES (?,?,?,?,?)',
                                        (photo_id, str(path), time.time(), 'started', str(backup))).lastrowid
                 # Same-directory filesystem move: no decoding or full-size copying.
-                os.rename(path, backup)
+                self.rename_for_trash(path, backup)
             except Exception as exc:
                 raise LibraryError(409, f'无法移入待删除区：{exc}')
             with self.connect() as db:

@@ -859,7 +859,7 @@ class Window(QMainWindow):
             self.shot_loading.discard(key);self.shot_cache[key]=text
             while len(self.shot_cache)>128:self.shot_cache.popitem(last=False)
             if library is self.library and self.view=='pending' and self.stack.currentIndex()==0 and self.queue and self.queue[0]['id']==photo['id']:self.details[1].set_text(text)
-        self.submit(lambda:self.metadata_reader.read(photo['path']),done,lambda _:done(''))
+        self.submit(lambda:library.read_metadata(photo['id'],self.metadata_reader.read),done,lambda _:done(''))
 
     def face_changed(self,pid,result):
         if not self.faces.enabled or self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:self.face_panel.hide();return
