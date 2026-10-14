@@ -369,7 +369,7 @@ class Window(QMainWindow):
             if index==1:
                 self.review_info=QWidget();self.review_info.setFixedHeight(190)
                 info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(4,4,4,4);info_row.setSpacing(16)
-                self.face_container=QWidget();self.face_container.setFixedWidth(160)
+                self.face_container=QWidget();self.face_container.setFixedSize(160,182)
                 self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
                 info_row.addWidget(self.face_container)
                 self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
