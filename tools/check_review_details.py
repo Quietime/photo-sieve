@@ -39,6 +39,8 @@ def run(output):
                 until(lambda:len(window.queue)==3 and all(p['id'] in window.cache for p in window.queue[:2]) and 'ISO 100' in window.details[1].text())
                 check('metadata_is_current_left_photo','f/2.8' in window.details[1].text() and '12:00:30' in window.details[1].text() and 'ISO 200' not in window.details[1].text())
                 check('comparison_filename_hidden',not window.names[1].isVisible() and window.names[1].text()=='')
+                metadata=window.details[1].text();window.caption(1,window.queue[1],'comparison zoom information')
+                check('comparison_zoom_keeps_current_parameters',window.details[1].text()==metadata)
                 crop=Image.new('RGB',(140,180),'#c9ac87');draw=ImageDraw.Draw(crop)
                 draw.ellipse((20,10,120,170),fill='#e0b49a');draw.ellipse((42,57,55,66),fill='#334552');draw.ellipse((86,57,99,66),fill='#334552')
                 png=io.BytesIO();crop.save(png,'PNG');result={'faces':[{}],'imagebytes':png.getvalue()}

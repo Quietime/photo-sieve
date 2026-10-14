@@ -842,6 +842,7 @@ class Window(QMainWindow):
     def caption(self, index, photo, detail=None):
         if not photo: self.names[index].set_text(''); self.details[index].set_text(''); return
         self.names[index].set_text('' if index==1 and self.view=='pending' else photo['name'])
+        if index==1 and self.view=='pending':return
         folder = os.path.dirname(photo['relative'])
         text = '' if index==1 and self.view=='pending' else detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
         self.details[index].set_text(text)
@@ -850,6 +851,7 @@ class Window(QMainWindow):
         if self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:return
         photo=self.queue[0];key=(photo['path'],photo['size'],photo['mtime']);library=self.library
         if key in self.shot_cache:self.details[1].set_text(self.shot_cache[key]);return
+        self.details[1].set_text('')
         if key in self.shot_loading:return
         self.shot_loading.add(key)
         def done(text):
