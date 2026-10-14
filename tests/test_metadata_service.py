@@ -31,7 +31,7 @@ class MetadataTests(unittest.TestCase):
                 service.update();until(host.metadata_reader.entered.is_set)
                 for _ in range(20):host.queue.pop(0);service.update()
                 self.assertEqual(host.submissions,1)
-                self.assertEqual(host.details[1].text,'')
+                self.assertEqual(host.details[1].text,'正在读取拍摄参数…')
                 host.metadata_reader.release.set()
                 until(lambda:host.details[1].text==host.queue[0]['name'])
                 self.assertLessEqual(len(host.metadata_reader.calls),2)
@@ -48,3 +48,41 @@ class MetadataTests(unittest.TestCase):
             row=library.list_photos('pending')[0];library.trash(row['id']);reader=Reader();reader.release.set()
             self.assertEqual(library.read_metadata_batch([row],reader,threading.Event()),[])
             self.assertEqual(reader.calls,[])
+
+    def test_transient_error_is_not_cached_as_missing_and_retries_without_queue_flood(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);photos=base/'photos';photos.mkdir();Image.new('RGB',(20,30)).save(photos/'one.jpg')
+            library=Library(base/'work');library.scan(photos);until(lambda:not library.job['running'])
+            host=Host(library);host.inflight=set();host.details=[Label(),Label()];host.metadata_reader=Reader()
+            host.metadata_reader.read_many=Mock(side_effect=[RuntimeError('temporary disk read'),['f/2.8 · ISO 800']])
+            submit=host.submit;host.submit=lambda work,ok,fail,pool,priority=0:submit(work,ok,fail,pool)
+            service=MetadataService(host)
+            try:
+                service.update();until(lambda:bool(service.retries))
+                key=service.key(library,host.queue[0]);self.assertNotIn(key,service.cache)
+                self.assertIn('重试',host.details[1].text)
+                for _ in range(10):service.update()
+                self.assertEqual(host.submissions,1)
+                service.retries[key]=(1,0);service.update()
+                until(lambda:host.details[1].text=='f/2.8 · ISO 800')
+                self.assertNotIn(key,service.retries);self.assertEqual(host.max_workers,1)
+                service.clear();self.assertFalse(service.cache);self.assertFalse(service.retries)
+            finally:service.shutdown();until(lambda:not host.tasks)
+
+    def test_partial_missing_result_does_not_discard_valid_neighbor(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);photos=base/'photos';photos.mkdir()
+            for i in range(2):Image.new('RGB',(20,30)).save(photos/f'{i}.jpg')
+            library=Library(base/'work');library.scan(photos);until(lambda:not library.job['running'])
+            host=Host(library);host.inflight=set();host.details=[Label(),Label()];host.metadata_reader=Reader()
+            host.metadata_reader.read_many=Mock(return_value=[None,'ISO 400'])
+            submit=host.submit;host.submit=lambda work,ok,fail,pool,priority=0:submit(work,ok,fail,pool)
+            service=MetadataService(host)
+            try:
+                service.update();until(lambda:bool(service.retries))
+                self.assertNotIn(service.key(library,host.queue[0]),service.cache)
+                self.assertEqual(service.cache[service.key(library,host.queue[1])],'ISO 400')
+                host.queue.pop(0);service.update();self.assertEqual(host.details[1].text,'ISO 400')
+            finally:service.shutdown();until(lambda:not host.tasks)

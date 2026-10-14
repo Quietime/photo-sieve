@@ -1,17 +1,17 @@
 """Only check the changed review header, passive face image and current-photo parameters."""
-import io,json,sys,tempfile,time
+import io,json,sys,tempfile,time,shutil
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PIL import Image,ImageDraw
-from PySide6.QtCore import QSettings,QPoint,QPointF,Qt
+from PySide6.QtCore import QSettings,QPoint,QPointF,Qt,QSize
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from app import Library
-from desktop import Window,STYLE
+from desktop import Window,STYLE,Decoders
 
-def run(output):
+def run(output,raw_fixture=None):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
     checks=[]
@@ -54,6 +54,8 @@ def run(output):
                 window.faces.enabled=True;window.faces._synchronize();key=cache_key(window.queue[0]);window.faces._remember(key,result);window.faces._done.add(key)
                 window.face_changed(window.queue[0]['id'],result);application.processEvents()
                 panel=window.face_panel;check('face_and_metadata_share_right_header',panel.parentWidget() is window.face_container and window.details[1].parentWidget() is window.review_info)
+                role=window.photo_roles[1]
+                check('comparison_caption_is_below_face_and_above_photo',window.review_info.mapTo(window,QPoint()).y()+window.review_info.height()<=role.mapTo(window,QPoint()).y() and role.mapTo(window,QPoint()).y()+role.height()<=window.photos[1].mapTo(window,QPoint()).y())
                 check('header_sits_above_comparison',window.review_info.mapTo(window, QPoint()).y()+window.review_info.height()<=window.photos[1].mapTo(window,QPoint()).y())
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
                 before=panel.grab().toImage();pid=window.queue[0]['id']
@@ -69,10 +71,34 @@ def run(output):
                 window.next_photo();until(lambda:window.queue and window.queue[0]['name']=='1.jpg' and 'ISO 200' in window.details[1].text())
                 check('parameters_follow_left_photo_after_switch','12:01:30' in window.details[1].text() and 'ISO 100' not in window.details[1].text())
                 window.face_changed(window.queue[0]['id'],{'faces':[]});check('no_face_hides_image',not panel.isVisible())
+                if raw_fixture:
+                    window.faces.enabled=False
+                    raw_folder=base/'中文拍摄目录';raw_folder.mkdir()
+                    shutil.copyfile(raw_fixture,raw_folder/'000-正常照片.ARW')
+                    (raw_folder/'001-损坏相邻照片.ARW').write_bytes(b'invalid RAW for partial metadata failure')
+                    window.scan(raw_folder)
+                    until(lambda:len(window.queue)==2 and window.queue[0]['name']=='000-正常照片.ARW' and 'ISO 400' in window.current_metadata.text())
+                    check('real_arw_metadata_survives_bad_neighbor_and_chinese_path','ILCE-7S' in window.current_metadata.text() and '2017-07-13' in window.current_metadata.text())
+                    window.grab().save(str(output/'raw-metadata.png'))
+                sharp_folder=base/'清晰预览';sharp_folder.mkdir()
+                for i in range(3):
+                    large=Image.new('RGB',(4000,3000),'#d9dfe4');grid=ImageDraw.Draw(large)
+                    for x in range(0,4000,16):grid.line((x,0,x,3000),fill='#263644',width=2)
+                    grid.text((100,100),f'SHARP {i}',fill='black',font_size=100);large.save(sharp_folder/f'{i}.jpg',quality=96)
+                window.faces.enabled=False;window.decoders=Decoders(1);window.scan(sharp_folder)
+                until(lambda:len(window.queue)==3 and window.queue[0]['name']=='0.jpg' and not window.busy)
+                window.resize_timer.stop();window.display_size=QSize(2500,1800);window.prefetch()
+                until(lambda:all(window.preview_ready(p['id']) for p in window.queue))
+                check('high_resolution_frames_preloaded_in_isolated_worker',all(window.cache[p['id']].width()>=2400 and window.cache[p['id']].height()>=1800 for p in window.queue))
+                target=window.queue[1]['id'];window.next_button.click()
+                check('next_uses_sharp_pixels_immediately_without_ghost',window.queue[0]['id']==target and window.photos[0].item.opacity()==1 and window.pending_next is None and not window.motions)
+                window.grab().save(str(output/'sharp-next.png'))
+
+
             finally:window.prompt_on_close=False;window.close();application.processEvents()
     (output/'report.json').write_text(json.dumps({'ok':True,'checks':checks},ensure_ascii=False,indent=2),encoding='utf8')
     print('PASS review header',len(checks),'checks')
 
 if __name__=='__main__':
     from multiprocessing import freeze_support
-    freeze_support();run(sys.argv[1])
+    freeze_support();run(sys.argv[1],sys.argv[2] if len(sys.argv)>2 else None)

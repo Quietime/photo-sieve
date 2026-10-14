@@ -222,6 +222,7 @@ class Window(QMainWindow):
         self.queue = []; self.view = 'pending'; self.busy = False; self.fetching = False; self.state_pending = False; self.state_data = None
         self.counts = {}; self.inflight = set(); self.pending_ops = 0; self.restore_running=False; self.queue_end = False; self.generation = 0; self.focus_loading = set()
         self.was_running = False; self.closed = False; self.closing = False; self.display_size = None; self.motions = []; self.last_motion = 0.0
+        self.pending_next=None
         self.last_nudge = 0.0; self.delete_streak = 0; self.deleted_rows = []; self.deleted_items = {}; self.deleted_more = False
         self.deleted_thumb_cache=OrderedDict(); self.deleted_errors=set()
         self.kept_thumb_cache=OrderedDict();self.kept_loading={};self.kept_revision=0
@@ -369,12 +370,13 @@ class Window(QMainWindow):
 
         review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
         self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
-        pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = []
+        pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
         for index in range(2):
             pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
             role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
             role.setToolTip('保留 / 删除只操作左图，右图仅用于比较')
-            role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22); pane.addWidget(role)
+            role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22);self.photo_roles.append(role)
+            if index==0:pane.addWidget(role)
             if index==1:
                 self.review_info=QWidget();self.review_info.setFixedHeight(190)
                 info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(4,4,4,4);info_row.setSpacing(16)
@@ -383,6 +385,7 @@ class Window(QMainWindow):
                 info_row.addWidget(self.face_container)
                 self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setStyleSheet('font-size:14px;');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 info_row.addWidget(self.current_metadata,1);pane.addWidget(self.review_info)
+                pane.addWidget(role)
             photo = PhotoView(fit_height_factor=1.0 if index == 0 else 0.6)
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
@@ -550,7 +553,7 @@ class Window(QMainWindow):
             return clear_workspace_caches(self.data_root,library)
         def resume():
             self.cache_clearing=False;self.busy=False;self.centralWidget().setEnabled(True)
-            self.faces.clear_memory();self.face_panel.show_result(None);self.metadata_service.cache.clear()
+            self.faces.clear_memory();self.face_panel.show_result(None);self.metadata_service.clear()
             for pane in (*self.photos,*self.rating_page.panes,self.album.pane):pane.show_photo(None)
             self.album.preview=None
             for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.deleted_thumb_cache,self.image_errors,self.warmed,self.rating_page.images,self.rating_page.thumbs,self.rating_page.source_widths):store.clear()
@@ -811,18 +814,18 @@ class Window(QMainWindow):
                 if pane.photo and pane.photo['id'] == pid and not pane.detail and not pane.zoom_animation:
                     fresh = pane.pixmap is None; pane.show_photo(pane.photo, pixmap); pane.source_width = source[0]
                     if fresh and pane.item and time.monotonic() - self.last_motion > BURST: self.fade(pane, 0, 1, 70)
-            self.update_thumbnail(pid); self.material_sources(); self.update_actions(); self.prefetch()
+            self.update_thumbnail(pid); self.material_sources(); self.update_actions(); self.complete_next();self.prefetch()
         def failed(message):
             if library is not self.library: return
             self.loading.discard(pid); self.image_errors[pid] = message
             for pane in self.photos:
                 if pane.photo and pane.photo['id'] == pid and not pane.detail: pane.show_photo(pane.photo, error=message)
-            self.update_thumbnail(pid); self.update_actions(); self.prefetch()
+            self.update_thumbnail(pid); self.update_actions(); self.complete_next();self.prefetch()
         gate = self.display_gate
         def work():
             if library is not self.library or pid in self.inflight:return None
             if not any(p['id']==pid for p in self.queue[:self.ahead_target]):return None
-            image = library.preview_image(pid, 1600)   # may wait for a decoder process, without holding the gate
+            image = library.preview_image(pid, self.preview_edge(size))   # isolated decode at physical display resolution
             with gate: return display_image(image, size.width(), size.height(), thumb)
         self.submit(work, done, failed, self.image_pool, priority)
 
@@ -859,9 +862,25 @@ class Window(QMainWindow):
                 library.preview(pid,1600)
             self.submit(warm_work, settled, settled, self.image_pool, -10)
 
+    @staticmethod
+    def preview_edge(size):
+        from app import PREVIEW_EDGES
+        return next((edge for edge in PREVIEW_EDGES if edge>=max(size.width(),size.height())),PREVIEW_EDGES[-1])
+
+    def preview_ready(self,pid):
+        return pid in self.image_errors or (pid in self.cache and self.cache_size.get(pid)==self.display_size)
+
     def ready(self):
-        current = self.queue[0]['id'] if self.queue else None
-        return current in self.cache or current in self.image_errors
+        return bool(self.queue) and self.preview_ready(self.queue[0]['id'])
+
+    def complete_next(self):
+        token=self.pending_next
+        if token is None:return
+        library,generation,current,target=token
+        if (library is not self.library or generation!=self.generation or self.view!='pending' or self.rating_active
+                or self.busy or self.closing or len(self.queue)<2 or self.queue[0]['id']!=current or self.queue[1]['id']!=target):
+            self.pending_next=None;return
+        if self.preview_ready(target):self.pending_next=None;self.next_photo()
 
     # ---- rendering ----------------------------------------------------------
     def render(self):
@@ -1094,7 +1113,13 @@ class Window(QMainWindow):
         if self.rating_active or self.view!='pending':return
         self.updates.touch()
         if self.busy or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or not self.queue: return
-        ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
+        self.finish_motion()
+        if len(self.queue)>1 and not self.preview_ready(self.queue[1]['id']):
+            self.pending_next=(self.library,self.generation,self.queue[0]['id'],self.queue[1]['id'])
+            self.request_image(self.queue[1],2000);self.prefetch()
+            self.toast.show_message('正在准备下一张清晰预览…','info');return
+        self.pending_next=None;self.burst=True;self.last_motion=time.monotonic()
+        self.queue.pop(0);self.render();self.prefetch();self.refill()
 
     def strip_select(self, item):
         self.updates.touch()

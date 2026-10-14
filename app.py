@@ -36,6 +36,7 @@ TRASH_DIRECTORY = '.photo-sieve-trash'
 ImageFile.MAXBLOCK = 4 * 1024 * 1024
 # Previews decode in parallel, scaled to this computer's cores (a 24-core 8P+16E laptop gets 12 decoders).
 DECODE_SLOTS = machine.PROFILE.decoders()
+PREVIEW_EDGES = (1600, 2400, 3200, 4800)
 # Set in decoder processes: limits how many read a spinning disk at once, so its head is not thrashed.
 READ_GATE = None
 ORIENTATION = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM,
@@ -99,6 +100,7 @@ class Library:
                 CREATE INDEX IF NOT EXISTS export_batch_files ON export_files(batch_id,id);
             ''')
             db.execute(INDEX_SCHEMA)
+            db.execute('CREATE INDEX IF NOT EXISTS cache_preview_owner ON cache_index(photo_id,source_size,source_mtime,edge)')
             # New empty workspaces need no legacy-cache migration. Existing ones migrate once in maintenance.
             if not db.execute("SELECT 1 FROM meta WHERE key='cache_index_version'").fetchone() and not any(p.suffix.lower() in ('.jpg','.png') for p in self.cache.iterdir()):
                 db.execute("INSERT INTO meta VALUES ('cache_index_version','1')")
@@ -754,6 +756,22 @@ class Library:
             cached = self.read_cache(self.cache / f'{legacy}.jpg')
         return cached
 
+    def read_larger_preview_cache(self, row, edge):
+        """Reuse actual higher-resolution previews without re-decoding an original or re-encoding a JPEG."""
+        if edge<=0:return None
+        with self.connect() as db:
+            candidates=db.execute(f'''SELECT filename FROM cache_index
+                WHERE photo_id=? AND source_size=? AND source_mtime=? AND edge>?
+                AND edge IN ({','.join('?' for _ in PREVIEW_EDGES)})
+                ORDER BY edge''',(row['id'],row['size'],row['mtime'],edge,*PREVIEW_EDGES)).fetchall()
+        for name, in candidates:
+            if Path(name).name!=name or '/' in name or '\\' in name or Path(name).suffix.lower()!='.jpg':continue
+            path=self.cache/name
+            if path.is_symlink():continue
+            cached=self.read_cache(path)
+            if cached is not None:return cached
+        return None
+
     @staticmethod
     def save_cache(target, image, quality=90):
         result = io.BytesIO()
@@ -787,13 +805,17 @@ class Library:
                 raise ValueError('原文件已改变，请重新扫描')
             target = self.cache_path(original, stat.st_size, stat.st_mtime_ns, edge)
             cached = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, edge)
+            if cached is None and edge>=1600:cached=self.read_larger_preview_cache(row,edge)
             # Cached photos bypass the decode semaphore, even while large RAWs are loading.
             if cached is not None:
                 return Image.open(io.BytesIO(cached)) if as_image else cached
             # A decoder process does the work when available; this thread keeps the photo's lock, so a delete still waits.
             existing = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, 1600) if edge == 320 else None
-            if self.offload and edge in (320,1600) and existing is None:
-                if not self.offload(str(source), str(original), stat.st_size, stat.st_mtime_ns, str(self.cache), bool(self.rotational)):
+            if edge==320 and existing is None:existing=self.read_larger_preview_cache(row,1600)
+            if self.offload and (edge==320 or edge>=1600) and existing is None:
+                job=(str(source),str(original),stat.st_size,stat.st_mtime_ns,str(self.cache),bool(self.rotational))
+                if edge>1600:job+= (edge,)
+                if not self.offload(*job):
                     raise ValueError('安全解码进程未完成预览，拒绝在应用进程重试原片')
                 cached = self.read_preview_cache(original, stat.st_size, stat.st_mtime_ns, edge)
                 if cached is None:raise ValueError('预览未能写入缓存，请重试')
@@ -811,16 +833,23 @@ class Library:
                     self.save_cache(larger, image)
                     image = self.shrink(image, 320)
                 else:
-                    image = (self.offload.full_image(str(source),bool(self.rotational))
-                        if edge==0 and self.offload and hasattr(self.offload,'full_image')
-                        else self.decode(source, edge, self.gate() if edge else None))
+                    if edge==0 and self.offload:
+                        if not hasattr(self.offload,'full_image'):raise ValueError('安全解码进程不支持完整原图，拒绝在应用进程解码')
+                        image=self.offload.full_image(str(source),bool(self.rotational))
+                    elif self.offload:
+                        raise ValueError('不支持此安全预览尺寸，拒绝在应用进程解码原片')
+                    else:image=self.decode(source,edge,self.gate() if edge else None)
                     # A JPEG, original or embedded in a RAW, decodes about as fast as a cached copy would, so 100% zoom
                     # skips the 20 MB re-encode. Only a slow sensor decode is kept (a PNG's text could also say 'sensor').
                     if edge == 0 and as_image and not (source.suffix.lower() in RAW and image.info.get('sensor') is True):
                         return image
                 payload = self.save_cache(target, image, quality=96 if edge == 0 else 90)
-                if edge == 1600:
-                    self.save_cache(self.cache_path(original, stat.st_size, stat.st_mtime_ns, 320), self.shrink(image, 320))
+                if edge > 1600:
+                    fast=self.cache_path(original,stat.st_size,stat.st_mtime_ns,1600)
+                    if not fast.exists():self.save_cache(fast,self.shrink(image,1600))
+                if edge >= 1600:
+                    small=self.cache_path(original,stat.st_size,stat.st_mtime_ns,320)
+                    if not small.exists():self.save_cache(small,self.shrink(image,320))
                 self.schedule_prune()
                 return image if as_image else payload
         except Exception as exc:
@@ -864,15 +893,23 @@ class Library:
             thumb = data = None
             with reading, rawpy.imread(str(source)) as raw:
                 flip = raw.sizes.flip
+                sensor=max(raw.sizes.width,raw.sizes.height) if edge>1600 else 0
                 # LibRaw returns the largest embedded JPEG: full size (7 to 12 MB) on an A7 IV, A7R V or A1.
                 data = Library.raw_preview(source, edge)
                 if data is None:
                     try:
                         thumb = raw.extract_thumb()
                     except rawpy.LibRawNoThumbnailError:
-                        image = Image.fromarray(raw.postprocess(half_size=True, use_camera_wb=True))
+                        image = Image.fromarray(raw.postprocess(half_size=edge<=1600 or sensor//2>=edge,use_camera_wb=True))
                     else:
                         if thumb.format == rawpy.ThumbFormat.JPEG: data = thumb.data
+                if edge>1600:
+                    # Old bodies may embed only a small JPEG/bitmap. A high-DPI preview
+                    # must not relabel those 1,616 pixels as a 3,200-pixel result.
+                    embedded=max(Image.open(io.BytesIO(data)).size) if data is not None else (max(thumb.data.shape[:2]) if thumb is not None else None)
+                    if embedded is not None and embedded<min(edge,sensor):
+                        image=Image.fromarray(raw.postprocess(half_size=sensor//2>=edge,use_camera_wb=True))
+                        image.info['sensor']=True; data=None; thumb=None
             if data is not None:
                 image = Library.camera_jpeg(data, flip, edge)
             elif thumb is not None:
@@ -970,7 +1007,7 @@ class Library:
                 im.seek(frame)
                 w, h = im.size
                 # A letterboxed or cropped preview would misrepresent the photo; only a same-shape one is used.
-                if im.mode in ('RGB', 'YCbCr') and max(w, h) >= 1200 and abs(w / h - width / height) < .02:
+                if im.mode in ('RGB', 'YCbCr') and max(w, h) >= max(1200,min(edge,max(width,height))) and abs(w / h - width / height) < .02:
                     im.draft('RGB', Library.box(im, edge)); im.load()
                     image = im.convert('RGB')
                     method = ORIENTATION.get(orientation)
@@ -1032,13 +1069,18 @@ def build_full_image(source,rotational=False):
         raise ValueError(str(exc)) from None
 
 
-def build_preview(source, original, size, mtime, cache, rotational=False):
-    """Decoder-process entry: decode an original once and store its 1600 and 320 previews in the disk cache."""
+def build_preview(source, original, size, mtime, cache, rotational=False, edge=1600):
+    """Decode once in the worker and retain the requested resolution plus fast 1600/320 previews."""
     try:
-        crashlog.LOGGER.info('Preview decode: %s',source)
-        image = Library.decode(Path(source), 1600, READ_GATE if rotational else None)
-        Library.save_cache(cache_file(cache, original, size, mtime, 1600), image)
-        Library.save_cache(cache_file(cache, original, size, mtime, 320), Library.shrink(image, 320))
+        edge=max(1600,int(edge))
+        crashlog.LOGGER.info('Preview decode: %s edge=%s',source,edge)
+        image = Library.decode(Path(source), edge, READ_GATE if rotational else None)
+        Library.save_cache(cache_file(cache,original,size,mtime,edge),image)
+        if edge>1600:
+            fast=cache_file(cache,original,size,mtime,1600)
+            if not fast.exists():Library.save_cache(fast,Library.shrink(image,1600))
+        small=cache_file(cache,original,size,mtime,320)
+        if not small.exists():Library.save_cache(small,Library.shrink(image,320))
     except Exception as exc:
         crashlog.LOGGER.exception('Preview decode failed: %s',source)
         raise ValueError(str(exc)) from None   # a plain exception always survives the trip back to the app

@@ -35,7 +35,7 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui'
+        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui'
         run: python tools/prepare_feature_fixtures.py
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
@@ -67,15 +67,15 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          python -m unittest tests.test_photo_metadata -v
+          python -m unittest tests.test_photo_metadata tests.test_metadata_service tests.test_next_preview tests.test_preview_resolution tests.test_delete_sharing -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/check_review_details.py review-ui-ci
+          python tools/check_review_details.py review-ui-ci feature-fixtures/sony.ARW
       - name: Verify changed review header at 150 percent scaling
         if: env.CHECK_SCOPE == 'review_ui'
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
-        run: python tools/check_review_details.py review-hidpi-ci
+        run: python tools/check_review_details.py review-hidpi-ci feature-fixtures/sony.ARW
       - name: Test metadata sharing and rapid deletion
         if: env.CHECK_SCOPE == 'deletion'
         env:
@@ -236,7 +236,7 @@ jobs:
           QT_QPA_PLATFORM: windows
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci' -Wait -PassThru
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci', 'feature-fixtures/sony.ARW' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
           if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
       - name: Verify cache settings in packaged EXE
