@@ -20,7 +20,9 @@ import crashlog
 
 JOB_TIMEOUT = 60
 FACE_EDGE = 9001
-RAM_RESULTS = 4
+RAM_RESULTS = 128
+RAM_BYTES = 64 * 1024 * 1024
+REFINE_IDLE = .35
 SCHEMA = '''CREATE TABLE IF NOT EXISTS face_metadata(
     cache_key TEXT PRIMARY KEY, path TEXT NOT NULL, source_size INTEGER NOT NULL,
     source_mtime INTEGER NOT NULL, engine_version TEXT NOT NULL,
@@ -52,40 +54,55 @@ def _face_initializer():
     crashlog.decoder_init()
 
 
-def _compute_faces(photo, known_faces=None):
-    """Spawn-process entry: the full image never leaves this process."""
+def _compute_faces(photo, known_faces=None, preview_bytes=None, quality='original'):
+    """Spawn-process entry: use the existing display JPEG for the fast first pass.
+
+    Only an idle current photo is refined from the original. Ahead-of-cursor
+    detection never pays for a full RAW decode just to display a small face.
+    """
     source = _verify_source(photo)
     faces = known_faces
-    if faces is None:
-        preview = Library.decode(source, 1280)
-        try:
-            faces = detect_faces(preview)
-        finally:
-            preview.close()
-    if not faces:
-        result = {'imagebytes': None, 'faces': [], 'face_count': 0, 'engine_version': ENGINE_VERSION,
-                  'is_partial': False, 'ratio': None, 'ratio_x': None, 'ratio_y': None,
-                  'crop_box': None, 'requested_box': None, 'original_size': None,
-                  'native_size': None, 'output_size': None, 'face': None}
-    else:
-        original = Library.decode(source, 0)
-        try:
-            result = crop_faces(original, faces)
-        finally:
-            original.close()
-        crop = result.pop('image')
-        result['faces'] = faces
-        result['imagebytes'] = None
-        if crop is not None:
+    preview = None
+    try:
+        if preview_bytes is not None:
             try:
-                output = io.BytesIO()
-                # Focus checking requires native pixels and lossless encoding.
-                crop.save(output, 'PNG', compress_level=3)
-                result['imagebytes'] = output.getvalue()
+                with Image.open(io.BytesIO(preview_bytes)) as cached:
+                    preview = cached.convert('RGB')
+            except (OSError, ValueError, SyntaxError):
+                pass
+        if faces is None or quality == 'preview':
+            if preview is None:
+                preview = Library.decode(source, 1280)
+            if faces is None:
+                faces = detect_faces(preview)
+        if not faces:
+            result = {'imagebytes': None, 'faces': [], 'face_count': 0, 'engine_version': ENGINE_VERSION,
+                      'is_partial': False, 'ratio': None, 'ratio_x': None, 'ratio_y': None,
+                      'crop_box': None, 'requested_box': None, 'original_size': None,
+                      'native_size': None, 'output_size': None, 'face': None}
+        else:
+            original = preview if quality == 'preview' else Library.decode(source, 0)
+            try:
+                result = crop_faces(original, faces)
             finally:
-                crop.close()
-    _verify_source(photo)
-    return result
+                if original is not preview:
+                    original.close()
+            crop = result.pop('image')
+            result['faces'] = faces
+            result['imagebytes'] = None
+            if crop is not None:
+                try:
+                    output = io.BytesIO()
+                    crop.save(output, 'PNG', compress_level=3)
+                    result['imagebytes'] = output.getvalue()
+                finally:
+                    crop.close()
+        result['quality'] = quality
+        _verify_source(photo)
+        return result
+    finally:
+        if preview is not None:
+            preview.close()
 
 
 class FaceService(QObject):
@@ -110,8 +127,12 @@ class FaceService(QObject):
         self._done = set()
         self._schemas = set()
         self._sample_after = 0.0
+        self._current_key = None
+        self._current_since = 0.0
+        self._refine_failed = set()
+        self._job = None
         self.timer = QTimer(self)
-        self.timer.setInterval(400)
+        self.timer.setInterval(80)
         self.timer.timeout.connect(self.update)
         self.timer.start()
 
@@ -139,6 +160,7 @@ class FaceService(QObject):
             self._context = token
             self._results.clear()
             self._done.clear()
+            self._refine_failed.clear()
             self._sample_after = 0.0
         return token
 
@@ -169,30 +191,49 @@ class FaceService(QObject):
         if self._closed:
             return
         token = self._synchronize()
-        if not self._active() or self._working:
+        if not self._active():
             return
         library = self.host.library
         importing = bool(getattr(self.host, 'importing', False))
         rows = [dict(photo) for photo in getattr(self.host, 'queue', ())[:self.ahead + 1]
                 if photo.get('present', 1) == 1 and photo.get('status', 0) == 0]
+        current = rows[0] if rows and not importing else None
+        current_key = cache_key(current) if current is not None else None
+        now = time.monotonic()
+        if current_key != self._current_key:
+            self._current_key, self._current_since = current_key, now
+        # A long original refinement must never hold up the next photo. Killing
+        # its isolated process closes every RAW handle before releasing the lock.
+        if self._working:
+            if self._job and self._job['quality'] == 'original' and self._job['key'] != current_key:
+                self._job['cancelled'] = True
+                self._discard_executor(.01)
+            return
+        quality = 'preview'
         candidates = {cache_key(photo) for photo in rows}
         if not importing:
             self._done.intersection_update(candidates)
-            # Fetch the current cached crop even if prefetching previously evicted
-            # its RAM copy. Future completed jobs never repeat their original decode.
-            current = rows[0] if rows else None
-            photo = current if current is not None and cache_key(current) not in self._results else next(
-                (photo for photo in rows if cache_key(photo) not in self._done), None)
+            self._refine_failed.intersection_update(candidates)
+            photo = current if current is not None and current_key not in self._results else None
+            if photo is None and current is not None and now - self._current_since >= REFINE_IDLE:
+                cached = self._results.get(current_key, {})
+                if (cached.get('face_count', 0) and cached.get('quality', 'original') == 'preview'
+                        and current_key not in self._refine_failed):
+                    photo, quality = current, 'original'
+            if photo is None:
+                photo = next((photo for photo in rows if cache_key(photo) not in self._done), None)
             if photo is None:
                 return
         else:
-            if time.monotonic() < self._sample_after:
+            if now < self._sample_after:
                 return
             photo = None
         self._working = True
         done_keys = set(self._done)
         count = self.ahead + 1
         selection = {'photo': photo}
+        job = {'quality': quality, 'key': cache_key(photo) if photo is not None else None, 'cancelled': False}
+        self._job = job
         def work():
             chosen = photo
             if importing:
@@ -201,12 +242,15 @@ class FaceService(QObject):
             if chosen is None or self._stop.is_set():
                 return None
             selection['photo'] = chosen
-            return chosen, self._read_or_compute(library, chosen)
+            return chosen, self._read_or_compute(library, chosen, quality=quality)
         def completed(value):
             self._working = False
             if self._closed:
                 return
             if token != self._token():
+                self.update()
+                return
+            if job['cancelled']:
                 self.update()
                 return
             if value is None:
@@ -226,6 +270,13 @@ class FaceService(QObject):
                 self.update()
                 return
             chosen = selection['photo']
+            if job['cancelled']:
+                self.update()
+                return
+            if quality == 'original' and chosen is not None:
+                self._refine_failed.add(cache_key(chosen))
+                self.update()
+                return
             if chosen is not None:
                 key = cache_key(chosen)
                 self._done.add(key)
@@ -241,13 +292,15 @@ class FaceService(QObject):
     def _remember(self, key, result):
         self._results[key] = result
         self._results.move_to_end(key)
-        current = getattr(self.host, 'queue', ())
-        protected = cache_key(current[0]) if current else None
-        for old in list(self._results):
-            if len(self._results) <= RAM_RESULTS:
+        upcoming = {cache_key(photo): index for index, photo in enumerate(getattr(self.host, 'queue', ())[:self.ahead + 1])}
+        total = sum(len(value.get('imagebytes') or b'') for value in self._results.values())
+        # Evict past/off-queue crops, then the farthest future crop. Keeping the
+        # next 50 faces in RAM makes switching synchronous instead of disk-bound.
+        eviction = sorted(self._results, key=lambda candidate: upcoming.get(candidate, RAM_RESULTS + 501), reverse=True)
+        for old in eviction:
+            if len(self._results) <= RAM_RESULTS and total <= RAM_BYTES:
                 break
-            if old != protected:
-                self._results.pop(old)
+            total -= len(self._results.pop(old).get('imagebytes') or b'')
 
     def _ensure_schema(self, library):
         database = id(library), str(library.database)
@@ -256,7 +309,7 @@ class FaceService(QObject):
                 db.execute(SCHEMA)
             self._schemas.add(database)
 
-    def _read_or_compute(self, library, photo):
+    def _read_or_compute(self, library, photo, quality='original'):
         key = cache_key(photo)
         lock = library.file_locks[photo['id'] % len(library.file_locks)]
         while not lock.acquire(timeout=.1):
@@ -290,11 +343,15 @@ class FaceService(QObject):
                                     cached.verify()
                             except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
                                 payload = None
-                            if payload is not None:
+                            if payload is not None and (quality == 'preview' or metadata.get('quality', 'original') == 'original'):
                                 return dict(metadata, imagebytes=payload, photo_id=photo['id'], cache_key=key)
                 except (ValueError, TypeError):
                     faces = None
-            result = self._isolated(photo, faces)
+            if quality == 'preview':
+                preview_bytes = library.read_preview_cache(photo['path'], photo['size'], photo['mtime'], 1600)
+                result = self._isolated(photo, faces, preview_bytes, quality)
+            else:
+                result = self._isolated(photo, faces)
             metadata = {name: value for name, value in result.items() if name != 'imagebytes'}
             with library.connect() as db:
                 db.execute('INSERT OR REPLACE INTO face_metadata VALUES (?,?,?,?,?,?,?)',
@@ -326,14 +383,14 @@ class FaceService(QObject):
             library.cache_changed(delta)
         library.schedule_prune()
 
-    def _isolated(self, photo, faces):
+    def _isolated(self, photo, faces, preview_bytes=None, quality='original'):
         with self._executor_lock:
             if self._closed or self._stop.is_set():
                 raise ValueError('人脸任务已停止')
             if self._executor is None:
                 self._executor = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context('spawn'), initializer=_face_initializer)
             executor = self._executor
-        future = executor.submit(_compute_faces, photo, faces)
+        future = executor.submit(_compute_faces, photo, faces, preview_bytes, quality)
         deadline = time.monotonic() + JOB_TIMEOUT
         try:
             while not self._stop.is_set():

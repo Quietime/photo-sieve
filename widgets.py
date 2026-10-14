@@ -183,7 +183,7 @@ class PhotoView(QGraphicsView):
         if self.wheel_adjusted:
             self.zoom_changed.emit()
         else:
-            self.animate_scale(1.0, target, QPointF(self.viewport().rect().center()), 260, self.zoom_changed.emit)
+            self.animate_scale(1.0, target, QPointF(self.viewport().rect().center()), 130, self.zoom_changed.emit)
 
     def unzoom(self, done):
         """Leave zoom immediately in state, then animate back to the fitted photo."""
@@ -197,7 +197,7 @@ class PhotoView(QGraphicsView):
             self.centerOn(begin + (end - begin) * t)
         def finished():
             self.zoom_animation = None; done()
-        self.zoom_animation = animate(self, 260, step, theme.SNAPPY, finished)
+        self.zoom_animation = animate(self, 130, step, theme.SNAPPY, finished)
 
     def content_rect(self):
         """Viewport rectangle currently covered by the photo, for transition snapshots."""
@@ -312,7 +312,7 @@ class Toast(QWidget):
         self.timer.start(duration)
 
     def leave(self):
-        self.leaving = True; self.run(self.opacity, 0.0, 250, self.hide_now)
+        self.leaving = True; self.run(self.opacity, 0.0, 100, self.hide_now)
 
     def hide_now(self):
         if self.leaving: self.hide(); self.leaving = False
@@ -369,7 +369,7 @@ class Segmented(GlassSurface):
         if not animated: self.position = index; self.update(); return
         def step(value): self.position = value; self.update()
         def finished(): self.animation = None
-        self.animation = animate(self, 250, step, theme.EASE, finished, self.position, index)
+        self.animation = animate(self, 100, step, theme.EASE, finished, self.position, index)
 
     def mousePressEvent(self, event):
         index = int((event.position().x() - 2) // self.segment_width())

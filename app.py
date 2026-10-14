@@ -550,6 +550,26 @@ class Library:
             result['errors'] = [dict(r) for r in db.execute("SELECT original,target,error FROM export_files WHERE batch_id=? AND result='failed' ORDER BY id LIMIT 100", (batch_id,))]
             return result
 
+    def read_metadata_batch(self, photos, reader, stopped):
+        from contextlib import ExitStack
+        # Acquire stripes in a stable order, and keep them until child readers
+        # close their handles. Waiting for trash must remain cancellable.
+        with ExitStack() as locks:
+            for index in sorted({p['id'] % len(self.file_locks) for p in photos}):
+                lock=self.file_locks[index]
+                while not lock.acquire(timeout=.05):
+                    if stopped.is_set():return []
+                locks.callback(lock.release)
+            if stopped.is_set():return []
+            valid=[]
+            for photo in photos:
+                row=self.photo(photo['id'],include_deleted=True)
+                if row['present'] and all(row[k]==photo[k] for k in ('path','size','mtime')):valid.append(photo)
+            if not valid:return []
+            paths=[p['path'] for p in valid]
+            texts=reader.read_many(paths) if hasattr(reader,'read_many') else [reader.read(paths[0])]
+            return list(zip(valid,texts))
+
     def read_metadata(self, photo_id, reader):
         # The reader may wait for a child process: keep the same lock used by
         # previews and trash until that child has closed the original file.

@@ -2,6 +2,7 @@
 from pathlib import Path
 from PIL import Image
 import json
+import os
 
 def _text(value):
     if isinstance(value,bytes):value=value.decode('utf8',errors='replace')
@@ -26,20 +27,48 @@ def format_info(aperture=None,exposure=None,iso=None,date=None,focal=None,make=N
     if date:lines.append(_text(date).replace(':','-',2))
     return '\n'.join(lines)
 
-def shooting_info(path):
-    try:
-        if Path(path).suffix.lower() in {'.arw','.cr2','.cr3','.nef','.nrw','.dng','.raf','.rw2','.orf','.pef','.srw'}:raise OSError('RAW metadata uses ExifTool')
-        with Image.open(Path(path)) as image:
-            main=image.getexif();exif=main.get_ifd(34665)
-            get=lambda key:exif.get(key,main.get(key))
-            return format_info(get(33437),get(33434),get(34855),get(36867),get(37386),main.get(271),main.get(272),get(42036))
-    except (OSError,ValueError,TypeError,ZeroDivisionError):
+RAW_SUFFIXES={'.arw','.cr2','.cr3','.nef','.nrw','.dng','.raf','.rw2','.orf','.pef','.srw'}
+CAMERA_TAGS=('FNumber','ExposureTime','ISO','DateTimeOriginal','FocalLength','Make','Model','LensModel')
+
+def _path_key(path):
+    return os.path.normcase(os.path.abspath(str(path))).replace('\\','/')
+
+def shooting_infos(paths):
+    """Aligned read-only results; one ExifTool startup for the entire RAW batch.
+
+    SourceFile is matched explicitly because damaged or unsupported files can be
+    omitted from ExifTool JSON. Never shift another photo's parameters into an
+    empty slot. Ordinary JPEG headers continue to use Pillow without a subprocess.
+    """
+    paths=list(paths);results=['']*len(paths);fallback=[]
+    for index,path in enumerate(paths):
         try:
-            from embedded_rating import _run
-            rows=json.loads(_run(['-j','-n','-FNumber','-ExposureTime','-ISO','-DateTimeOriginal','-FocalLength','-Make','-Model','-LensModel','--',path],4))
-            row=rows[0]
-            return format_info(*(row.get(key) for key in ('FNumber','ExposureTime','ISO','DateTimeOriginal','FocalLength','Make','Model','LensModel')))
-        except Exception:return ''
+            if Path(path).suffix.lower() in RAW_SUFFIXES:raise OSError('RAW metadata uses ExifTool')
+            with Image.open(Path(path)) as image:
+                main=image.getexif();exif=main.get_ifd(34665)
+                get=lambda key:exif.get(key,main.get(key))
+                results[index]=format_info(get(33437),get(33434),get(34855),get(36867),get(37386),main.get(271),main.get(272),get(42036))
+        except (OSError,ValueError,TypeError,ZeroDivisionError):
+            fallback.append(index)
+    if not fallback:return results
+    try:
+        from embedded_rating import _run
+        rows=json.loads(_run(['-j','-n',*('-'+tag for tag in CAMERA_TAGS),'--',*(paths[index] for index in fallback)],4))
+        if not isinstance(rows,list):return results
+        identified={_path_key(row['SourceFile']):row for row in rows if isinstance(row,dict) and row.get('SourceFile')}
+        # ExifTool always provides SourceFile. Positional fallback only supports
+        # legacy callers/tests that supply a complete response without this field.
+        positional=len(rows)==len(fallback) and not identified
+        for offset,index in enumerate(fallback):
+            row=rows[offset] if positional else identified.get(_path_key(paths[index]),{})
+            if not isinstance(row,dict):continue
+            try:results[index]=format_info(*(row.get(key) for key in CAMERA_TAGS))
+            except (ValueError,TypeError,ZeroDivisionError,OverflowError):pass
+    except Exception:pass
+    return results
+
+def shooting_info(path):
+    return shooting_infos([path])[0]
 
 class MetadataReader:
     """One cancellable metadata process: slow removable storage never blocks closing."""
@@ -47,12 +76,18 @@ class MetadataReader:
         import threading
         self.lock=threading.Lock();self.executor=None;self.closed=False
     def read(self,path):
+        return self._read(shooting_info,path,'')
+    def read_many(self,paths):
+        paths=list(paths)
+        if not paths:return []
+        return self._read(shooting_infos,paths,['']*len(paths))
+    def _read(self,function,argument,empty):
         import multiprocessing,time
         from concurrent.futures import ProcessPoolExecutor,TimeoutError
         with self.lock:
-            if self.closed:return ''
+            if self.closed:return empty
             if self.executor is None:self.executor=ProcessPoolExecutor(1,mp_context=multiprocessing.get_context('spawn'))
-            executor=self.executor;future=executor.submit(shooting_info,path)
+            executor=self.executor;future=executor.submit(function,argument)
         deadline=time.monotonic()+7
         try:
             while not self.closed and time.monotonic()<deadline:
@@ -60,7 +95,7 @@ class MetadataReader:
                 except TimeoutError:pass
         except Exception:pass
         self.reset(executor)
-        return ''
+        return empty
     def reset(self,executor):
         with self.lock:
             if self.executor is not executor:return
@@ -71,7 +106,8 @@ class MetadataReader:
             executor.shutdown(wait=False,cancel_futures=True)
             for process in processes:
                 process.join(.05)
-                if process.is_alive():process.kill()
+                if process.is_alive():
+                    process.kill();process.join(.05)
     def close(self):
         self.closed=True
         if self.executor:self.reset(self.executor)

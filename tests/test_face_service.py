@@ -216,7 +216,7 @@ class FaceServiceTest(unittest.TestCase):
         order = []
         gate = threading.Event()
         started = threading.Event()
-        def compute(photo, known):
+        def compute(photo, known, *args):
             order.append(photo['id'])
             if len(order) == 1:
                 started.set()
@@ -232,8 +232,82 @@ class FaceServiceTest(unittest.TestCase):
             until(lambda: len(self.service._done) == 8 and not self.service._working)
         self.assertEqual(order, [photo['id'] for photo in self.host.queue])
         self.assertEqual(self.host.max_workers, 1)
-        self.assertLessEqual(len(self.service._results), 4)
+        self.assertLessEqual(len(self.service._results), face_service.RAM_RESULTS)
         self.assertIsNotNone(self.service.result_for(self.host.queue[0]), 'Prefetch must not evict the visible current face')
+
+    def test_next_fifty_crops_remain_immediate_ram_hits_without_disk_or_new_jobs(self):
+        template = self.host.queue[0]
+        self.host.queue = [dict(template, id=index + 1, path=str(self.photos / f'fake-{index}.jpg')) for index in range(51)]
+        self.service.ahead = 50
+        self.service._synchronize()
+        for photo in self.host.queue:
+            self.service._remember(face_service.cache_key(photo), dict(crop_result(), photo_id=photo['id'], quality='preview'))
+        self.host.queue = self.host.queue[1:]
+        with patch.object(self.library, 'read_cache', side_effect=AssertionError('Switch must not read disk')), \
+             patch.object(self.service, 'update', side_effect=AssertionError('RAM hit must not schedule work')):
+            result = self.service.result_for(self.host.queue[0])
+        self.assertEqual(result['photo_id'], self.host.queue[0]['id'])
+        self.assertEqual(result['quality'], 'preview')
+        self.assertEqual(len(self.service._results), 51)
+
+    def test_ram_byte_budget_retains_nearest_upcoming_before_distant_crops(self):
+        self.service.ahead = 7
+        self.service._synchronize()
+        with patch('face_service.RAM_BYTES', 9):
+            for photo in self.host.queue:
+                self.service._remember(face_service.cache_key(photo), {'imagebytes': b'123', 'photo_id': photo['id']})
+        self.assertEqual(sum(len(result['imagebytes']) for result in self.service._results.values()), 9)
+        self.assertEqual(set(self.service._results), {face_service.cache_key(photo) for photo in self.host.queue[:3]})
+
+    def test_current_preview_is_refined_only_after_idle_and_original_cache_replaces_preview(self):
+        first = self.host.queue[0]
+        calls = []
+        def compute(photo, faces, preview_bytes=None, quality='original'):
+            calls.append(quality)
+            return dict(crop_result(), quality=quality)
+        with patch.object(self.service, '_isolated', side_effect=compute):
+            self.service.update()
+            until(lambda: self.service.result_for(first) is not None)
+            self.assertEqual(self.service.result_for(first)['quality'], 'preview')
+            self.assertEqual(calls, ['preview'])
+            self.service._current_since = time.monotonic() - face_service.REFINE_IDLE / 2
+            self.service.update()
+            self.assertEqual(calls, ['preview'], 'Active switching must not start original refinement')
+            self.service._current_since -= face_service.REFINE_IDLE
+            self.service.update()
+            until(lambda: self.service.result_for(first).get('quality') == 'original')
+        self.assertEqual(calls, ['preview', 'original'])
+        with self.library.connect() as db:
+            metadata = json.loads(db.execute('SELECT metadata_json FROM face_metadata').fetchone()[0])
+        self.assertEqual(metadata['quality'], 'original')
+
+    def test_cancelled_refinement_keeps_preview_and_does_not_emit_stale_original(self):
+        first, second = self.host.queue[:2]
+        self.service._synchronize()
+        for photo in (first, second):
+            self.service._remember(face_service.cache_key(photo), dict(crop_result(), quality='preview'))
+            self.service._done.add(face_service.cache_key(photo))
+        self.service._current_key = face_service.cache_key(first)
+        self.service._current_since = time.monotonic() - 1
+        started, release = threading.Event(), threading.Event()
+        emitted = []
+        self.service.changed.connect(lambda pid, result: emitted.append((pid, result.get('quality'))))
+        def refine(*args, **kwargs):
+            started.set()
+            release.wait(2)
+            return dict(crop_result(), quality='original')
+        with patch.object(self.service, '_read_or_compute', side_effect=refine), \
+             patch.object(self.service, '_discard_executor') as terminate:
+            self.service.update()
+            until(started.is_set)
+            self.host.queue = self.host.queue[1:2]
+            self.service.update()
+            release.set()
+            until(lambda: not self.service._working)
+            self.assertTrue(terminate.called)
+        self.assertEqual(self.service.result_for(first)['quality'], 'preview')
+        self.assertNotIn((first['id'], 'original'), emitted)
+        self.assertNotIn(face_service.cache_key(first), self.service._refine_failed)
 
     def test_scanning_samples_pending_rows_and_waits_for_gui_queue(self):
         self.host.queue = []
@@ -241,7 +315,7 @@ class FaceServiceTest(unittest.TestCase):
         self.host.stack.index = 3
         self.service.ahead = 2
         seen = []
-        with patch.object(self.service, '_isolated', side_effect=lambda photo, faces: (seen.append(photo['id']) or crop_result())):
+        with patch.object(self.service, '_isolated', side_effect=lambda photo, faces, *args: (seen.append(photo['id']) or crop_result())):
             self.service.update()
             until(lambda: len(self.service._done) == 3 and not self.service._working)
         self.assertEqual(seen, [photo['id'] for photo in self.library.list_photos('pending', limit=3)])
@@ -253,7 +327,7 @@ class FaceServiceTest(unittest.TestCase):
         self.service.ahead = 2
         first = self.library.list_photos('pending', limit=1)[0]['id']
         seen = []
-        def compute(photo, faces):
+        def compute(photo, faces, *args):
             seen.append(photo['id'])
             if photo['id'] == first:
                 raise ValueError('模拟：损坏照片')
@@ -298,7 +372,7 @@ class FaceServiceTest(unittest.TestCase):
         first = self.host.queue[0]
         emitted = []
         self.service.changed.connect(lambda pid, result: emitted.append((pid, result)))
-        def compute(photo, faces):
+        def compute(photo, faces, *args):
             started.set()
             gate.wait(3)
             return crop_result()
@@ -319,7 +393,7 @@ class FaceServiceTest(unittest.TestCase):
         first = self.host.queue[0]
         started = threading.Event()
         release = threading.Event()
-        def compute(photo, known):
+        def compute(photo, known, *args):
             started.set()
             release.wait(3)
             self.assertTrue(Path(photo['path']).is_file())
@@ -478,6 +552,25 @@ class FaceServiceTest(unittest.TestCase):
 
 
 class FaceWorkerTest(unittest.TestCase):
+    def test_cached_display_jpeg_produces_preview_without_opening_raw_decoder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'photo.ARW'
+            path.write_bytes(b'not decoded: source fingerprint only')
+            information = path.stat()
+            photo = {'path': str(path), 'size': information.st_size, 'mtime': information.st_mtime_ns}
+            image = Image.new('RGB', (1600, 1200), 'blue')
+            payload = io.BytesIO()
+            image.save(payload, 'JPEG')
+            faces = [{'box': [.2, .2, .15, .15]}]
+            with patch('face_service.Library.decode', side_effect=AssertionError('Display JPEG avoids all RAW decoding')), \
+                 patch('face_service.detect_faces', return_value=faces) as detect:
+                result = face_service._compute_faces(photo, None, payload.getvalue(), 'preview')
+            self.assertEqual(detect.call_count, 1)
+            self.assertEqual(result['quality'], 'preview')
+            self.assertEqual(result['face_count'], 1)
+            self.assertEqual(result['original_size'], [1600, 1200])
+            self.assertTrue(result['imagebytes'])
+
     def test_known_faces_skip_detection_and_decode_only_original_in_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'photo.jpg'

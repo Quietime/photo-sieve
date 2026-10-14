@@ -12,6 +12,17 @@ from app import Library
 from desktop import Window,STYLE
 
 @contextmanager
+def test_directory(output):
+    temporary=tempfile.TemporaryDirectory()
+    try:yield temporary.name
+    except BaseException:
+        # Preserve evidence and avoid deleting files still owned by failed jobs.
+        temporary._finalizer.detach()
+        (output/'preserved-workspace.txt').write_text(temporary.name,encoding='utf8')
+        raise
+    else:temporary.cleanup()
+
+@contextmanager
 def held_file(path):
     if os.name!='nt':
         with open(path,'rb'):yield
@@ -43,7 +54,7 @@ def run(output,count=24,raw_fixture=None):
             if test():return
             QTest.qWait(5)
         raise AssertionError('Rapid delete did not complete')
-    with tempfile.TemporaryDirectory() as temporary:
+    with test_directory(output) as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir();digests={}
         for i in range(total):
             path=photos/(f'{i:05}'+suffix)
@@ -83,7 +94,21 @@ def run(output,count=24,raw_fixture=None):
                 thread=threading.Thread(target=external);thread.start();assert locked.wait(2)
                 result=window.library.trash(target);thread.join(2);assert Path(result['backup']).exists()
                 report={'ok':True,'platform':application.platformName(),'deleted':count,'imported':total,'peak_pending':peak_pending,'in_order':deleted==expected,'format':'Sony ARW' if raw_fixture else 'generated JPEG','key_seconds':round(key_seconds,3),'complete_seconds':round(complete_seconds,3),'external_handle_move':True,'metadata_reads':reader.count,'errors':errors,'checks':['rapid_keyboard_delete_with_active_metadata_handle','all_deleted_backups_match_original_bytes','one_history_entry_per_photo','no_unfinished_moves','external_share_lock_retry']}
-            finally:window.prompt_on_close=False;window.close();application.processEvents()
+            except BaseException as exc:
+                import faulthandler
+                with (output/'threads.txt').open('w') as stream:faulthandler.dump_traceback(file=stream,all_threads=True)
+                with window.library.connect() as db:
+                    stages={r[0]:r[1] for r in db.execute('SELECT result,COUNT(*) FROM trash_log GROUP BY result')}
+                (output/'report.json').write_text(json.dumps({'ok':False,'error':str(exc),'pending':window.pending_ops,'inflight':list(window.inflight),'stages':stages,'metadata_reads':reader.count,'errors':errors},indent=2),encoding='utf8')
+                raise
+            finally:
+                window.prompt_on_close=False
+                if window.pending_ops:
+                    window.metadata_service.shutdown();window.faces.shutdown()
+                    for pool in (window.pool,window.image_pool,window.thumb_pool,window.detail_pool):pool.clear()
+                    deadline=time.monotonic()+10
+                    while window.pending_ops and time.monotonic()<deadline:application.processEvents();QTest.qWait(5)
+                if not window.pending_ops:window.close();application.processEvents()
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print(f'PASS rapid delete: {count} keys, actual file handles, no failed moves; keys {key_seconds:.2f}s, complete {complete_seconds:.2f}s')
 
 if __name__=='__main__':

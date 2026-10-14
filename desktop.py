@@ -204,7 +204,7 @@ class Window(QMainWindow):
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
         self.cache_clearing=False;self.importing=False;self.import_revision=None
-        self.shot_cache=OrderedDict();self.shot_loading=set();self.metadata_reader=MetadataReader()
+        self.metadata_reader=MetadataReader()
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.op_pool = QThreadPool(self); self.op_pool.setMaxThreadCount(1)   # file and record changes run strictly in order
         # Image threads mostly wait for decoder processes; only a few at a time do interface-side decoding.
@@ -232,6 +232,8 @@ class Window(QMainWindow):
         self.uninstall_requested=False
         self.build(); self.window_frame=WindowFrame(self,self.window_chrome); self.update_actions()
         self.face_panel=FacePanel(self.face_container);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
+        from metadata_service import MetadataService
+        self.metadata_service=MetadataService(self)
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
@@ -775,7 +777,7 @@ class Window(QMainWindow):
             for pane in self.photos:
                 if pane.photo and pane.photo['id'] == pid and not pane.detail and not pane.zoom_animation:
                     fresh = pane.pixmap is None; pane.show_photo(pane.photo, pixmap); pane.source_width = source[0]
-                    if fresh and pane.item and time.monotonic() - self.last_motion > BURST: self.fade(pane, 0, 1, 160)
+                    if fresh and pane.item and time.monotonic() - self.last_motion > BURST: self.fade(pane, 0, 1, 70)
             self.update_thumbnail(pid); self.material_sources(); self.update_actions(); self.prefetch()
         def failed(message):
             if library is not self.library: return
@@ -849,17 +851,7 @@ class Window(QMainWindow):
         self.details[index].set_text(text)
 
     def show_shooting_info(self):
-        if self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:return
-        photo=self.queue[0];key=(photo['path'],photo['size'],photo['mtime']);library=self.library
-        if key in self.shot_cache:self.details[1].set_text(self.shot_cache[key]);return
-        self.details[1].set_text('')
-        if key in self.shot_loading:return
-        self.shot_loading.add(key)
-        def done(text):
-            self.shot_loading.discard(key);self.shot_cache[key]=text
-            while len(self.shot_cache)>128:self.shot_cache.popitem(last=False)
-            if library is self.library and self.view=='pending' and self.stack.currentIndex()==0 and self.queue and self.queue[0]['id']==photo['id']:self.details[1].set_text(text)
-        self.submit(lambda:library.read_metadata(photo['id'],self.metadata_reader.read),done,lambda _:done(''))
+        if hasattr(self,'metadata_service'):self.metadata_service.update()
 
     def face_changed(self,pid,result):
         if not self.faces.enabled or self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:self.face_panel.hide();return
@@ -1001,7 +993,7 @@ class Window(QMainWindow):
             start = left.pos()
             def lift(t, g=left):
                 g.move(start + QPoint(round(offset.x() * t), round(offset.y() * t))); g.opacity = max(0.0, 1 - t * 1.5); g.update()
-            self.track(animate(self, 300, lift, theme.SNAPPY, left.deleteLater))
+            self.track(animate(self, 100, lift, theme.SNAPPY, left.deleteLater))
         target_pane = self.photos[0]
         if right and target_pane.item and target_pane.photo and self.queue and target_pane.photo['id'] == self.queue[0]['id']:
             origin = right.geometry(); rect = target_pane.content_rect()
@@ -1015,9 +1007,9 @@ class Window(QMainWindow):
             def landed(g=right, item=item):
                 if target_pane.item is item: item.setOpacity(1)
                 g.deleteLater()
-            right.raise_(); self.track(animate(self, 320, glide, theme.SNAPPY, landed))
+            right.raise_(); self.track(animate(self, 110, glide, theme.SNAPPY, landed))
         elif right: right.deleteLater()
-        if self.photos[1].item: self.fade(self.photos[1], 0, 1, 320)
+        if self.photos[1].item: self.fade(self.photos[1], 0, 1, 80)
         self.toast.raise_()
 
     def nudge(self):
@@ -1029,7 +1021,7 @@ class Window(QMainWindow):
         if item is None: return
         def step(t):
             if (pane.item or pane.text) is item: item.setX(8 * (1 - t) * math.sin(t * 6 * math.pi))
-        self.track(animate(self, 320, step, theme.EASE, lambda: (pane.item or pane.text) is item and item.setX(0)))
+        self.track(animate(self, 110, step, theme.EASE, lambda: (pane.item or pane.text) is item and item.setX(0)))
 
     # ---- actions ------------------------------------------------------------
     def act(self, action):
@@ -1113,7 +1105,7 @@ class Window(QMainWindow):
                         item = pane.item; item.setTransformOriginPoint(item.boundingRect().center())
                         def settle(t):
                             if pane.item is item: item.setOpacity(t); item.setScale(.96 + .04 * t)
-                        self.track(animate(self, 320, settle, theme.SNAPPY))
+                        self.track(animate(self, 110, settle, theme.SNAPPY))
                 else: self.render()
             kept = photo and photo['status'] == 1 and self.view == 'pending'
             self.toast.show_message(('已恢复到原位置' + (' · 在「保留」中' if kept else '')) if result.get('restored') else '已撤回', 'keep')
@@ -1467,7 +1459,7 @@ class Window(QMainWindow):
             self.close_choice=box.choice
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.rating_page.shutdown()
-        self.metadata_reader.close();self.faces.shutdown();self.faces.pool.waitForDone()
+        self.metadata_service.shutdown();self.faces.shutdown();self.faces.pool.waitForDone()
         self.closed = True
         self.op_pool.waitForDone()
         for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()

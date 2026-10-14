@@ -25,8 +25,8 @@ ERROR_TEXT = '#E7A69F'
 FONT = '"SF Pro Text","PingFang SC","Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans CJK SC",sans-serif'
 
 # Shared interaction tokens, with native Windows accessibility preferences.
-MOTION_FAST = 160
-MOTION_NORMAL = 240
+MOTION_FAST = 80
+MOTION_NORMAL = 120
 HOVER_SCALE = .025
 PRESS_SCALE = .98
 REDUCED_MOTION = False
