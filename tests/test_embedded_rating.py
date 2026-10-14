@@ -12,7 +12,7 @@ import native_rating as native
 class EmbeddedRatingTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
-        self.root=Path(self.temp.name)
+        self.root=Path(self.temp.name).resolve()
         self.original=self.root/'照片.ARW'
         self.original.write_bytes(b'original RAW payload')
         self.environment=patch.dict(os.environ,PHOTOSIEVE_RATING_CANDIDATES=str(self.root/'candidates'))
