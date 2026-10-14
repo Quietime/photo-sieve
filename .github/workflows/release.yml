@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [full, update_ui, features, review_ui, deletion, responsiveness]
+        options: [full, update_ui, features, review_ui, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness'
+        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui'
         run: python tools/prepare_feature_fixtures.py
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
@@ -99,6 +99,17 @@ jobs:
           python tools/check_cache_settings.py cache-ui-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_fast_delete.py deletion-ui-ci --count 500 --raw-fixture feature-fixtures/sony.ARW
+      - name: Verify only changed cache dialog and cleanup entry
+        if: env.CHECK_SCOPE == 'cache_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_cache_settings.py cache-ui-ci
+      - name: Verify cache dialog at 150 percent scaling
+        if: env.CHECK_SCOPE == 'cache_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_cache_settings.py cache-hidpi-ci
       - name: Test library and updater
         if: env.CHECK_SCOPE == 'full'
         run: python -m unittest discover -s tests -p 'test_*.py' -v
@@ -188,6 +199,7 @@ jobs:
             review-hidpi-ci/*
             deletion-ui-ci/*
             cache-ui-ci/*
+            cache-hidpi-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Audit paging, review performance and cache limits
@@ -227,14 +239,23 @@ jobs:
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
           if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
+      - name: Verify cache settings in packaged EXE
+        if: env.CHECK_SCOPE == 'cache_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--cache-settings-self-test', 'cache-frozen-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged cache settings failed' }
+          if (!(Get-Content cache-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings verification failed' }
       - name: Verify rapid deletion in packaged EXE
-        if: env.CHECK_SCOPE == 'deletion' || env.CHECK_SCOPE == 'responsiveness'
+        if: env.CHECK_SCOPE == 'deletion' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui'
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
         run: |
           $arguments = @('--delete-sharing-self-test', 'deletion-frozen-ci')
-          if ($env:CHECK_SCOPE -eq 'responsiveness') { $arguments += @('500', 'feature-fixtures/sony.ARW') }
+          if ($env:CHECK_SCOPE -ne 'deletion') { $arguments += @('500', 'feature-fixtures/sony.ARW') }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList $arguments -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged concurrent deletion failed' }
           if (!(Get-Content deletion-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged concurrent deletion verification failed' }

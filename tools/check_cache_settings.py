@@ -12,8 +12,8 @@ from apple_ui import AppleButton
 
 def run(output):
     import faulthandler
-    faulthandler.dump_traceback_later(40,exit=True)
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
+    trace=(output/'threads.log').open('w');faulthandler.dump_traceback_later(40,file=trace,exit=True)
     application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
     def until(condition):
         deadline=time.monotonic()+10
@@ -43,6 +43,10 @@ def run(output):
                             text='\n'.join(label.text() for label in dialog.findChildren(QLabel))
                             assert '人脸跟随照片缓存' in text and '70%' in text
                             for field in fields:assert dialog.rect().contains(field.mapTo(dialog,field.rect().bottomRight()))
+                            explanation=next(label for label in dialog.findChildren(QLabel) if '人脸跟随照片缓存' in label.text())
+                            assert explanation.y()>max(field.mapTo(dialog,field.rect().bottomRight()).y() for field in fields)+8, 'Explanation overlaps cache controls'
+                            save=next(button for button in dialog.findChildren(AppleButton) if button.text()=='保存')
+                            assert save.mapTo(dialog,save.rect().topLeft()).y()>explanation.geometry().bottom()+8, 'Save row overlaps explanation'
                             next(button for button in dialog.findChildren(AppleButton) if button.text()=='保存').click()
                         except BaseException as exc:
                             errors.append(repr(exc))
@@ -79,7 +83,7 @@ def run(output):
                 checks.append('one_click_menu_clears_photo_face_metadata_caches_and_removes_undo_entry')
                 report={'ok':True,'platform':application.platformName(),'checks':checks,'memory_count':window.ahead_target,'disk_horizon':window.disk_horizon,'face_ahead':window.faces.effective_ahead,'face_ram':window.faces.ram_limit}
             finally:window.prompt_on_close=False;window.close();application.processEvents()
-    (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print('PASS linked cache settings and scheduled cleanup');faulthandler.cancel_dump_traceback_later()
+    (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print('PASS linked cache settings and scheduled cleanup');faulthandler.cancel_dump_traceback_later();trace.close()
 
 if __name__=='__main__':
     from multiprocessing import freeze_support

@@ -506,15 +506,15 @@ class Window(QMainWindow):
         for control in self.actionbar.controls:control.set_response(0.);control.update()
 
     def cache_dialog(self):
-        dialog=QDialog(self); dialog.setWindowTitle('预加载与缓存'); dialog.setMinimumWidth(510)
+        dialog=QDialog(self); dialog.setWindowTitle('预加载与缓存'); dialog.setMinimumSize(600,460)
         layout=QVBoxLayout(dialog); layout.setContentsMargins(24,20,24,24); layout.setSpacing(18)
-        form=QFormLayout(); form.setVerticalSpacing(16); form.setHorizontalSpacing(20)
+        form=QFormLayout(); form.setContentsMargins(0,0,0,0); form.setVerticalSpacing(16); form.setHorizontalSpacing(20)
         ahead=CacheSpinBox(); ahead.setRange(0,5000); ahead.setSpecialValueText('自动（按内存调整）'); ahead.setValue(self.preload_count)
         warm=CacheSpinBox(); warm.setRange(0,50000); warm.setValue(self.warm_count)
         disk=CacheSpinBox(); disk.setRange(64,10240); disk.setSuffix(' MB'); disk.setValue(self.library.cache_limit//(1024*1024))
         for field in (ahead,warm,disk): field.setMinimumHeight(38); field.setMinimumWidth(240)
         form.addRow('内存预加载照片数',ahead); form.addRow('后台磁盘预读照片数',warm); form.addRow('磁盘缓存上限',disk)
-        form_box=QWidget();form_box.setLayout(form);form_box.setMinimumHeight(3*38+2*16);layout.addWidget(form_box)
+        form_box=QWidget();form_box.setLayout(form);form_box.setFixedHeight(3*38+2*16);layout.addWidget(form_box)
         note=QLabel(); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
         def estimate():
             size=self.display_size or QSize(800,600); count=ahead.value() or machine.PROFILE.buffer(size.width()*size.height()*4)
@@ -523,6 +523,7 @@ class Window(QMainWindow):
             _,disk_count=photo_limits(effective,warm.value(),disk.value()*1024**2,self.estimated_preview_bytes)
             face_memory,face_disk,face_ram=face_limits(self.faces.ahead,effective,disk_count)
             note.setText(f'当前窗口实际预加载上限 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。后台磁盘预读上限 {disk_count:,} 张。\n人脸跟随照片缓存：预识别后续 {face_disk} 张，内存最多 {face_ram} 份／64 MB，当前照片优先。后台预读设为 0 时，仅处理内存预加载范围。\n照片预览和人脸共用磁盘限额；达到限额按生成时间清除最旧 70%，已处理且生成超过 2 分钟的缓存自动清理。全部工作文件夹总上限 10 GB。照片与筛选记录会保留。')
+            note.setMinimumHeight(note.heightForWidth(dialog.minimumWidth()-48))
         for field in (ahead,warm,disk):field.valueChanged.connect(estimate)
         estimate()
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
