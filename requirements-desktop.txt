@@ -2,3 +2,4 @@
 -r requirements-formats.txt
 PySide6-Essentials==6.8.3
 pywin32==311; sys_platform == 'win32'
+opencv-python-headless==4.13.0.92

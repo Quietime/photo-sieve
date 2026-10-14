@@ -184,11 +184,12 @@ class SettingsPanel(QFrame):
         self.setStyleSheet("""
             #morePanel { background:#1C1C1E; border:1px solid #38383A; border-radius:16px; }
             #morePanel QWidget { background:transparent; }
-            #morePanel QPushButton#menuItem { background:transparent; border:0; border-radius:8px; text-align:left; padding:9px 12px; }
+            #morePanel QPushButton#menuItem { background:transparent; border:0; border-radius:8px; text-align:left; padding:4px 8px; }
             #morePanel QPushButton#menuItem:hover { background:#2C2C2E; }
             #morePanel QPushButton#menuItem:disabled { color:#636366; }
-            #morePanel QCheckBox { padding:8px 12px; spacing:9px; }
-            #morePanel QLabel#sectionTitle { color:#F5F5F7; font-size:14px; font-weight:600; padding:10px 12px 0; }
+            #morePanel QCheckBox { padding:4px 8px; spacing:7px; }
+            #morePanel QLabel#sectionTitle { color:#F5F5F7; font-size:14px; font-weight:600; padding:0 4px 4px; }
+            #morePanel QFrame#settingsGroup { background:#303236; border:1px solid #38383A; border-radius:12px; }
             #morePanel QLabel#sectionDescription { color:#98989D; font-size:12px; padding:0 12px 6px; }
             #morePanel QLabel#panelStatus { color:#98989D; font-size:12px; padding:6px 12px; }
         """.replace('#1C1C1E',theme.ELEVATED).replace('#38383A',theme.SEPARATOR)
@@ -199,7 +200,8 @@ class SettingsPanel(QFrame):
         from apple_ui import AppleButton
         close=AppleButton('',symbol='close'); close.setFixedSize(28,28); close.setAccessibleName('关闭更多选项'); close.clicked.connect(self.hide); header.addWidget(close); outer.addLayout(header)
         self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content=QWidget(); self.column=QVBoxLayout(content); self.column.setContentsMargins(0,0,0,0); self.column.setSpacing(6)
+        from PySide6.QtWidgets import QGridLayout
+        content=self.content=QWidget();self.groups=QGridLayout(content);self.groups.setContentsMargins(0,0,0,0);self.groups.setSpacing(10);self.group_count=0;self.column=None
         self.scroll.setWidget(content); outer.addWidget(self.scroll); self.hide()
 
     def addAction(self,action):
@@ -208,6 +210,7 @@ class SettingsPanel(QFrame):
         if action in self.action_controls:return action
         control=QCheckBox(action.text()) if action.isCheckable() else QPushButton(action.text())
         control.setObjectName('menuItem'); control.setEnabled(action.isEnabled())
+        control.setFixedHeight(30);control.setToolTip(action.toolTip())
         if action.isCheckable():
             control.setChecked(action.isChecked()); control.toggled.connect(action.setChecked)
         else:
@@ -218,10 +221,10 @@ class SettingsPanel(QFrame):
         action.changed.connect(lambda:control.setEnabled(action.isEnabled())); return action
 
     def addSection(self,title,description=''):
-        if self.column.count():self.addSeparator()
+        group=QFrame();group.setObjectName('settingsGroup');self.column=QVBoxLayout(group);self.column.setContentsMargins(10,12,10,10);self.column.setSpacing(4)
+        self.groups.addWidget(group,self.group_count//2,self.group_count%2,Qt.AlignmentFlag.AlignTop);self.group_count+=1
         label=QLabel(title);label.setObjectName('sectionTitle');self.column.addWidget(label)
-        if description:
-            hint=QLabel(description);hint.setObjectName('sectionDescription');hint.setWordWrap(True);self.column.addWidget(hint)
+        label.setToolTip(description)
 
     def addStatus(self,text):
         label=QLabel(text); label.setObjectName('panelStatus'); label.setWordWrap(True); self.column.addWidget(label)
@@ -230,10 +233,10 @@ class SettingsPanel(QFrame):
         line=QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet('background:'+theme.SEPARATOR+'; min-height:1px; max-height:1px;'); self.column.addWidget(line)
 
     def place(self):
-        parent=self.parentWidget(); width=min(380,max(160,parent.width()-24))
+        parent=self.parentWidget(); width=min(600,max(160,parent.width()-24))
         anchor=self.anchor.mapTo(parent,QPoint(self.anchor.width(),self.anchor.height()+8))
         below=max(120,parent.height()-anchor.y()-12)
-        self.resize(width,min(self.column.sizeHint().height()+76,below))
+        self.resize(width,min(self.content.sizeHint().height()+76,below))
         self.move(max(12,min(anchor.x()-width,parent.width()-width-12)),max(12,min(anchor.y(),parent.height()-self.height()-12)))
         self.raise_()
 

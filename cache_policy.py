@@ -80,7 +80,8 @@ def prune_workspaces(root, extra=None, limit=MAX_BYTES, cache_lock=None, include
     files=[]
     for folder in folders:
         if folder.is_symlink(): continue
-        for path in folder.glob('*.jpg'):
+        for path in folder.iterdir() if folder.exists() else ():
+            if path.suffix.lower() not in ('.jpg','.png'):continue
             try:
                 if not path.is_symlink():
                     stat=path.stat(); files.append((stat.st_mtime,stat.st_size,path))

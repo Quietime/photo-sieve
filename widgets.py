@@ -12,6 +12,9 @@ from apple_ui import GlassSurface
 from pathlib import Path
 from PySide6.QtGui import QPixmap
 
+class DetailLabel(QLabel):
+    def set_text(self,value):self.setText(str(value))
+
 class WelcomePage(QWidget):
     """Static branded welcome image; no slideshow, original-photo load or animation."""
     def __init__(self):

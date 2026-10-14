@@ -100,7 +100,7 @@ class Library:
             ''')
             db.execute(INDEX_SCHEMA)
             # New empty workspaces need no legacy-cache migration. Existing ones migrate once in maintenance.
-            if not db.execute("SELECT 1 FROM meta WHERE key='cache_index_version'").fetchone() and next(self.cache.glob('*.jpg'),None) is None:
+            if not db.execute("SELECT 1 FROM meta WHERE key='cache_index_version'").fetchone() and not any(p.suffix.lower() in ('.jpg','.png') for p in self.cache.iterdir()):
                 db.execute("INSERT INTO meta VALUES ('cache_index_version','1')")
             self.cache_indexed={row[0] for row in db.execute('SELECT filename FROM cache_index')}
             for table, column, declaration in [('history', 'action', "TEXT DEFAULT 'mark'"),
@@ -592,10 +592,11 @@ class Library:
             return {'id': photo_id, 'path': str(path), 'backup': str(backup), 'staged': True}
 
     def clear_preview_cache(self):
-        """Only derived JPEG previews; never the database, originals or deletion backups."""
+        """Only derived JPEG/PNG previews; never the database, originals or deletion backups."""
         removed = 0
         with self.prune_lock, self.cache_lock:
-            for path in self.cache.glob('*.jpg'):
+            for path in self.cache.iterdir():
+                if path.suffix.lower() not in ('.jpg','.png'):continue
                 if path.is_file() and not path.is_symlink():
                     path.unlink(); removed += 1
             with self.connect() as db:
@@ -666,7 +667,8 @@ class Library:
 
     def recount_cache(self):
         sizes={}
-        for path in self.cache.glob('*.jpg'):
+        for path in self.cache.iterdir():
+            if path.suffix.lower() not in ('.jpg','.png'):continue
             try:
                 if path.is_file() and not path.is_symlink(): sizes[path.name]=path.stat().st_size
             except FileNotFoundError: pass

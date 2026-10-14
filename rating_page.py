@@ -1,4 +1,4 @@
-"""Independent photo grading; displayed stars always come from Windows System.Rating."""
+"""Independent photo grading; displayed stars come from verified photo metadata."""
 from collections import OrderedDict
 from pathlib import Path
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize
@@ -10,6 +10,7 @@ from apple_ui import GlassDock
 from widgets import PhotoView
 from rating_records import RatingRecords
 from rating_engine import RatingEngine
+from rating_combo import RoundedCombo
 import keys
 
 ACTIONS=[(f'star{i}',f'{i} 星',(str(i),),True) for i in range(1,6)]+[
@@ -26,12 +27,12 @@ class RatingPage(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
-        options=QHBoxLayout();self.scope=QComboBox();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
-        self.filter=QComboBox();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
+        options=QHBoxLayout();self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
+        self.filter=RoundedCombo();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
         self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));options.addWidget(self.auto)
         self.auto.toggled.connect(lambda value:QSettings('PhotoSieve','PhotoSieve').setValue('rating_auto_next',value))
-        self.read_button=host.button('读取全部系统评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row);layout.addLayout(options)
-        self.note=QLabel('星级写入照片的 Windows 属性；保留与删除标记独立。格式支持取决于 Windows 文件属性处理器。');self.note.setObjectName('caption');self.note.setWordWrap(True);layout.addWidget(self.note)
+        self.read_button=host.button('读取全部照片评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row);layout.addLayout(options)
+        self.note=QLabel('星级写入照片文件。ARW 支持标准原图星级；Windows 是否能显示会单独提示。保留与删除标记独立。');self.note.setObjectName('caption');self.note.setWordWrap(True);layout.addWidget(self.note)
         self.gallery_button=host.button('缩略图库',self.toggle_gallery);options.addWidget(self.gallery_button);options.addStretch()
         self.body=QStackedWidget();layout.addWidget(self.body,1);review=QWidget();pair=QHBoxLayout(review);pair.setContentsMargins(0,0,0,0);pair.setSpacing(16)
         self.panes=[];self.names=[]
@@ -82,13 +83,13 @@ class RatingPage(QWidget):
         self.active=False;self.generation+=1;self.scanning=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
     def reload(self,*_):
         if not self.active or self.writing or not self.records:return
-        self.generation+=1;gen=self.generation;self.scanning=False;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部系统评级')
+        self.generation+=1;gen=self.generation;self.scanning=False;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部照片评级')
         records=self.records;scope='keep' if self.scope.currentIndex() else 'all';stars=self.filter.currentIndex()-1 if self.filter.currentIndex() else None
         self.status.setText('正在读取分级列表…')
         def done(ids):
             if not self.valid(gen):return
             self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear();self.grid.set_ids(ids);self.strip.set_ids(ids);self.show_current();self.visible()
-            if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部系统评级”刷新。')
+            if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部照片评级”刷新。')
             else:self.note.setText(f'{len(ids):,} 张照片 · 星级写入 Windows 属性，保留与删除标记独立；缩略图按需加载。')
         self.host.submit(lambda:records.ids(scope,stars),done,self.host.error)
     def valid(self,gen):return self.active and gen==self.generation and self.library is self.host.library and not self.host.closed
@@ -110,7 +111,7 @@ class RatingPage(QWidget):
         pid=self.pid()
         if pid is None:
             for pane,name in zip(self.panes,self.names):pane.show_photo(None);name.setText('没有符合条件的照片')
-            self.status.setText('可更换照片范围，或读取全部系统评级后再按星级筛选');self.update_controls();return
+            self.status.setText('可更换照片范围，或读取全部照片评级后再按星级筛选');self.update_controls();return
         self.grid.setCurrentRow(self.index);self.grid.scrollTo(self.grid.photo_model.index(self.index));self.strip.setCurrentRow(self.index);self.strip.scrollTo(self.strip.photo_model.index(self.index))
         for offset,pane in enumerate(self.panes):
             if self.index+offset<len(self.ids):
@@ -196,11 +197,16 @@ class RatingPage(QWidget):
         if self.records:
             with self.library.connect() as db:undo=bool(db.execute('SELECT 1 FROM rating_history h JOIN photos p ON p.id=h.photo_id WHERE p.present=1 LIMIT 1').fetchone())
         self.undo_button.setEnabled(undo and not self.writing and not self.host.busy and not self.host.job_running())
-        if self.writing:self.status.setText('正在安全写入并验证 Windows 星级…')
-        elif info:self.status.setText('Windows 系统评级：'+self.star_text(info)+(' · '+info.get('error','') if info.get('error') else ' · 点击星级写入，0 清除'))
+        if self.writing:self.status.setText('正在安全写入并验证照片星级…')
+        elif info:
+            embedded=info.get('backend')=='embedded'
+            origin='ARW 原图星级' if embedded else 'Windows 系统评级'
+            visibility=(' · Windows 可读取' if info.get('windows_visible') else ' · Windows 读取支持待评级后验证' if info.get('windows_visible') is None else ' · 当前 Windows 无法读取原图星级') if embedded else ''
+            self.status.setText(origin+'：'+self.star_text(info)+visibility+(' · '+info.get('error','') if info.get('error') and not embedded else ' · 点击星级写入，0 清除'))
+            self.status.setToolTip(info.get('error',''))
         elif self.pid():self.status.setText('正在读取 Windows 系统评级…')
     def toggle_read(self):
-        if self.scanning:self.scanning=False;self.remaining=[];self.read_button.setText('读取全部系统评级');return
+        if self.scanning:self.scanning=False;self.remaining=[];self.read_button.setText('读取全部照片评级');return
         if not self.records or self.writing:return
         self.scanning=True;self.remaining=None;gen=self.generation;records=self.records;scope='keep' if self.scope.currentIndex() else 'all'
         def done(ids):
@@ -213,7 +219,7 @@ class RatingPage(QWidget):
             if self.remaining[-1] in self.reading:break
             self.read(self.remaining.pop(),True)
         self.read_button.setText(f'停止读取 · {max(0,self.total-len(self.remaining)-len(self.reading)):,} / {self.total:,}')
-        if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部系统评级');self.reload()
+        if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部照片评级');self.reload()
     def grade(self,stars):
         info=self.info.get(self.pid())
         if self.host.busy or self.host.job_running() or self.writing or not info or info['state']!='ready' or not info['writable']:return

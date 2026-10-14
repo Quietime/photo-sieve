@@ -40,10 +40,15 @@ from rating_page import RatingPage
 from window_frame import WindowFrame
 from version import APP_VERSION
 from update_ui import UpdateController
+from album_view import AlbumView
+from photo_metadata import MetadataReader
+from close_offer import CloseOfferDialog
+from face_panel import FacePanel
+from face_service import FaceService
 import theme
 from apple_ui import AppleButton, GlassDock, GlassPopover
 from theme import STYLE, animate
-from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage, ImportPage
+from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage, ImportPage,DetailLabel
 
 PAGE = 1200         # rows per queue page; ids are indexed, so a page costs a few milliseconds
 REFILL = 800        # fetch the next page while this many photos remain
@@ -199,6 +204,7 @@ class Window(QMainWindow):
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
         self.cache_clearing=False;self.importing=False;self.import_revision=None
+        self.shot_cache=OrderedDict();self.shot_loading=set();self.metadata_reader=MetadataReader()
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
         self.op_pool = QThreadPool(self); self.op_pool.setMaxThreadCount(1)   # file and record changes run strictly in order
         # Image threads mostly wait for decoder processes; only a few at a time do interface-side decoding.
@@ -225,6 +231,7 @@ class Window(QMainWindow):
         theme.configure_accessibility(QSettings('PhotoSieve', 'PhotoSieve'))
         self.uninstall_requested=False
         self.build(); self.window_frame=WindowFrame(self,self.window_chrome); self.update_actions()
+        self.face_panel=FacePanel(self.photos[0].viewport());self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
@@ -269,7 +276,7 @@ class Window(QMainWindow):
             button.set_shortcut(keys.first(chosen, action), ' / '.join(keys.label(key) for key in chosen[action] if key))
         self.sync_shortcut_mode()
         hint = ('或按 ' + keys.first(chosen, 'restore') + ' ') if keys.first(chosen, 'restore') else ''
-        self.deleted_note.setText('照片暂存在 .photo-sieve-trash 中。双击' + hint + '恢复；彻底删除后无法撤回。')
+        self.deleted_note.setText('已删除相册 · 单击照片查看大图')
 
     def key(self, action):
         return keys.first(self.chosen_keys, action) or ('再次单击图片' if action=='unzoom' else '恢复按钮')
@@ -284,8 +291,9 @@ class Window(QMainWindow):
 
     def sync_shortcut_mode(self):
         menu_open=bool(getattr(self,'more_panel',None) and self.more_panel.isVisible())
-        for shortcut in getattr(self,'shortcuts',[]):shortcut.setEnabled(not self.rating_active and not menu_open)
+        for shortcut in getattr(self,'shortcuts',[]):shortcut.setEnabled(not self.rating_active and not menu_open and self.view=='pending' and self.stack.currentIndex()==0)
         for shortcut in self.rating_page.shortcut_objects:shortcut.setEnabled(self.rating_active and not menu_open)
+        self.album.escape.setEnabled(not menu_open and self.stack.currentWidget() is self.album)
 
     def toggle_rating(self):
         if self.busy or self.pending_ops or self.job_running():return
@@ -338,9 +346,12 @@ class Window(QMainWindow):
         tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
         self.rating_button=self.button('照片分级',self.toggle_rating);tools.addWidget(self.rating_button)
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
+        self.resume_button=self.button('继续上次进度',self.resume_last);tools.addWidget(self.resume_button)
+        last=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root') or ''
+        self.resume_button.setEnabled(bool(last));self.resume_button.setToolTip(str(last))
         self.export_button = self.button('导出', self.export_dialog, 'primary'); self.export_button.symbol='export'; tools.addWidget(self.export_button)
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
-        for control in (self.open_button, self.export_button, self.more_button): control.setFixedHeight(32)
+        for control in (self.open_button,self.resume_button,self.export_button,self.more_button): control.setFixedHeight(32)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
         top.addWidget(right, 1); outer.addWidget(bar)
@@ -359,7 +370,7 @@ class Window(QMainWindow):
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
             name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-            detail = Elided('caption'); detail.setFixedHeight(20); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            detail = DetailLabel() if index==1 else Elided('caption');detail.setObjectName('caption'); detail.setFixedHeight(40); detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             pane.addWidget(name); pane.addWidget(detail); pair.addLayout(pane, 2 if index == 0 else 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
@@ -392,31 +403,36 @@ class Window(QMainWindow):
         self.deleted_grid.setUniformItemSizes(True); self.deleted_grid.setIconSize(QSize(176, 118)); self.deleted_grid.setGridSize(QSize(196, 158))
         self.deleted_grid.setTextElideMode(Qt.TextElideMode.ElideMiddle); self.deleted_grid.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.deleted_grid.itemDoubleClicked.connect(lambda item: self.restore(photo_id=item.data(ROLE)))
+        self.deleted_grid.itemClicked.connect(lambda item:self.album.open(item.data(ROLE)))
+        self.deleted_grid.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.deleted_grid.itemSelectionChanged.connect(self.deleted_selection_changed)
         self.deleted_grid.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.deleted_grid.verticalScrollBar().valueChanged.connect(self.maybe_more_deleted); grid_layout.addWidget(self.deleted_grid, 1)
-        footer = QHBoxLayout(); self.deleted_note = QLabel('删除的照片在原文件夹的 .photo-sieve-trash 中，仍占用空间。双击或按 ← 恢复。')
+        footer = QHBoxLayout(); self.deleted_note = QLabel('已删除相册 · 单击照片查看大图')
         self.deleted_note.setObjectName('caption'); footer.addWidget(self.deleted_note, 1)
         self.select_all_deleted = self.button('全选', self.select_deleted); footer.addWidget(self.select_all_deleted)
         self.purge_selected = self.button('彻底删除所选', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
         self.restore_selected = self.button('恢复所选', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
+        for control in (self.select_all_deleted,self.purge_selected,self.restore_selected):control.hide()
         self.stack.addWidget(deleted)
 
         empty = WelcomePage(); hero = QVBoxLayout(empty); hero.setContentsMargins(24,24,24,24); hero.setSpacing(12); hero.addStretch()
         lead = QLabel('选择照片文件夹开始筛选 · 也可以拖入文件夹'); lead.setObjectName('caption')
         start = self.button('打开文件夹…', self.choose_source, 'primary'); start.setProperty('large', True)
         lead.setAlignment(Qt.AlignmentFlag.AlignHCenter); hero.addWidget(lead)
-        hero.addWidget(start, 0, Qt.AlignmentFlag.AlignHCenter); self.stack.addWidget(empty)
+        welcome_buttons=QHBoxLayout();welcome_buttons.addStretch();welcome_buttons.addWidget(start)
+        self.welcome_resume=self.button('继续上次进度',self.resume_last);self.welcome_resume.setProperty('large',True);self.welcome_resume.setEnabled(self.resume_button.isEnabled());welcome_buttons.addWidget(self.welcome_resume);welcome_buttons.addStretch()
+        hero.addLayout(welcome_buttons); self.stack.addWidget(empty)
         self.import_page=ImportPage();self.stack.addWidget(self.import_page)
         kept=QWidget();kept_layout=QVBoxLayout(kept);kept_layout.setContentsMargins(24,8,24,16);kept_layout.setSpacing(16)
         self.kept_grid=PhotoGrid();self.kept_grid.icon_for=lambda pid:QIcon(self.kept_thumb_cache[pid]) if pid in self.kept_thumb_cache else self.tile
         self.kept_grid.itemClicked.connect(self.open_kept_item);self.kept_grid.verticalScrollBar().valueChanged.connect(self.queue_kept_thumbnails)
         kept_layout.addWidget(self.kept_grid,1)
-        self.kept_note=QLabel('已保留照片 · 单击缩略图查看大图，右上角可导出全部保留照片');self.kept_note.setObjectName('caption');kept_layout.addWidget(self.kept_note)
+        self.kept_note=QLabel('保留相册 · 单击照片查看大图');self.kept_note.setObjectName('caption');kept_layout.addWidget(self.kept_note)
         self.stack.addWidget(kept)
 
         self.rating_page=RatingPage(self);self.stack.addWidget(self.rating_page)
+        self.album=AlbumView(self);self.stack.addWidget(self.album)
 
         self.toast = Toast(root)
         self.toast.positioner=self.place_overlays
@@ -431,8 +447,10 @@ class Window(QMainWindow):
         ordering=menu.addAction('排序与日期筛选…');ordering.setEnabled(self.session_active and not self.busy and not self.rating_active);ordering.triggered.connect(self.edit_ordering)
         rescan=menu.addAction('重新扫描当前文件夹');root=self.state_data and self.state_data.get('root')
         rescan.setEnabled(bool(root) and not self.busy and not self.pending_ops);rescan.triggered.connect(lambda:self.scan(root))
-        undo=menu.addAction('撤销评级' if self.rating_active else '撤回上一步');undo.setEnabled(self.rating_page.undo_button.isEnabled() if self.rating_active else self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
-        undo.triggered.connect(lambda:self.rating_page.undo() if self.rating_active else self.restore(general=True))
+        menu.addAction('人脸预览…').triggered.connect(self.face_settings)
+        if self.rating_active or self.view=='pending':
+            undo=menu.addAction('撤销评级' if self.rating_active else '撤回上一步');undo.setEnabled(self.rating_page.undo_button.isEnabled() if self.rating_active else self.session_active and (bool(self.state_data and self.state_data.get('can_undo')) or self.pending_ops>0))
+            undo.triggered.connect(lambda:self.rating_page.undo() if self.rating_active else self.restore(general=True))
         menu.addSection('界面与操作', '调整显示方式和键盘操作')
         dock=QAction('显示底部操作栏',menu);dock.setCheckable(True);dock.setChecked(self.actionbar_visible)
         dock.toggled.connect(self.set_actionbar_visible);menu.addAction(dock)
@@ -442,9 +460,8 @@ class Window(QMainWindow):
         reduced.toggled.connect(lambda enabled:self.set_accessibility('reduced_motion',enabled));menu.addAction(reduced)
         menu.addSection('性能与缓存', '管理预加载、缓存空间和渲染方式')
         menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
-        gpu=QAction('GPU 合成（重启后生效）',menu);gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
+        gpu=QAction('GPU 合成',menu);gpu.setToolTip('切换后重启应用生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
         gpu.setChecked(QSettings('PhotoSieve','PhotoSieve').value('gpu_compositing',False,type=bool));gpu.toggled.connect(self.set_gpu);menu.addAction(gpu)
-        menu.addStatus(self.machine_status())
         menu.addSection('更新与诊断', '获取新版本或查看运行日志')
         menu.addAction('检查更新').triggered.connect(lambda:self.updates.check())
         automatic=QAction('启动时检查更新',menu);automatic.setCheckable(True);automatic.setChecked(self.updates.auto_enabled())
@@ -498,10 +515,11 @@ class Window(QMainWindow):
         self.cache_clearing=True; library=self.library; self.busy=True; self.update_actions()
         self.toast.show_message('正在清理预览缓存…','info')
         def work():
-            for pool in (self.image_pool,self.detail_pool,self.thumb_pool): pool.waitForDone()
+            for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool): pool.waitForDone()
             return library.clear_preview_cache()
         def done(count):
             self.cache_clearing=False; self.busy=False
+            self.faces.clear_memory()
             for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.image_errors,self.warmed): store.clear()
             self.render(); self.prefetch(); self.queue_kept_thumbnails(); self.toast.show_message(f'已清理 {count:,} 个预览缓存，正在重新加载当前照片','info')
         def failed(message):
@@ -658,12 +676,17 @@ class Window(QMainWindow):
 
     # ---- queue ------------------------------------------------------------
     def switch(self, view):
+        if view!='pending':
+            self.toast.pending=None;self.toast.timer.stop()
+            if self.toast.animation:self.toast.animation.stop()
+            self.toast.hide();self.toast.leaving=False;self.toast.opacity=0
         if self.rating_active:return
         self.updates.touch()
         if self.busy or view == self.view and not self.fetching: self.segments.set_current(self.view); return
         self.reset_zoom(); self.view = view; self.segments.set_current(view)
         if self.stack.currentIndex() != 2: self.stack.setCurrentIndex(1 if view == 'deleted' else 4 if view=='keep' else 0)
         self.keep_back_button.hide()
+        self.sync_shortcut_mode()
         self.place_overlays(); self.load(); self.refresh_state(0)
 
     def load(self, anchor=0, target_id=None):
@@ -761,7 +784,7 @@ class Window(QMainWindow):
             self.cache.pop(old); self.cache_size.pop(old,None); self.sources.pop(old,None)
 
     def prefetch(self):
-        if self.rating_active:return
+        if self.rating_active or self.view!='pending':return
         if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or self.display_size is None: return
         self.refill()  # custom horizons can exceed the first 1,200 metadata rows
         # Nearest photos first; a bounded number in flight keeps priorities meaningful while the key is held.
@@ -802,6 +825,8 @@ class Window(QMainWindow):
         self.material_sources(); self.update_strip()
         if self.queue: self.cursor_id = self.queue[0]['id']; self.cursor_timer.start(400)
         self.update_actions()
+        self.sync_shortcut_mode();self.show_shooting_info()
+        if hasattr(self,'faces'):self.faces.update();self.face_changed(self.queue[0]['id'] if self.queue else None,None)
 
     def caption(self, index, photo, detail=None):
         if not photo: self.names[index].set_text(''); self.details[index].set_text(''); return
@@ -809,6 +834,33 @@ class Window(QMainWindow):
         folder = os.path.dirname(photo['relative'])
         text = detail or ' · '.join(x for x in (folder, '已保留' if photo['status'] == 1 else '') if x)
         self.details[index].set_text(text)
+
+    def show_shooting_info(self):
+        if self.view!='pending' or self.stack.currentIndex()!=0 or len(self.queue)<2:return
+        photo=self.queue[1];key=(photo['path'],photo['size'],photo['mtime']);library=self.library
+        if key in self.shot_cache:self.details[1].set_text(self.shot_cache[key]);return
+        if key in self.shot_loading:return
+        self.shot_loading.add(key)
+        def done(text):
+            self.shot_loading.discard(key);self.shot_cache[key]=text
+            while len(self.shot_cache)>128:self.shot_cache.popitem(last=False)
+            if library is self.library and self.view=='pending' and self.stack.currentIndex()==0 and len(self.queue)>1 and self.queue[1]['id']==photo['id']:self.details[1].set_text(text)
+        self.submit(lambda:self.metadata_reader.read(photo['path']),done,lambda _:done(''))
+
+    def face_changed(self,pid,result):
+        if not self.faces.enabled or self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:self.face_panel.hide();return
+        photo=self.queue[0]
+        if pid!=photo['id']:return
+        self.face_panel.show_result(result if result is not None else self.faces.result_for(photo))
+
+    def face_settings(self):
+        dialog=QDialog(self);dialog.setWindowTitle('人脸预览');dialog.setMinimumWidth(480);layout=QVBoxLayout(dialog)
+        enabled=QCheckBox('显示当前左图的原图人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
+        form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('向后预处理照片数',ahead);layout.addLayout(form)
+        note=QLabel('完全本地检测，导入期间即可开始。当前照片优先，后台只用一个检测进程。\n0 表示只处理当前照片。单击人脸小窗切换 100% / 适应小窗，滚轮可缩放。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
+        row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
+        def save():self.faces.configure(enabled.isChecked(),ahead.value());self.face_changed(self.queue[0]['id'] if self.queue else None,None);dialog.accept()
+        row.addWidget(self.button('保存',save,'primary'));layout.addLayout(row);dialog.exec()
 
     def navigation_options(self):
         return dict(sort=self.sort_order,start_ns=self.date_start,end_ns=self.date_end)
@@ -879,6 +931,7 @@ class Window(QMainWindow):
         self.refresh_chrome()
 
     def update_actions(self):
+        self.export_button.setVisible(self.view=='pending')
         self.rating_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running())
         if self.rating_active:self.rating_page.update_controls()
         if self.rating_active and self.rating_page.writing:
@@ -964,7 +1017,7 @@ class Window(QMainWindow):
 
     # ---- actions ------------------------------------------------------------
     def act(self, action):
-        if self.rating_active:return
+        if self.rating_active or self.view!='pending':return
         self.updates.touch()
         if action not in ('keep', 'delete') or self.closing or self.view=='keep' and self.stack.currentIndex()==4: return
         if not (self.keep_button if action=='keep' else self.delete_button).isEnabled():
@@ -991,7 +1044,7 @@ class Window(QMainWindow):
         self.op((lambda: library.mark(pid, 1)) if action == 'keep' else (lambda: library.trash(pid)), done, failed)
 
     def next_photo(self):
-        if self.rating_active:return
+        if self.rating_active or self.view!='pending':return
         self.updates.touch()
         if self.busy or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or not self.queue: return
         ghosts = self.begin_transition(); self.queue.pop(0); self.render(); self.play_transition('next', ghosts); self.prefetch(); self.refill()
@@ -1004,6 +1057,7 @@ class Window(QMainWindow):
         elif index is None:self.finish_motion();self.load(target_id=pid)
 
     def restore(self, photo_id=None, general=False):
+        if self.view!='pending' or self.rating_active:return
         self.updates.touch()
         if not self.session_active or self.busy or self.closing or self.restore_running: return
         if photo_id is None and not self.pending_ops:
@@ -1182,6 +1236,10 @@ class Window(QMainWindow):
         crashlog.event('folder_chosen' if folder else 'folder_choice_cancelled',folder=folder)
         if folder: self.scan(str(Path(folder)))   # Qt hands back forward slashes on Windows
 
+    def resume_last(self):
+        folder=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root')
+        if folder:self.scan(str(folder))
+
     def scan(self, folder=None):
         if self.rating_page.writing:return
         self.rating_page.deactivate()
@@ -1214,6 +1272,7 @@ class Window(QMainWindow):
         crashlog.event('starting_scan',folder=str(folder))
         def started(_):
             crashlog.event('scan_notified',folder=str(folder))
+            QSettings('PhotoSieve','PhotoSieve').setValue('last_folder',str(folder));self.resume_button.setEnabled(True);self.resume_button.setToolTip(str(folder));self.welcome_resume.setEnabled(True)
             self.import_revision=library.job['revision']
             self.poll(); self.timer.start(180)
         def failed(message):
@@ -1243,7 +1302,7 @@ class Window(QMainWindow):
         def done(ids):
             if revision!=self.kept_revision or library is not self.library:return
             self.kept_grid.set_ids(ids)
-            self.kept_note.setText(f'已保留 {len(ids):,} 张 · 单击缩略图查看大图，右上角可导出全部保留照片' if ids else '没有已保留照片' if self.date_start is None else '所选日期范围内没有已保留照片')
+            self.kept_note.setText(f'已保留 {len(ids):,} 张 · 单击照片查看大图' if ids else '没有已保留照片' if self.date_start is None else '所选日期范围内没有已保留照片')
             QTimer.singleShot(0,self.queue_kept_thumbnails)
         self.submit(lambda:library.list_ids('keep',include_kept=True,**options),done,self.error)
 
@@ -1281,8 +1340,7 @@ class Window(QMainWindow):
 
     def open_kept_item(self,item):
         if self.busy or self.view!='keep':return
-        self.stack.setCurrentIndex(0);self.keep_back_button.show();self.place_overlays()
-        self.load(target_id=item.data(ROLE))
+        self.album.open(item.data(ROLE))
 
     def back_to_kept(self):
         if self.view!='keep' or self.busy:return
@@ -1424,16 +1482,12 @@ class Window(QMainWindow):
             self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项筛选记录…', 'info', 2000)
             event.ignore(); QTimer.singleShot(120, self.close); return
         if self.prompt_on_close and self.session_active and not self.updates.installing and self.close_choice is None:
-            box=QMessageBox(self); box.setWindowTitle('关闭工作文件夹')
-            box.setText('是否保留当前文件夹的筛选进度？下次启动仍由你选择文件夹。')
-            box.setInformativeText('不保留仅重置浏览位置。照片、保留标记和可恢复的删除记录都会保留。')
-            keep=box.addButton('保留进度并关闭',QMessageBox.ButtonRole.AcceptRole)
-            forget=box.addButton('直接关闭，不保留位置',QMessageBox.ButtonRole.DestructiveRole)
-            cancel=box.addButton('取消',QMessageBox.ButtonRole.RejectRole); box.exec()
-            if box.clickedButton() not in (keep,forget): event.ignore(); self.closing=False; self.uninstall_requested=False; return
-            self.close_choice='keep' if box.clickedButton() is keep else 'forget'
+            box=CloseOfferDialog(self);box.exec()
+            if box.choice is None:event.ignore();self.closing=False;self.uninstall_requested=False;return
+            self.close_choice=box.choice
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.rating_page.shutdown()
+        self.metadata_reader.close();self.faces.shutdown();self.faces.pool.waitForDone()
         self.closed = True
         self.op_pool.waitForDone()
         for pool in (self.pool, self.image_pool, self.thumb_pool, self.detail_pool): pool.clear(); pool.waitForDone()

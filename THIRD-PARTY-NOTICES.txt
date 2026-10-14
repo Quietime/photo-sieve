@@ -34,3 +34,12 @@ User-designated Quietime welcome artwork (assets/welcome-background.png): genera
 
 pywin32 311: https://github.com/mhammond/pywin32
   Windows property-system bindings; Mark Hammond copyright and BSD-style redistribution terms, with component-specific notices.
+
+Offline face previews: OpenCV (Apache 2.0) and the YuNet 2023mar model
+(MIT, license included at _internal/assets/face-model-license.txt).
+Model source: https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+
+ARW embedded metadata: ExifTool 13.59 by Phil Harvey, redistributed under
+its Perl-compatible license. Full bundled runtime license notices are in
+_internal/assets/exiftool/exiftool_files/LICENSE and Licenses_Strawberry_Perl.zip.
+Source and documentation: https://exiftool.org/

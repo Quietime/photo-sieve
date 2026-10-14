@@ -25,3 +25,9 @@ large-import-*-ci-*.png
 
 windows-rating-probe.json
 ratings-*-ci*
+
+assets/exiftool/
+features-*-ci/
+small-dialogs-ci/
+feature-fixtures/
+arw-rating*-ci/

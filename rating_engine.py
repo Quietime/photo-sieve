@@ -17,6 +17,7 @@ LOGGER=logging.getLogger('native_rating_worker')
 def initialize(logs):
     global FAULT_FILE
     Path(logs).mkdir(parents=True,exist_ok=True)
+    os.environ['PHOTOSIEVE_RATING_CANDIDATES']=str(Path(logs).parent/'rating-candidates')
     FAULT_FILE=open(Path(logs)/f'rating-worker-{os.getpid()}.fault.log','a',encoding='utf8')
     faulthandler.enable(file=FAULT_FILE,all_threads=True)
     handler=RotatingFileHandler(Path(logs)/f'rating-worker-{os.getpid()}.log',maxBytes=2*1024*1024,backupCount=1,encoding='utf8');handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'));LOGGER.addHandler(handler);LOGGER.setLevel(logging.INFO)

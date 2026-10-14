@@ -18,7 +18,13 @@ CREATE TABLE IF NOT EXISTS rating_history(
 class RatingRecords:
     def __init__(self,library):
         self.library=library
-        with library.connect() as db:db.executescript(SCHEMA)
+        with library.connect() as db:
+            db.executescript(SCHEMA)
+            columns={row[1] for row in db.execute('PRAGMA table_info(rating_cache)')}
+            for name,kind in [('backend',"TEXT DEFAULT 'windows'"),('windows_visible','INTEGER DEFAULT 1')]:
+                if name not in columns:db.execute(f'ALTER TABLE rating_cache ADD COLUMN {name} {kind}')
+            # Older ARW read failures predate embedded metadata support.
+            db.execute("DELETE FROM rating_cache WHERE writable=0 AND photo_id IN (SELECT id FROM photos WHERE lower(path) LIKE '%.arw')")
     def ids(self,scope='all',stars=None,unknown=False):
         where=self.library.query(scope)
         if scope not in ('all','keep'):raise RatingError('未知分级范围')
@@ -39,7 +45,7 @@ class RatingRecords:
         return result
     def cache(self,pid,stat,result=None,error=''):
         with self.library.connect() as db:
-            db.execute('INSERT OR REPLACE INTO rating_cache VALUES (?,?,?,?,?,?,?,?,?)',(pid,result.get('stars') if result else None,result.get('value') if result else None,int(result.get('writable',False)) if result else 0,stat.st_size,stat.st_mtime_ns,'ready' if result else 'error',result.get('reason','') if result else error,time.time()))
+            db.execute('INSERT OR REPLACE INTO rating_cache (photo_id,stars,value,writable,size,mtime,state,error,checked_at,backend,windows_visible) VALUES (?,?,?,?,?,?,?,?,?,?,?)',(pid,result.get('stars') if result else None,result.get('value') if result else None,int(result.get('writable',False)) if result else 0,stat.st_size,stat.st_mtime_ns,'ready' if result else 'error',result.get('reason','') if result else error,time.time(),result.get('backend','windows') if result else 'windows',(None if result.get('windows_visible',True) is None else int(result.get('windows_visible',True))) if result else 0))
     def read(self,pid,engine):
         with self.library.file_locks[pid%len(self.library.file_locks)]:
             photo=self.library.photo(pid);stat=Path(photo['path']).stat()
@@ -75,7 +81,7 @@ class RatingRecords:
                         db.execute('UPDATE photos SET size=?,mtime=?,digest=NULL,error=NULL WHERE id=?',(after.st_size,after.st_mtime_ns,pid))
                         db.execute('UPDATE history SET size=?,mtime=? WHERE photo_id=? AND size=? AND mtime=?',(after.st_size,after.st_mtime_ns,pid,row['size'],row['mtime']))
                         if history and result['before']!=stars:db.execute('INSERT INTO rating_history(photo_id,before,after,created_at) VALUES (?,?,?,?)',(pid,result['before'],stars,time.time()))
-                        db.execute('INSERT OR REPLACE INTO rating_cache VALUES (?,?,?,?,?,?,?,?,?)',(pid,result['stars'],result['value'],int(result['writable']),after.st_size,after.st_mtime_ns,'ready',result.get('reason',''),time.time()))
+                        db.execute('INSERT OR REPLACE INTO rating_cache (photo_id,stars,value,writable,size,mtime,state,error,checked_at,backend,windows_visible) VALUES (?,?,?,?,?,?,?,?,?,?,?)',(pid,result['stars'],result['value'],int(result['writable']),after.st_size,after.st_mtime_ns,'ready',result.get('reason',''),time.time(),result.get('backend','windows'),(None if result.get('windows_visible',True) is None else int(result.get('windows_visible',True)))))
                     try:backup.unlink()
                     except OSError:pass
                     return {'photo_id':pid,'state':'ready',**result,'error':result.get('reason','')}

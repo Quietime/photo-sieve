@@ -1,7 +1,7 @@
 # Native Windows build. Qt Widgets only, no QtWebEngine or webview.
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
-binaries = collect_dynamic_libs('rawpy') + collect_dynamic_libs('pillow_heif')
-datas = collect_data_files('pillow_heif') + [('assets/photosieve.ico','assets'),('assets/photosieve.png','assets'),('assets/welcome-background.png','assets')]
+binaries = collect_dynamic_libs('rawpy') + collect_dynamic_libs('pillow_heif') + collect_dynamic_libs('cv2')
+datas = collect_data_files('pillow_heif') + [('assets/photosieve.ico','assets'),('assets/photosieve.png','assets'),('assets/welcome-background.png','assets'),('assets/face_detection_yunet_2023mar.onnx','assets'),('assets/face-model-license.txt','assets'),('assets/exiftool','assets/exiftool')]
 a = Analysis(['photosieve.py'], pathex=[], binaries=binaries, datas=datas,
     hiddenimports=['win32com.propsys.propsys','win32com.propsys.pscon','pythoncom','pywintypes','rawpy', 'pillow_heif', 'PIL.JpegImagePlugin', 'PIL.TiffImagePlugin', 'PIL.PngImagePlugin'],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
