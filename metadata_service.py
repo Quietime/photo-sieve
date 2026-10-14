@@ -21,12 +21,13 @@ class MetadataService(QObject):
         h.details[1].set_text(self.cache.get(current,''))
         if self.working:return
         # Snapshot only the nearby future. No FIFO of obsolete photo requests.
-        wanted=[dict(p) for p in h.queue[:9] if p['id'] not in h.inflight and self.key(library,p) not in self.cache]
+        horizon=max(1,min(9,getattr(h,'ahead_target',9)))
+        wanted=[dict(p) for p in h.queue[:horizon] if p['id'] not in h.inflight and self.key(library,p) not in self.cache]
         if not wanted:return
         self.working=True
         def work():
             if self.stopped.is_set() or library is not h.library:return []
-            wanted_ids={p['id'] for p in h.queue[:9]}-h.inflight
+            wanted_ids={p['id'] for p in h.queue[:horizon]}-h.inflight
             photos=[p for p in wanted if p['id'] in wanted_ids]
             reader=h.metadata_reader
             if not hasattr(reader,'read_many'):photos=photos[:1]

@@ -1,6 +1,6 @@
 """One oldest-first 10 GiB disk-preview budget across the installation's workspaces."""
 from pathlib import Path
-from contextlib import nullcontext, closing
+from contextlib import nullcontext, closing, contextmanager
 import hashlib
 import sqlite3
 import time
@@ -31,6 +31,13 @@ def ensure_cache_index(db, cache):
     db.execute("INSERT OR REPLACE INTO meta VALUES ('cache_index_version','1')")
     db.commit()
 
+@contextmanager
+def available_lock(lock):
+    acquired=lock is None or lock.acquire(blocking=False)
+    try:yield acquired
+    finally:
+        if lock is not None and acquired:lock.release()
+
 def cleanup_indexed_cache(database, cache, grace=120, file_locks=None, cache_lock=None, known=None):
     """Expire only registered, processed-photo previews, keeping undo grace and live decodes safe."""
     cache=Path(cache); cutoff=time.time()-grace; removed=0; forgotten=[]
@@ -45,8 +52,10 @@ def cleanup_indexed_cache(database, cache, grace=120, file_locks=None, cache_loc
             if Path(name).name!=name or '/' in name or '\\' in name:
                 forgotten.append((name,)); continue
             path=cache/name
-            with file_locks[photo_id % len(file_locks)] if file_locks else nullcontext():
-                with cache_lock if cache_lock else nullcontext():
+            with available_lock(file_locks[photo_id % len(file_locks)] if file_locks else None) as available:
+                if not available:continue
+                with available_lock(cache_lock) as available:
+                    if not available:continue
                     try:
                         if path.is_symlink(): forgotten.append((name,)); continue
                         stat=path.stat()
@@ -56,6 +65,10 @@ def cleanup_indexed_cache(database, cache, grace=120, file_locks=None, cache_loc
                     except FileNotFoundError: forgotten.append((name,))
         with db:
             db.executemany('DELETE FROM cache_index WHERE filename=?',forgotten)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_metadata'").fetchone():
+                db.execute('''DELETE FROM face_metadata WHERE NOT EXISTS
+                    (SELECT 1 FROM photos p WHERE p.path=face_metadata.path
+                     AND p.size=face_metadata.source_size AND p.mtime=face_metadata.source_mtime)''')
         if known is not None: known.difference_update(name for name, in forgotten)
     return removed
 

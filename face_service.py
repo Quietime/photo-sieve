@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, QSettings, QThread, QThreadPool, QTimer, Sig
 from PIL import Image
 
 from app import Library, lower_priority
+from cache_plan import face_limits
 from face_engine import ENGINE_VERSION, crop_faces, detect_faces
 import crashlog
 
@@ -124,6 +125,9 @@ class FaceService(QObject):
         self._working = False
         self._context = None
         self._results = OrderedDict()
+        self._import_rows = []
+        self._recent_keys = OrderedDict()
+        self._ram_current_key = None
         self._done = set()
         self._schemas = set()
         self._sample_after = 0.0
@@ -135,6 +139,24 @@ class FaceService(QObject):
         self.timer.setInterval(80)
         self.timer.timeout.connect(self.update)
         self.timer.start()
+
+    @property
+    def _limits(self):
+        memory_count=max(1,int(getattr(self.host,'ahead_target',RAM_RESULTS)))
+        disk_count=max(0,int(getattr(self.host,'disk_horizon',getattr(self.host,'warm_count',0))))
+        return face_limits(self.ahead,memory_count,disk_count)
+
+    @property
+    def memory_ahead(self):
+        return self._limits[0]
+
+    @property
+    def effective_ahead(self):
+        return self._limits[1]
+
+    @property
+    def ram_limit(self):
+        return self._limits[2]
 
     def configure(self, enabled, ahead):
         self.enabled = bool(enabled)
@@ -159,6 +181,9 @@ class FaceService(QObject):
         if token != self._context:
             self._context = token
             self._results.clear()
+            self._import_rows = []
+            self._recent_keys.clear()
+            self._ram_current_key = None
             self._done.clear()
             self._refine_failed.clear()
             self._sample_after = 0.0
@@ -179,6 +204,7 @@ class FaceService(QObject):
         if self._closed or not self.enabled or not photo:
             return None
         self._synchronize()
+        self._trim_results()
         key = cache_key(photo)
         result = self._results.get(key)
         if result is not None:
@@ -191,11 +217,12 @@ class FaceService(QObject):
         if self._closed:
             return
         token = self._synchronize()
+        self._trim_results()
         if not self._active():
             return
         library = self.host.library
         importing = bool(getattr(self.host, 'importing', False))
-        rows = [dict(photo) for photo in getattr(self.host, 'queue', ())[:self.ahead + 1]
+        rows = [dict(photo) for photo in getattr(self.host, 'queue', ())[:self.effective_ahead + 1]
                 if photo.get('present', 1) == 1 and photo.get('status', 0) == 0]
         current = rows[0] if rows and not importing else None
         current_key = cache_key(current) if current is not None else None
@@ -230,14 +257,15 @@ class FaceService(QObject):
             photo = None
         self._working = True
         done_keys = set(self._done)
-        count = self.ahead + 1
-        selection = {'photo': photo}
+        count = self.effective_ahead + 1
+        selection = {'photo': photo, 'rows': None}
         job = {'quality': quality, 'key': cache_key(photo) if photo is not None else None, 'cancelled': False}
         self._job = job
         def work():
             chosen = photo
             if importing:
                 available = library.list_photos('pending', 0, 'next', count)
+                selection['rows'] = available
                 chosen = next((row for row in available if cache_key(row) not in done_keys), None)
             if chosen is None or self._stop.is_set():
                 return None
@@ -257,6 +285,8 @@ class FaceService(QObject):
                 self._sample_after = time.monotonic() + .4
                 return
             chosen, result = value
+            if importing and selection['rows'] is not None:
+                self._import_rows = selection['rows']
             key = cache_key(chosen)
             self._done.add(key)
             self._remember(key, result)
@@ -292,15 +322,38 @@ class FaceService(QObject):
     def _remember(self, key, result):
         self._results[key] = result
         self._results.move_to_end(key)
-        upcoming = {cache_key(photo): index for index, photo in enumerate(getattr(self.host, 'queue', ())[:self.ahead + 1])}
-        total = sum(len(value.get('imagebytes') or b'') for value in self._results.values())
-        # Evict past/off-queue crops, then the farthest future crop. Keeping the
-        # next 50 faces in RAM makes switching synchronous instead of disk-bound.
-        eviction = sorted(self._results, key=lambda candidate: upcoming.get(candidate, RAM_RESULTS + 501), reverse=True)
+        self._trim_results()
+
+    def _trim_results(self):
+        """Match RAM to the configured photo preload window, even between jobs.
+
+        Far-future detections remain on disk. Only the nearest face horizon and
+        four recently viewed crops survive in memory, under the byte safety cap.
+        """
+        queue=getattr(self.host,'queue',())
+        if not queue and getattr(self.host,'importing',False):
+            queue=self._import_rows
+        memory_ahead,_,limit=self._limits
+        nearby={cache_key(photo):index for index,photo in enumerate(queue[:memory_ahead+1])}
+        current=cache_key(queue[0]) if queue else None
+        if current!=self._ram_current_key:
+            if self._ram_current_key is not None:
+                self._recent_keys[self._ram_current_key]=None
+                self._recent_keys.move_to_end(self._ram_current_key)
+            self._recent_keys.pop(current,None)
+            while len(self._recent_keys)>4:self._recent_keys.popitem(last=False)
+            self._ram_current_key=current
+        # History records actual visited photos. No scan of a potentially
+        # 20,000-row prefetch queue is needed on each 80 ms timer or RAM lookup.
+        keep=set(nearby)|set(self._recent_keys)
+        if not self.enabled:keep.clear()
+        for old in list(self._results):
+            if old not in keep:self._results.pop(old)
+        total=sum(len(value.get('imagebytes') or b'') for value in self._results.values())
+        eviction=sorted(self._results,key=lambda candidate:nearby.get(candidate,RAM_RESULTS+501),reverse=True)
         for old in eviction:
-            if len(self._results) <= RAM_RESULTS and total <= RAM_BYTES:
-                break
-            total -= len(self._results.pop(old).get('imagebytes') or b'')
+            if len(self._results)<=limit and total<=RAM_BYTES:break
+            total-=len(self._results.pop(old).get('imagebytes') or b'')
 
     def _ensure_schema(self, library):
         database = id(library), str(library.database)
@@ -442,6 +495,9 @@ class FaceService(QObject):
     def clear_memory(self):
         """Use after manual cache clearing; face locations remain in SQLite."""
         self._results.clear()
+        self._import_rows=[]
+        self._recent_keys.clear()
+        self._ram_current_key=None
         self._done.clear()
         self._sample_after = 0.0
         self.update()

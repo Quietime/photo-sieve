@@ -84,4 +84,26 @@ class CacheIndexTest(unittest.TestCase):
         self.assertEqual(self.library.cleanup_processed_cache(grace=0),0); self.assertTrue(self.source.exists())
 
 
+    def test_cleanup_skips_busy_photo_then_removes_after_release(self):
+        import threading
+        old=self.preview();self.library.mark(1,1);os.utime(old,(1,1))
+        locked=threading.Event();release=threading.Event()
+        def reader():
+            with self.library.file_locks[1]:locked.set();release.wait(3)
+        worker=threading.Thread(target=reader);worker.start();self.assertTrue(locked.wait(1))
+        try:
+            start=time.monotonic();self.assertEqual(self.library.cleanup_processed_cache(),0)
+            self.assertLess(time.monotonic()-start,.2);self.assertTrue(old.exists())
+        finally:release.set();worker.join(1)
+        self.assertEqual(self.library.cleanup_processed_cache(),1)
+
+    def test_cleanup_drops_stale_face_metadata_but_preserves_valid_detection(self):
+        from face_service import SCHEMA
+        with self.library.connect() as db:
+            db.execute(SCHEMA)
+            for key,size in [('valid',self.row['size']),('outdated',self.row['size']+1)]:
+                db.execute('INSERT INTO face_metadata VALUES (?,?,?,?,?,?,?)',(key,str(self.source),size,self.row['mtime'],'model','[]','{}'))
+        self.library.cleanup_processed_cache()
+        with self.library.connect() as db:self.assertEqual([r[0] for r in db.execute('SELECT cache_key FROM face_metadata')],['valid'])
+
 if __name__=='__main__': unittest.main()

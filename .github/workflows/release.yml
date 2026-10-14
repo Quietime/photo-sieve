@@ -90,9 +90,11 @@ jobs:
           QT_QPA_PLATFORM: windows
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: |
-          python -m unittest tests.test_faces tests.test_face_service tests.test_metadata_service tests.test_photo_metadata tests.test_delete_sharing -v
+          python -m unittest tests.test_faces tests.test_face_service tests.test_metadata_service tests.test_photo_metadata tests.test_delete_sharing tests.test_cache_plan tests.test_cache_index tests.test_capacity_cache tests.test_face_cache_policy -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_review_details.py review-ui-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_cache_settings.py cache-ui-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_fast_delete.py deletion-ui-ci --count 500 --raw-fixture feature-fixtures/sony.ARW
       - name: Test library and updater
@@ -183,6 +185,7 @@ jobs:
             review-ui-ci/*
             review-hidpi-ci/*
             deletion-ui-ci/*
+            cache-ui-ci/*
           if-no-files-found: ignore
           retention-days: 14
       - name: Audit paging, review performance and cache limits

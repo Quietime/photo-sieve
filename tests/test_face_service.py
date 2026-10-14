@@ -259,6 +259,82 @@ class FaceServiceTest(unittest.TestCase):
         self.assertEqual(sum(len(result['imagebytes']) for result in self.service._results.values()), 9)
         self.assertEqual(set(self.service._results), {face_service.cache_key(photo) for photo in self.host.queue[:3]})
 
+    def test_effective_horizons_follow_memory_and_disk_settings_without_changing_face_preference(self):
+        self.host.ahead_target=16;self.host.warm_count=0;self.service.ahead=50
+        self.assertEqual((self.service.memory_ahead,self.service.effective_ahead,self.service.ram_limit),(15,15,20))
+        self.host.warm_count=100
+        self.assertEqual((self.service.memory_ahead,self.service.effective_ahead),(15,50))
+        self.host.disk_horizon=24
+        self.assertEqual(self.service.effective_ahead,23,'Effective disk budget overrides a larger configured prefetch')
+        self.assertEqual(self.service.ahead,50,'The requested face setting remains unchanged')
+
+    def test_auto_memory_capacity_changes_and_saving_face_settings_trim_immediately(self):
+        self.host.preload_count=0;self.host.ahead_target=12;self.host.warm_count=50
+        self.service.ahead=50;self.service._synchronize()
+        for photo in self.host.queue:
+            self.service._remember(face_service.cache_key(photo),dict(crop_result(),photo_id=photo['id']))
+        self.assertEqual(len(self.service._results),8)
+        self.host.stack.index=4;self.host.ahead_target=3
+        self.service.configure(True,5)
+        self.assertEqual(len(self.service._results),3)
+        self.assertEqual(self.service.memory_ahead,2)
+        self.assertEqual(self.service.ahead,5)
+        self.assertEqual(self.settings.value('face_ahead',type=int),5)
+        self.assertEqual(self.service.ram_limit,7)
+
+    def test_warm_zero_schedules_only_memory_window_including_during_import(self):
+        self.host.ahead_target=3;self.host.warm_count=0;self.service.ahead=50
+        seen=[]
+        with patch.object(self.service,'_isolated',side_effect=lambda photo,*args:(seen.append(photo['id']) or crop_result())):
+            self.service.update()
+            until(lambda:len(self.service._done)==3 and not self.service._working)
+        self.assertEqual(seen,[photo['id'] for photo in self.host.queue[:3]])
+        self.assertEqual(len(self.service._results),3)
+        self.host.queue=[];self.host.importing=self.host.busy=True;self.host.stack.index=3
+        with patch.object(self.service,'_isolated',return_value=crop_result()):
+            self.service.clear_memory()
+            until(lambda:len(self.service._done)==3 and not self.service._working)
+        self.assertLessEqual(len(self.service._results),3)
+
+    def test_fast_selection_trims_old_faces_even_while_a_job_is_inflight(self):
+        template=self.host.queue[0]
+        rows=[dict(template,id=index+1,path=str(self.photos/f'fake-{index}.jpg')) for index in range(80)]
+        self.host.queue=rows;self.host.ahead_target=16;self.host.warm_count=80
+        self.service.ahead=50;self.service._synchronize()
+        for photo in rows[:16]:
+            self.service._remember(face_service.cache_key(photo),dict(crop_result(),photo_id=photo['id']))
+        self.service._working=True
+        self.service._schemas.add(('retained','schema'))
+        for index in range(1,16):
+            self.host.queue=rows[index:]
+            self.service.update()
+        self.host.queue=rows[30:]
+        self.service.update()
+        self.assertEqual(len(self.service._results),4,'Only a modest recent history survives a large jump')
+        self.assertEqual({result['photo_id'] for result in self.service._results.values()},{13,14,15,16})
+        self.assertIn(('retained','schema'),self.service._schemas)
+        self.service._working=False
+
+    def test_ram_cleanup_never_walks_the_full_large_prefetch_queue(self):
+        class BoundedQueue(list):
+            def __iter__(self):raise AssertionError('Must not iterate the entire photo queue')
+            def __getitem__(self,index):
+                if isinstance(index,slice):
+                    if index.stop is None or index.stop>501:
+                        raise AssertionError('Must slice only the bounded face window')
+                return super().__getitem__(index)
+        template=self.host.queue[0]
+        self.host.queue=BoundedQueue(dict(template,id=index+1,path=str(self.photos/f'fake-{index}.jpg')) for index in range(20000))
+        self.host.ahead_target=16;self.host.warm_count=20000;self.service.ahead=50
+        self.service._synchronize()
+        current=self.host.queue[0]
+        self.service._remember(face_service.cache_key(current),dict(crop_result(),photo_id=current['id']))
+        self.service._working=True
+        self.service.update()
+        with patch.object(self.service,'update',side_effect=AssertionError('Cached current should return immediately')):
+            self.assertIsNotNone(self.service.result_for(current))
+        self.service._working=False
+
     def test_current_preview_is_refined_only_after_idle_and_original_cache_replaces_preview(self):
         first = self.host.queue[0]
         calls = []

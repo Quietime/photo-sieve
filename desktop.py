@@ -211,6 +211,7 @@ class Window(QMainWindow):
         self.workers = decoders.workers if decoders else DECODE_SLOTS; self.in_flight = self.workers + 4
         self.image_pool = QThreadPool(self); self.image_pool.setMaxThreadCount(self.in_flight)
         self.display_gate = threading.Semaphore(machine.PROFILE.interface_threads())
+        self.disk_horizon=0;self.estimated_preview_bytes=512*1024
         self.ahead_target = 24; self.cache_limit = 24 + BEHIND; self.frames = 0
         self.thumb_pool = QThreadPool(self); self.thumb_pool.setMaxThreadCount(2)
         self.detail_pool = QThreadPool(self); self.detail_pool.setMaxThreadCount(1)
@@ -250,16 +251,23 @@ class Window(QMainWindow):
         if self.maintenance_running or self.cache_clearing or self.closed: return
         self.maintenance_running=True; library=self.library
         def work():
+            library.cleanup_processed_cache()
+            expire_inactive_workspaces(self.data_root,library.directory)
             result=prune_workspaces(self.data_root,library.cache,cache_lock=library.cache_lock)
             library.recount_cache(); return result
         def finished(result):
             self.maintenance_running=False; self.cache_total=result[1]
-            visible={p['id'] for p in self.queue[:self.ahead_target]}
-            for pid in list(self.cache):
-                if pid not in visible and pid not in self.loading:
-                    self.cache.pop(pid,None); self.cache_size.pop(pid,None); self.sources.pop(pid,None); self.thumb_cache.pop(pid,None)
+            if library is not self.library:return
+            jpg_sizes=[size for name,size in list(library.cache_sizes.items()) if name.endswith('.jpg')]
+            if jpg_sizes:self.estimated_preview_bytes=max(512*1024,2*sum(jpg_sizes)//len(jpg_sizes))
+            self.refresh_cache_plan();self.trim_previews()
+            nearby={p['id'] for p in self.queue[:max(self.ahead_target,self.disk_horizon)]}
+            self.warmed.intersection_update(nearby)
+            self.image_errors={pid:error for pid,error in self.image_errors.items() if pid in nearby}
+            visible=set(self.strip.visible_ids()) | {p['id'] for p in self.queue[:2]}
             for pid in list(self.thumb_cache):
-                if pid not in visible: self.thumb_cache.pop(pid,None)
+                if len(self.thumb_cache)<=64:break
+                if pid not in visible:self.thumb_cache.pop(pid,None)
         self.submit(work,finished,lambda _:setattr(self,'maintenance_running',False))
 
     def apply_shortcuts(self, chosen):
@@ -513,15 +521,19 @@ class Window(QMainWindow):
         def estimate():
             size=self.display_size or QSize(800,600); count=ahead.value() or machine.PROFILE.buffer(size.width()*size.height()*4)
             effective=machine.PROFILE.preview_capacity(max(16,count),size.width()*size.height()*4+160*110*4,COMPOSITING['gpu'])
-            note.setText(f'当前窗口预计实际预加载 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。大照片会按安全内存预算调整，避免内存过量。\n达到设置的缓存限额后，立即按生成时间从旧到新删除最旧的 70% 预览文件。全部工作文件夹共用 10 GB 总限额。读取照片不会改变缓存生成时间。照片和筛选记录不会被清理。')
-        ahead.valueChanged.connect(estimate); estimate()
+            from cache_plan import photo_limits,face_limits
+            _,disk_count=photo_limits(effective,warm.value(),disk.value()*1024**2,self.estimated_preview_bytes)
+            face_memory,face_disk,face_ram=face_limits(self.faces.ahead,effective,disk_count)
+            note.setText(f'当前窗口实际预加载上限 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。后台磁盘预读上限 {disk_count:,} 张。\n人脸跟随照片缓存：预识别后续 {face_disk} 张，内存最多 {face_ram} 份／64 MB，当前照片优先。后台预读设为 0 时，仅处理内存预加载范围。\n照片预览和人脸共用磁盘限额；达到限额按生成时间清除最旧 70%，已处理且生成超过 2 分钟的缓存自动清理。全部工作文件夹总上限 10 GB。照片与筛选记录会保留。')
+        for field in (ahead,warm,disk):field.valueChanged.connect(estimate)
+        estimate()
         layout.addWidget(self.button('清理当前文件夹的预览缓存',lambda:(dialog.accept(),self.clear_cache())))
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
         def save():
             self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0; self.warm_count=warm.value(); self.library.cache_limit=disk.value()*1024*1024
             settings=QSettings('PhotoSieve','PhotoSieve')
             for key,value in [('preload_count',self.preload_count),('warm_count',self.warm_count),('cache_mb',disk.value())]: settings.setValue(key,value)
-            settings.sync(); self.display_size=None; self.update_display_size(); self.trim_previews(); self.library.schedule_prune(); self.prefetch(); dialog.accept()
+            settings.sync(); self.display_size=None; self.update_display_size(); self.trim_previews(); self.library.schedule_prune(); self.maintain_cache(); self.prefetch(); dialog.accept()
         buttons.addWidget(self.button('保存',save,'primary')); layout.addLayout(buttons); dialog.exec()
 
     def clear_cache(self):
@@ -728,8 +740,14 @@ class Window(QMainWindow):
         target=target_id if target_id is not None else anchor+1 if anchor else 0
         self.submit(lambda: library.list_photos(view,target,'next',60 if view=='deleted' else PAGE,inclusive=bool(anchor) or target_id is not None,**options),done,failed)
 
+    def refresh_cache_plan(self):
+        from cache_plan import photo_limits
+        _,self.disk_horizon=photo_limits(self.ahead_target,self.warm_count,self.library.cache_limit,self.estimated_preview_bytes)
+        if hasattr(self,'faces'):self.faces.update()
+
     def refill(self):
-        horizon=min(self.warm_count,max(self.ahead_target,int(self.library.cache_limit*.4/400_000)))
+        self.refresh_cache_plan()
+        horizon=self.disk_horizon
         needed=max(REFILL,self.ahead_target,horizon)
         if self.fetching or self.queue_end or len(self.queue) >= needed or not self.queue or self.view == 'deleted': return
         self.fetching = True; anchor = self.queue[-1]['id']; generation = self.generation; view = self.view; library = self.library
@@ -755,6 +773,7 @@ class Window(QMainWindow):
             requested=max(STRIP,self.preload_count) if self.preload_count else machine.PROFILE.buffer(pixel_bytes)
             self.ahead_target=machine.PROFILE.preview_capacity(requested,pixel_bytes,COMPOSITING['gpu'])
             self.cache_limit = self.ahead_target + BEHIND
+            self.refresh_cache_plan()
             return old is not None
         return False
 
@@ -769,7 +788,9 @@ class Window(QMainWindow):
         self.loading.add(pid); thumb = (round(104 * dpr), round(68 * dpr))
         def done(result):
             if library is not self.library: return
-            self.loading.discard(pid); (image, _), (small, _), source = result
+            self.loading.discard(pid)
+            if result is None:self.prefetch();return
+            (image, _), (small, _), source = result
             pixmap = QPixmap.fromImage(image); pixmap.setDevicePixelRatio(dpr)
             self.cache[pid] = pixmap; self.cache_size[pid] = size; self.sources[pid] = source[0]; self.cache.move_to_end(pid)
             self.trim_previews()
@@ -787,6 +808,8 @@ class Window(QMainWindow):
             self.update_thumbnail(pid); self.update_actions(); self.prefetch()
         gate = self.display_gate
         def work():
+            if library is not self.library or pid in self.inflight:return None
+            if not any(p['id']==pid for p in self.queue[:self.ahead_target]):return None
             image = library.preview_image(pid, 1600)   # may wait for a decoder process, without holding the gate
             with gate: return display_image(image, size.width(), size.height(), thumb)
         self.submit(work, done, failed, self.image_pool, priority)
@@ -809,7 +832,7 @@ class Window(QMainWindow):
         library = self.library; limit = 0 if self.loading else self.workers
         if len(self.warming) >= limit: return
         # Previews average roughly 0.4 MB; never warm further ahead than 40% of the disk cache holds.
-        horizon = min(self.warm_count, max(self.ahead_target, int(library.cache_limit * .4 / 400_000)))
+        horizon = self.disk_horizon
         for photo in self.queue[self.ahead_target:horizon]:
             if len(self.warming) >= limit: break
             pid = photo['id']
@@ -818,7 +841,11 @@ class Window(QMainWindow):
             def settled(_, pid=pid):
                 if library is not self.library:return
                 self.warming.discard(pid); self.warmed.add(pid); self.prefetch()
-            self.submit(lambda pid=pid: library.preview(pid, 1600) and None, settled, settled, self.image_pool, -10)
+            def warm_work(pid=pid):
+                if library is not self.library or pid in self.inflight:return
+                if not any(p['id']==pid for p in self.queue[self.ahead_target:self.disk_horizon]):return
+                library.preview(pid,1600)
+            self.submit(warm_work, settled, settled, self.image_pool, -10)
 
     def ready(self):
         current = self.queue[0]['id'] if self.queue else None
@@ -863,7 +890,7 @@ class Window(QMainWindow):
         dialog=QDialog(self);dialog.setWindowTitle('人脸预览');dialog.setMinimumWidth(480);layout=QVBoxLayout(dialog)
         enabled=QCheckBox('显示当前左图的人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
         form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('向后预处理照片数',ahead);layout.addLayout(form)
-        note=QLabel('完全本地检测，导入期间即可开始。当前照片优先，后台只用一个检测进程。\n0 表示只处理当前照片。人脸以圆角图片显示，不提供缩放操作。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
+        note=QLabel('完全本地检测，当前照片优先。实际预识别数量与缓存设置中的内存预加载、后台磁盘预读和容量上限联动。\n0 表示只处理当前照片。人脸缓存计入照片缓存总限额，已处理照片会自动清理。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
         row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
         def save():self.faces.configure(enabled.isChecked(),ahead.value());self.face_changed(self.queue[0]['id'] if self.queue else None,None);dialog.accept()
         row.addWidget(self.button('保存',save,'primary'));layout.addLayout(row);dialog.exec()
