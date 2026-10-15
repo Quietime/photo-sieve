@@ -6,10 +6,11 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PySide6.QtCore import QCoreApplication, QEvent, QObject
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QApplication
 
 import theme
 
-application = QGuiApplication.instance() or QGuiApplication([])
+application = QGuiApplication.instance() or QApplication([])
 
 
 def pump(condition, seconds=3):
@@ -74,6 +75,21 @@ class FrameClockTest(unittest.TestCase):
         for _ in range(20): theme.animate(owner, 500, lambda v: None).stop()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.assertEqual(owner.findChildren(theme.Motion), [])
+
+    def test_240hz_and_display_migration_retime_running_animation(self):
+        from types import SimpleNamespace
+        owner=QObject();rate=[60.0]
+        owner.screen=lambda:SimpleNamespace(refreshRate=lambda:rate[0])
+        motion=theme.animate(owner,1000,lambda _:None)
+        try:
+            self.assertEqual(theme.clock().timer.interval(),16)
+            rate[0]=240.0;theme.clock().tick()
+            self.assertEqual(theme.FrameClock.interval(owner),4)
+            self.assertEqual(theme.clock().timer.interval(),4)
+            rate[0]=144.0;theme.clock().tick()
+            self.assertEqual(theme.clock().timer.interval(),6)
+        finally:motion.stop()
+        self.assertFalse(theme.clock().timer.isActive())
 
     def test_destroyed_owner_ends_its_motion(self):
         owner = QObject(); values = []

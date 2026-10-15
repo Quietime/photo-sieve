@@ -149,16 +149,29 @@ class PhotoView(QGraphicsView):
         if self.full_resolution or not self.pixmap: return 1.0
         return max(self.fit_scale(), (self.source_width or self.pixmap.width()) / max(1, self.pixmap.width()))
 
-    def animate_scale(self, target, anchor_scene, anchor_view, duration=340, done=None):
+    def animate_scale(self, target, anchor_scene, anchor_view, duration=200, done=None):
         """Zoom toward target while anchor_scene stays under anchor_view (the clicked point stays under the cursor)."""
-        self.stop_zoom(); start = self.transform().m11(); centre = QPointF(self.viewport().rect().center())
+        self.stop_zoom(); centre = QPointF(self.viewport().rect().center())
+        state=[self.transform().m11(),target,anchor_scene,anchor_view,0.0]
         def step(t):
-            scale = start + (target - start) * t; self.setTransform(QTransform.fromScale(scale, scale))
-            self.centerOn(anchor_scene - (anchor_view - centre) / scale)
+            # A small same-event response avoids waiting for the first display-clock tick.
+            progress=.005+.995*t
+            start,target,scene,view,base=state
+            part=max(0.0,min(1.0,(progress-base)/max(1e-9,1-base)))
+            scale=start*(target/start)**part
+            self.setTransform(QTransform.fromScale(scale,scale));self.centerOn(scene-(view-centre)/scale)
+            if self.pending_full is not None and self.detail:
+                pixmap,self.pending_full=self.pending_full,None
+                scene,view=self.swap_full_pixels(pixmap)
+                # Retarget this motion's remaining time, rather than waiting 340 ms
+                # and starting a second 130 ms animation when sharp pixels are ready.
+                state[:]=[self.transform().m11(),1.0,scene,view,progress]
+                if progress>=1:
+                    self.setTransform(QTransform.fromScale(1.0,1.0));self.centerOn(scene-(view-centre))
         def finished():
             self.zoom_animation = None
             if done: done()
-        self.zoom_animation = animate(self, duration, step, theme.SNAPPY, finished)
+        self.zoom_animation = animate(self, duration, step, theme.EASE, finished)
 
     def zoom_at(self, point=None):
         if not self.pixmap: return
@@ -166,7 +179,10 @@ class PhotoView(QGraphicsView):
         view = QPointF(point) if point is not None else QPointF(self.viewport().rect().center())
         scene=self.mapToScene(view.toPoint());rect=self.sceneRect()
         self.click_anchor=((scene.x()-rect.left())/max(1,rect.width()),(scene.y()-rect.top())/max(1,rect.height()),view)
-        self.animate_scale(self.zoom_target(),scene,view,done=self.apply_pending)
+        self.animate_scale(self.zoom_target(),scene,view,done=self.finish_clicked_zoom)
+
+    def finish_clicked_zoom(self):
+        self.apply_pending();self.zoom_changed.emit()
 
     def apply_pending(self):
         if self.pending_full is not None:
@@ -174,8 +190,16 @@ class PhotoView(QGraphicsView):
 
     def install_full_image(self, pixmap):
         if not self.detail: return
+        if self.full_resolution and self.pixmap is not None and self.pixmap.cacheKey()==pixmap.cacheKey():
+            self.zoom_changed.emit();return
         if self.zoom_animation: self.pending_full = pixmap; return
-        # Swap in the original at the same on-screen size and position, then settle at 100%.
+        anchor,view=self.swap_full_pixels(pixmap)
+        # A manual wheel/pan owns magnification and position while decoding finishes.
+        if self.wheel_adjusted:self.zoom_changed.emit()
+        else:self.animate_scale(1.0,anchor,view,90,self.zoom_changed.emit)
+
+    def swap_full_pixels(self,pixmap):
+        """Install sharp pixels without moving them; return the current click/centre anchor."""
         old_rect = self.sceneRect(); centre = self.mapToScene(self.viewport().rect().center())
         fraction = ((centre.x() - old_rect.left()) / max(1, old_rect.width()), (centre.y() - old_rect.top()) / max(1, old_rect.height()))
         scale = self.transform().m11() * old_rect.width() / max(1e-6, pixmap.deviceIndependentSize().width())
@@ -184,29 +208,28 @@ class PhotoView(QGraphicsView):
         rect = self.item.boundingRect(); self.scene().setSceneRect(rect); self.full_resolution = True
         target = QPointF(rect.left() + fraction[0] * rect.width(), rect.top() + fraction[1] * rect.height())
         self.setTransform(QTransform.fromScale(scale, scale)); self.centerOn(target)
-        # A wheel adjustment during decoding owns the magnification: swapping pixels must not reset it to 100%.
-        if self.wheel_adjusted:
-            self.zoom_changed.emit()
-        else:
-            if self.click_anchor is not None:
-                x,y,view=self.click_anchor;anchor=QPointF(rect.left()+x*rect.width(),rect.top()+y*rect.height())
-            else:anchor,view=target,QPointF(self.viewport().rect().center())
-            self.animate_scale(1.0,anchor,view,130,self.zoom_changed.emit)
+        if self.click_anchor is not None:
+            x,y,view=self.click_anchor;anchor=QPointF(rect.left()+x*rect.width(),rect.top()+y*rect.height())
+        else:anchor,view=target,QPointF(self.viewport().rect().center())
+        return anchor,view
 
     def unzoom(self, done):
         """Leave zoom immediately in state, then animate back to the fitted photo."""
-        self.detail = False; self.full_resolution = False; self.pending_full = None
+        # Keep full_resolution truthful until show_photo actually replaces those
+        # pixels: an interrupted shrink may be reversed before the callback runs.
+        self.detail = False; self.pending_full = None
         self.click_anchor=None
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         if not self.pixmap: done(); return
         rect = self.sceneRect(); target = self.fit_scale(); start = self.transform().m11()
         begin = self.mapToScene(self.viewport().rect().center()); end = rect.center(); self.stop_zoom()
         def step(t):
-            scale = start + (target - start) * t; self.setTransform(QTransform.fromScale(scale, scale))
-            self.centerOn(begin + (end - begin) * t)
+            progress=.005+.995*t
+            scale = start*(target/start)**progress; self.setTransform(QTransform.fromScale(scale, scale))
+            self.centerOn(begin + (end - begin) * progress)
         def finished():
             self.zoom_animation = None; done()
-        self.zoom_animation = animate(self, 130, step, theme.SNAPPY, finished)
+        self.zoom_animation = animate(self, 230, step, theme.EASE, finished)
 
     def content_rect(self):
         """Viewport rectangle currently covered by the photo, for transition snapshots."""
@@ -234,7 +257,14 @@ class PhotoView(QGraphicsView):
     def mouseMoveEvent(self,event):
         if self.press is not None and (event.position()-self.press).manhattanLength()>=5:
             self.dragged=True;self.click_anchor=None
+            if self.detail:
+                self.stop_zoom();self.wheel_adjusted=True;self.apply_pending()
         super().mouseMoveEvent(event)
+
+    def mouseDoubleClickEvent(self,event):
+        # Qt replaces the second press within its double-click interval with this
+        # event. Treat it as another ordinary click so zoom reversals are never lost.
+        self.mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         # Finish Qt's drag before toggling; a drag must not count as a click.

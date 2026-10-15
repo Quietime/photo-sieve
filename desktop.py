@@ -595,6 +595,7 @@ class Window(QMainWindow):
         rating_active=self.rating_page.active
         if rating_active:self.rating_page.deactivate()
         self.album.revision+=1
+        self.album.stop_transition();self.album.full_preview=None;self.album.full_loading=None
         self.centralWidget().setEnabled(False)
         self.toast.show_message('正在清理全部照片与人脸缓存…','info')
         def work():

@@ -45,6 +45,7 @@ class AlbumHost(QWidget):
         self.album=AlbumView(self);self.stack.addWidget(self.album);self.resize(900,700)
         self.stack.setCurrentWidget(self.album);self.show();application.processEvents();self.album.open(1)
         application.processEvents()
+        if self.album.transition:self.album.transition.setCurrentTime(self.album.transition.duration())
     def button(self,text,callback):
         button=QPushButton(text);button.clicked.connect(callback);return button
     def sync_shortcut_mode(self):self.mode_updates+=1
@@ -79,6 +80,9 @@ class AlbumNavigationTest(unittest.TestCase):
                 self.assertGreater(rect.left(),20)
                 x=rect.left()//2 if side=='left' else (rect.right()+pane.viewport().width())//2
                 QTest.mouseClick(pane.viewport(),Qt.MouseButton.LeftButton,pos=QPoint(x,pane.viewport().height()//2))
+                self.assertIs(host.stack.currentWidget(),host.album)
+                self.assertIsNotNone(host.album.transition)
+                host.album.transition.setCurrentTime(host.album.transition.duration())
                 self.assertEqual(host.stack.currentIndex(),index);self.assertFalse(pane.detail)
 
     def test_outer_album_margin_returns_but_top_bar_does_not(self):
@@ -86,7 +90,36 @@ class AlbumNavigationTest(unittest.TestCase):
         QTest.mouseClick(album,Qt.MouseButton.LeftButton,pos=QPoint(album.width()-5,album.top_bar.geometry().center().y()))
         self.assertIs(host.stack.currentWidget(),album)
         QTest.mouseClick(album,Qt.MouseButton.LeftButton,pos=QPoint(5,album.pane.geometry().center().y()))
+        self.assertIsNotNone(album.transition);album.transition.setCurrentTime(album.transition.duration())
         self.assertEqual(host.stack.currentIndex(),4)
+
+    def test_repeated_album_zoom_preserves_source_size_and_reuses_one_original(self):
+        host=self.host('keep');album=host.album;pane=album.pane;point=self.image_point(pane)
+        with patch.object(host.library,'preview_image',wraps=host.library.preview_image) as decode:
+            for _ in range(4):
+                QTest.mouseClick(pane.viewport(),Qt.MouseButton.LeftButton,pos=point);finish_zoom(pane)
+                self.assertTrue(pane.detail);self.assertTrue(pane.full_resolution)
+                QTest.mouseClick(pane.viewport(),Qt.MouseButton.LeftButton,pos=point);finish_zoom(pane)
+                self.assertFalse(pane.detail);self.assertEqual(pane.source_width,album.source_width)
+                self.assertGreater(pane.zoom_target(),pane.fit_scale())
+            self.assertEqual(decode.call_count,1)
+        self.assertIsNotNone(album.full_preview)
+        album.back();album.transition.setCurrentTime(album.transition.duration())
+        self.assertIsNone(album.full_preview)
+
+    def test_album_coalesces_inflight_original_and_new_click_interrupts_return(self):
+        host=self.host('deleted');album=host.album;pane=album.pane;point=self.image_point(pane);jobs=[]
+        host.submit=lambda work,done,failed,pool=None:jobs.append((work,done,failed))
+        album.zoom(point=point);pane.zoom_animation.setCurrentTime(40)
+        album.zoom(point=point);pane.zoom_animation.setCurrentTime(40)
+        album.zoom(point=point)
+        self.assertTrue(pane.detail);self.assertEqual(len(jobs),1)
+        album.back();self.assertTrue(album.returning)
+        album.transition.setCurrentTime(60);album.zoom(point=point)
+        self.assertFalse(album.returning);self.assertIsNone(album.transition)
+        self.assertIs(host.stack.currentWidget(),album);self.assertTrue(pane.detail);self.assertEqual(len(jobs),1)
+        work,done,_=jobs.pop();done(work());finish_zoom(pane)
+        self.assertTrue(pane.full_resolution);self.assertFalse(host.errors)
 
     def test_image_click_remains_in_album_and_keeps_the_same_pixel_under_pointer(self):
         for gallery in ('keep','deleted'):

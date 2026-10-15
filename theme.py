@@ -210,6 +210,13 @@ class FrameClock(QObject):
 
     def tick(self):
         now = time.perf_counter()
+        # A window can move from a 60 Hz screen to a 240 Hz screen while an
+        # animation is running. Follow the active owners, including when the
+        # fastest window's animation has finished; never busy-repaint at idle.
+        owners=[motion.parent() for motion in self.motions if isValid(motion) and motion.running]
+        if owners:
+            interval=min(self.interval(owner) for owner in owners)
+            if self.timer.interval()!=interval:self.timer.setInterval(interval)
         for motion in list(self.motions):
             if not isValid(motion) or not motion.running:
                 self.remove(motion); continue
