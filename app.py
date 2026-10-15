@@ -291,6 +291,49 @@ class Library:
         if not walk_errors:
             with self.connect() as db:
                 db.execute('UPDATE photos SET present=0 WHERE seen IS NULL OR seen<>?', (generation,))
+            self.reconcile_deleted_files(root)
+
+    def reconcile_deleted_files(self,root):
+        """Retire reversible-delete rows only after a successful disk inventory.
+
+        Missing filenames are confirmed by directory enumeration. An offline
+        volume or a permission failure must never be treated as an empty trash.
+        No photo file is changed by this reconciliation.
+        """
+        root=Path(root).resolve();groups={}
+        with self.connect() as db:
+            rows=db.execute("SELECT h.photo_id,h.backup,p.path FROM history h JOIN photos p ON p.id=h.photo_id WHERE h.action='trash'").fetchall()
+        for row in rows:
+            if not row['backup']:continue
+            original=Path(row['path']);backup=Path(row['backup'])
+            if backup.parent!=original.parent/TRASH_DIRECTORY or not backup.parent.is_relative_to(root):continue
+            groups.setdefault(backup.parent,[]).append((row['photo_id'],backup))
+        missing=[]
+        for folder,photos in groups.items():
+            try:
+                if folder.is_symlink() or not folder.resolve().is_relative_to(root):continue
+                with os.scandir(folder) as entries:names={os.path.normcase(entry.name) for entry in entries}
+            except FileNotFoundError:
+                # Confirm the missing directory from the closest accessible
+                # ancestor. This also covers a manually removed whole branch.
+                absent=folder;ancestor=folder.parent;names=None
+                while ancestor.is_relative_to(root):
+                    try:
+                        with os.scandir(ancestor) as entries:children={os.path.normcase(entry.name) for entry in entries}
+                        if os.path.normcase(absent.name) not in children:names=set()
+                        break
+                    except FileNotFoundError:absent=ancestor;ancestor=ancestor.parent
+                    except OSError:break
+                if names is None:continue
+            except OSError as error:
+                self.warn(error);continue
+            missing.extend((pid,str(backup)) for pid,backup in photos if os.path.normcase(backup.name) not in names)
+        if missing:
+            with self.connect() as db:
+                for pid,backup in missing:
+                    db.execute("DELETE FROM history WHERE photo_id=? AND action='trash' AND backup=?",(pid,backup))
+                    db.execute("UPDATE trash_log SET result='missing' WHERE photo_id=? AND backup=? AND result='staged'",(pid,backup))
+        return len(missing)
 
     def query(self, view):
         filters = {'all': 'present=1', 'pending': 'present=1 AND status=0', 'keep': 'present=1 AND status=1',

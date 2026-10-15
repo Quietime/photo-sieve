@@ -67,7 +67,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          python -m unittest tests.test_operation_audit.OperationAuditTest.test_restore_all_deleted_includes_photos_beyond_loaded_page tests.test_operation_audit.OperationAuditTest.test_deselect_after_select_all_is_preserved_when_next_page_loads tests.test_operation_audit.OperationAuditTest.test_restore_selected_restores_only_selected_photos -v
+          python -m unittest tests.test_deleted_rescan tests.test_operation_audit.OperationAuditTest.test_restore_all_deleted_includes_photos_beyond_loaded_page tests.test_operation_audit.OperationAuditTest.test_deselect_after_select_all_is_preserved_when_next_page_loads tests.test_operation_audit.OperationAuditTest.test_restore_selected_restores_only_selected_photos -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_deleted_album.py deleted-disk-ci
       - name: Verify disk-delete controls at 150 percent scaling

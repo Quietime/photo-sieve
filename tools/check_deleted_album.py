@@ -61,10 +61,14 @@ def run(output):
                 confirm(False,'batch-delete-cancel','所选 2');window.purge_selected.click();assert library.state()['counts']['deleted']==4;checks.append('permanent_delete_defaults_to_cancel_and_cancel_preserves_files')
                 confirm(True,'batch-delete-confirm','所选 2');window.purge_selected.click();until(lambda:not window.busy and not window.pending_ops and not window.fetching and library.state()['counts']['deleted']==2 and grid.count()==2)
                 assert all(not Path(backups[p['id']]).is_file() for p in rows[4:6]);checks.append('batch_delete_only_removes_selected_trash')
-                window.select_all_deleted.click();assert window.all_deleted_selected and len(grid.selectedItems())==2
+                Path(backups[rows[6]['id']]).unlink();window.scan(photos)
+                until(lambda:not window.importing and not window.busy and not window.fetching and library.state()['counts']['deleted']==1 and grid.count()==1)
+                window.grab().save(str(output/'external-disk-delete-after-rescan.png'))
+                checks.append('rescan_removes_manually_deleted_disk_file_from_gallery')
+                window.select_all_deleted.click();assert window.all_deleted_selected and len(grid.selectedItems())==1
                 window.select_all_deleted.click();assert not grid.selectedItems();checks.append('select_all_and_clear_selection_operate')
                 window.select_all_deleted.click();assert window.all_deleted_selected and '全部' in window.purge_selected.text()
-                confirm(True,'all-selected-disk-delete-confirm','全部 2');window.purge_selected.click();until(lambda:not window.busy and not window.pending_ops and not window.fetching and library.state()['counts']['deleted']==0 and grid.count()==0)
+                confirm(True,'all-selected-disk-delete-confirm','全部 1');window.purge_selected.click();until(lambda:not window.busy and not window.pending_ops and not window.fetching and library.state()['counts']['deleted']==0 and grid.count()==0)
                 for photo in rows[:4]:assert hashlib.sha256(Path(photo['path']).read_bytes()).hexdigest()==hashes[photo['name']]
                 assert all(not Path(backups[row['id']]).exists() for row in rows[4:])
                 assert not errors,errors;checks.append('select_all_permanently_deletes_actual_disk_files_preserves_kept_pending_and_restored_files');window.grab().save(str(output/'deleted-empty.png'))
