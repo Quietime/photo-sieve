@@ -23,7 +23,7 @@ class RatingPage(QWidget):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
         self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.ids=[];self.index=0
-        self.info={};self.source_widths={};self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
+        self.info={};self.source_widths={};self.image_sizes={};self.fingerprints={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
@@ -77,8 +77,10 @@ class RatingPage(QWidget):
         self.active=True;self.setFocus()
         if not self.host.session_active:return
         if self.library is not self.host.library:
-            self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.thumbs.clear();self.images.clear()
-        self.images.clear();self.thumbs.clear();self.reload()
+            self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.clear_previews()
+        self.reload()
+    def clear_previews(self):
+        self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.preview_errors.clear()
     def deactivate(self):
         self.active=False;self.generation+=1;self.scanning=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
     def reload(self,*_):
@@ -86,18 +88,33 @@ class RatingPage(QWidget):
         self.generation+=1;gen=self.generation;self.scanning=False;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部照片评级')
         records=self.records;scope='keep' if self.scope.currentIndex() else 'all';stars=self.filter.currentIndex()-1 if self.filter.currentIndex() else None
         self.status.setText('正在读取分级列表…')
-        def done(ids):
+        cached=list(self.fingerprints);library=self.library
+        def work():
+            ids=records.ids(scope,stars);fingerprints={}
+            with library.connect() as db:
+                for start in range(0,len(cached),500):
+                    part=cached[start:start+500]
+                    rows=db.execute('SELECT id,size,mtime FROM photos WHERE present=1 AND id IN ('+','.join('?' for _ in part)+')',part)
+                    fingerprints.update((row['id'],(row['size'],row['mtime'])) for row in rows)
+            return ids,fingerprints
+        def done(value):
             if not self.valid(gen):return
+            ids,fingerprints=value
+            for pid in cached:
+                if self.fingerprints.get(pid)!=fingerprints.get(pid):
+                    self.images.pop(pid,None);self.thumbs.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
+            self.preview_errors.clear()
             self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear();self.grid.set_ids(ids);self.strip.set_ids(ids);self.show_current();self.visible()
             if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部照片评级”刷新。')
-            else:self.note.setText(f'{len(ids):,} 张照片 · 星级写入 Windows 属性，保留与删除标记独立；缩略图按需加载。')
-        self.host.submit(lambda:records.ids(scope,stars),done,self.host.error)
+            else:self.note.setText(f'{len(ids):,} 张照片 · 复用整库磁盘缓存，附近照片提前载入内存；星级与保留 / 删除标记独立。')
+        self.host.submit(work,done,self.host.error)
     def valid(self,gen):return self.active and gen==self.generation and self.library is self.host.library and not self.host.closed
     def pid(self):return self.ids[self.index] if self.ids and 0<=self.index<len(self.ids) else None
     def select(self,index):
         if self.writing:return
         self.index=index
-        for pane in self.panes:pane.show_photo(None)
+        for pane in self.panes:
+            if pane.detail:pane.show_photo(None)
         self.show_current();self.setFocus()
     def move(self,delta):
         if self.writing or not self.ids:return
@@ -118,7 +135,7 @@ class RatingPage(QWidget):
                 target=self.ids[self.index+offset]
                 if not pane.detail:self.preview(target,large=True)
             else:pane.show_photo(None);self.names[offset].setText('没有下一张')
-        self.read(pid);self.update_controls()
+        self.read(pid);self.update_controls();self.prefetch()
     def install_preview(self,pid,photo,pix):
         for offset,pane in enumerate(self.panes):
             if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid and not pane.detail:
@@ -126,44 +143,72 @@ class RatingPage(QWidget):
     def visible(self,*_):
         if not self.active or not self.records:return
         for pid in (self.grid.visible_ids() if self.body.currentIndex() else self.strip.visible_ids()):self.preview(pid);self.read(pid)
+    def preview_size(self):
+        dpr=self.devicePixelRatioF()
+        return QSize(max(300,round(self.pane.width()*dpr)),max(200,round(self.pane.height()*dpr)))
+    def cache_plan(self):
+        import machine
+        size=self.preview_size();pixel_bytes=size.width()*size.height()*4+176*118*4
+        requested=self.host.preload_count or machine.PROFILE.buffer(pixel_bytes)
+        # Account for both grading and screening pages sharing process memory.
+        capacity=machine.PROFILE.preview_capacity(max(16,requested),pixel_bytes*2,True)
+        behind=min(4,self.index);start=self.index-behind
+        return self.ids[start:start+capacity],capacity
+    def prefetch(self):
+        if not self.active or self.host.cache_clearing:return
+        wanted,capacity=self.cache_plan();keep=set(wanted)
+        for pid in list(self.images):
+            if pid not in keep:
+                self.images.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None)
+        # Current pair first, then nearby future frames, then the short back buffer.
+        order=self.ids[self.index:self.index+2]+wanted
+        for pid in dict.fromkeys(order):self.preview(pid,True)
+        while len(self.thumbs)>max(128,min(512,capacity*4)):self.thumbs.popitem(last=False)
+        for pid in list(self.fingerprints):
+            if pid not in self.images and pid not in self.thumbs:self.fingerprints.pop(pid,None)
     def preview(self,pid,large=False):
         key=(pid,large)
+        if self.host.cache_clearing or key in self.preview_errors:return
         if key in self.loading:return
-        if large and pid in self.images:
+        size=self.preview_size()
+        if large and pid in self.images and self.image_sizes.get(pid)==size:
             photo,pix=self.images[pid];self.install_preview(pid,photo,pix);return
         if not large and pid in self.thumbs:return
-        if len(self.loading)>=6:return
+        if sum(flag==large for _,flag in self.loading)>=(2 if large else 4):return
         self.loading.add(key);gen=self.generation;library=self.library
         if large:
             for offset,pane in enumerate(self.panes):
-                if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid:pane.show_photo({'id':pid},message='正在读取照片…')
-        dpr=self.devicePixelRatioF();width=max(300,min(1600,round(self.pane.width()*dpr)));height=max(200,min(1200,round(self.pane.height()*dpr)))
+                if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid:
+                    if pid in self.images:self.install_preview(pid,*self.images[pid])
+                    else:pane.show_photo({'id':pid},message='正在读取照片…')
+        dpr=self.devicePixelRatioF();width=size.width();height=size.height();edge=self.host.preview_edge(size)
         def work():
             from desktop import display_image
-            photo=library.public(library.photo(pid));result=display_image(library.preview_image(pid,1600 if large else 320),width if large else round(176*dpr),height if large else round(118*dpr),(8,8));return photo,result
+            photo=library.public(library.photo(pid));result=display_image(library.preview_image(pid,edge if large else 320),width if large else round(176*dpr),height if large else round(118*dpr),(8,8));return photo,result
         def done(value):
             if not self.valid(gen):return
             self.loading.discard(key);photo,result=value;pix=QPixmap.fromImage(result[0][0]);pix.setDevicePixelRatio(dpr)
+            self.fingerprints[pid]=(photo['size'],photo['mtime'])
             if large:
-                self.source_widths[pid]=result[2][0];self.images[pid]=(photo,pix)
-                while len(self.images)>3:
-                    old,_=self.images.popitem(last=False);self.source_widths.pop(old,None)
+                self.source_widths[pid]=result[2][0];self.images[pid]=(photo,pix);self.image_sizes[pid]=size
                 self.install_preview(pid,photo,pix)
             else:
                 self.thumbs[pid]=QIcon(pix);self.strip.set_preview_width(pid,pix)
                 while len(self.thumbs)>128:self.thumbs.popitem(last=False)
                 self.grid.captions[pid]=photo['name']+'\n'+self.star_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
                 if row>=0:self.grid.photo_model.changed(row)
-            for target in self.ids[self.index:self.index+2]:
-                if target not in self.images:self.preview(target,True)
+            self.prefetch()
             self.visible()
         def failed(message):
             if not self.valid(gen):return
             self.loading.discard(key)
+            self.preview_errors.add(key)
             # Do not retry a broken preview in a tight loop.
             if large and pid==self.pid():self.pane.show_photo({'id':pid},error=message)
             if not large:self.thumbs[pid]=self.host.tile
-        self.host.submit(work,done,failed,self.host.image_pool if large else self.host.thumb_pool,100 if large else 0)
+            self.prefetch();self.visible()
+        current=pid in self.ids[self.index:self.index+2]
+        self.host.submit(work,done,failed,self.host.image_pool if large else self.host.thumb_pool,100 if large and current else -5 if large else 0)
     @staticmethod
     def star_text(info):
         if not info:return '尚未读取'

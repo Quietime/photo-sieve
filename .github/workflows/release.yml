@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
+        options: [rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,6 +62,22 @@ jobs:
           QT_SCALE_FACTOR: '1.5'
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: python tools/check_features.py --output features-hidpi-ci
+      - name: Verify grading cache reuse and nearby preload
+        if: env.CHECK_SCOPE == 'rating_cache'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          python -m unittest tests.test_ratings -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_cache.py rating-cache-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_ratings.py rating-related-ci
+      - name: Verify grading cache at 150 percent scaling
+        if: env.CHECK_SCOPE == 'rating_cache'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_rating_cache.py rating-cache-hidpi-ci
       - name: Verify only updated disk-delete controls
         if: env.CHECK_SCOPE == 'cache_all_final'
         env:
@@ -234,6 +250,9 @@ jobs:
           path: |
             windows-chrome-ci.json
             ui-screenshots-ci/*
+            rating-cache-ci/*
+            rating-cache-hidpi-ci/*
+            rating-related-ci/*
             ratings-ui-ci/*
             ratings-hidpi-ci/*
             folder-icons-ci.json
@@ -301,6 +320,17 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content full-cache-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged full-folder cache failed' }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--cache-settings-self-test', 'cache-all-settings-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content cache-all-settings-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings failed' }
+      - name: Verify grading cache in packaged EXE
+        if: env.CHECK_SCOPE == 'rating_cache'
+        timeout-minutes: 3
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--rating-cache-self-test', 'rating-cache-frozen-ci' -PassThru
+          if (!$p.WaitForExit(120000)) { taskkill /PID $p.Id /T /F; throw 'Packaged grading cache check timed out' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0 -or !(Get-Content rating-cache-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged grading cache check failed' }
       - name: Verify permanent disk-delete controls in packaged EXE
         if: env.CHECK_SCOPE == 'cache_all_final'
         timeout-minutes: 3
@@ -371,6 +401,7 @@ jobs:
         with:
           name: Windows-normal-runtime-diagnostics
           path: |
+            rating-cache-frozen-ci/*
             frozen-ratings-ci.json
             frozen-runtime-ci.json
             frozen-runtime-ci-*.png
@@ -427,6 +458,9 @@ jobs:
             windows-chrome-ci.json
             performance-ci.json
             ui-screenshots-ci/*
+            rating-cache-ci/*
+            rating-cache-hidpi-ci/*
+            rating-related-ci/*
             ratings-ui-ci/*
             ratings-hidpi-ci/*
             ui-screenshots-windows/*

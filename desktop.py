@@ -596,7 +596,7 @@ class Window(QMainWindow):
         def save():
             self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0;self.library.cache_limit=10*1024**3
             settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue('preload_count',self.preload_count);settings.setValue('cache_mb',10240);settings.sync()
-            self.display_size=None;self.update_display_size();self.trim_previews();self.library.schedule_prune();self.maintain_cache();self.prefetch();dialog.accept()
+            self.display_size=None;self.update_display_size();self.trim_previews();self.library.schedule_prune();self.maintain_cache();self.prefetch();self.rating_page.prefetch();dialog.accept()
         buttons.addWidget(self.button('保存',save,'primary'));layout.addLayout(buttons);dialog.exec();refresh.stop()
 
     def clear_cache(self):
@@ -619,7 +619,8 @@ class Window(QMainWindow):
             self.faces.clear_memory();self.face_panel.show_result(None);self.metadata_service.clear()
             for pane in (*self.photos,*self.rating_page.panes,self.album.pane):pane.show_photo(None)
             self.album.preview=None
-            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.deleted_thumb_cache,self.image_errors,self.warmed,self.rating_page.images,self.rating_page.thumbs,self.rating_page.source_widths):store.clear()
+            for store in (self.cache,self.cache_size,self.sources,self.thumb_cache,self.kept_thumb_cache,self.deleted_thumb_cache,self.image_errors,self.warmed):store.clear()
+            self.rating_page.clear_previews()
             if rating_active:
                 self.rating_page.active=True;self.rating_page.show_current();self.rating_page.visible()
             elif self.stack.currentWidget() is self.album and self.album.photo:self.album.open(self.album.photo['id'])
@@ -738,7 +739,7 @@ class Window(QMainWindow):
                 self.timer.stop(); self.progress.set_progress(0, 0, False)
             if self.rating_active:
                 if not running and (self.was_running or old and job.get('revision')!=old['job'].get('revision')):
-                    self.rating_page.images.clear();self.rating_page.thumbs.clear();self.rating_page.reload()
+                    self.rating_page.reload()
                 self.was_running=running;self.update_actions();return
             if first:
                 self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 4 if self.view=='keep' else 0)); self.place_overlays()
