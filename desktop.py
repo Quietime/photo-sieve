@@ -453,10 +453,9 @@ class Window(QMainWindow):
         self.deleted_note.setObjectName('caption'); footer.addWidget(self.deleted_note, 1)
         self.deleted_multiselect=self.button('多选',lambda:None);self.deleted_multiselect.setCheckable(True);self.deleted_multiselect.toggled.connect(self.toggle_deleted_multiselect);footer.addWidget(self.deleted_multiselect)
         self.select_all_deleted = self.button('全选', self.select_deleted); footer.addWidget(self.select_all_deleted)
-        self.purge_selected = self.button('批量删除', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
+        self.purge_selected = self.button('从磁盘永久删除所选', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
         self.restore_selected = self.button('批量恢复', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
-        self.clear_deleted=self.button('一键清空',lambda:self.purge_selection(clear_all=True),'plain');footer.addWidget(self.clear_deleted)
-        self.clear_deleted.setToolTip('永久删除全部待删除区照片；执行前会再次确认')
+        self.purge_selected.setToolTip('删除待删除区中的实际照片文件，不只是移除图库记录；执行前会再次确认')
         self.stack.addWidget(deleted)
 
         empty = WelcomePage(); hero = QVBoxLayout(empty); hero.setContentsMargins(24,24,24,24); hero.setSpacing(12); hero.addStretch()
@@ -1058,9 +1057,8 @@ class Window(QMainWindow):
         self.refresh_chrome()
 
     def update_actions(self):
-        if hasattr(self,'clear_deleted'):
+        if hasattr(self,'deleted_multiselect'):
             available=not self.busy and not self.pending_ops and not self.job_running()
-            self.clear_deleted.setEnabled(available and bool(self.counts.get('deleted')))
             self.deleted_multiselect.setEnabled(available)
         opened=self.session_active and not self.importing and self.stack.currentIndex()!=2
         resume_available=not self.session_active and self.resume_button.isEnabled()
@@ -1538,22 +1536,23 @@ class Window(QMainWindow):
         count=self.counts.get('deleted',selected) if getattr(self,'all_deleted_selected',False) else selected
         self.deleted_note.setText(f'已选 {count:,} 张 · 双击查看大图' if self.deleted_multiselect.isChecked() or selected>1 else '单击查看大图 · 开启多选后可批量操作')
         self.select_all_deleted.setText('取消全选' if getattr(self,'all_deleted_selected',False) else '全选')
+        self.purge_selected.setText('从磁盘永久删除全部' if getattr(self,'all_deleted_selected',False) else '从磁盘永久删除所选')
         self.update_actions()
 
-    def purge_selection(self,clear_all=False):
+    def purge_selection(self):
         if self.busy or self.pending_ops or self.job_running():return
         ids=[item.data(ROLE) for item in self.deleted_grid.selectedItems()]
-        if not ids and not clear_all:return
-        all_selected=bool(clear_all or getattr(self,'all_deleted_selected',False) and len(ids)==self.deleted_grid.count())
+        if not ids:return
+        all_selected=bool(getattr(self,'all_deleted_selected',False) and len(ids)==self.deleted_grid.count())
         count=self.counts.get('deleted',len(ids)) if all_selected else len(ids)
         if not count:return
-        box=QMessageBox(self);box.setWindowTitle('清空待删除区' if clear_all else '批量永久删除')
+        box=QMessageBox(self);box.setWindowTitle('从磁盘永久删除照片')
         box.setText(f'永久删除{"全部 " if all_selected else "所选 "}{count:,} 张照片？')
-        box.setInformativeText('只处理待删除区中的照片。永久删除后无法恢复，不进入 Windows 回收站；保留与未筛选照片不会被删除。')
+        box.setInformativeText('将删除这些照片在磁盘上的实际文件，不只是移除图库记录。永久删除后无法恢复，不进入 Windows 回收站；保留与未筛选照片不会被删除。')
         confirm=box.addButton('永久删除',QMessageBox.ButtonRole.DestructiveRole)
         cancel=box.addButton('取消',QMessageBox.ButtonRole.RejectRole);box.setDefaultButton(cancel);box.setEscapeButton(cancel);box.exec()
         if box.clickedButton() is confirm:
-            self.run_deleted_job(lambda:self.library.purge_deleted(None if all_selected else ids),'待删除区已清空' if clear_all else '所选照片已永久删除')
+            self.run_deleted_job(lambda:self.library.purge_deleted(None if all_selected else ids),'所选照片文件已从磁盘永久删除')
 
     def add_deleted(self, rows):
         previous=self.deleted_grid.blockSignals(True)

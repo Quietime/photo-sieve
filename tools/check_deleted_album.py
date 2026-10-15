@@ -35,7 +35,7 @@ def run(output):
             try:
                 window.resize(1280,900);window.show();until(lambda:window.counts.get('deleted')==6 and not window.fetching)
                 window.switch('deleted');until(lambda:window.deleted_grid.count()==6 and not window.fetching)
-                assert window.restore_selected.isVisible() and window.purge_selected.isVisible() and window.clear_deleted.isVisible()
+                assert window.restore_selected.isVisible() and window.purge_selected.isVisible() and not hasattr(window,'clear_deleted') and '磁盘' in window.purge_selected.text()
                 window.deleted_multiselect.click();grid=window.deleted_grid
                 def choose(index):QTest.mouseClick(grid.viewport(),Qt.MouseButton.LeftButton,pos=grid.visualItemRect(grid.item(index)).center());application.processEvents()
                 choose(0);choose(1)
@@ -52,7 +52,7 @@ def run(output):
                         try:
                             dialog=application.activeModalWidget();assert dialog is not None
                             assert expected in dialog.text() and dialog.defaultButton().text()=='取消'
-                            assert '永久' in dialog.informativeText();dialog.grab().save(str(output/(name+'.png')))
+                            assert '磁盘上的实际文件' in dialog.informativeText();dialog.grab().save(str(output/(name+'.png')))
                             button=next(button for button in dialog.buttons() if button.text()==('永久删除' if accept else '取消'));button.click()
                         except BaseException as error:
                             errors.append(repr(error))
@@ -63,9 +63,11 @@ def run(output):
                 assert all(not Path(backups[p['id']]).is_file() for p in rows[4:6]);checks.append('batch_delete_only_removes_selected_trash')
                 window.select_all_deleted.click();assert window.all_deleted_selected and len(grid.selectedItems())==2
                 window.select_all_deleted.click();assert not grid.selectedItems();checks.append('select_all_and_clear_selection_operate')
-                confirm(True,'clear-all-confirm','全部 2');window.clear_deleted.click();until(lambda:not window.busy and not window.pending_ops and not window.fetching and library.state()['counts']['deleted']==0 and grid.count()==0)
+                window.select_all_deleted.click();assert window.all_deleted_selected and '全部' in window.purge_selected.text()
+                confirm(True,'all-selected-disk-delete-confirm','全部 2');window.purge_selected.click();until(lambda:not window.busy and not window.pending_ops and not window.fetching and library.state()['counts']['deleted']==0 and grid.count()==0)
                 for photo in rows[:4]:assert hashlib.sha256(Path(photo['path']).read_bytes()).hexdigest()==hashes[photo['name']]
-                assert not errors,errors;checks.append('one_click_clear_removes_all_trash_preserves_kept_pending_and_restored_files');window.grab().save(str(output/'deleted-empty.png'))
+                assert all(not Path(backups[row['id']]).exists() for row in rows[4:])
+                assert not errors,errors;checks.append('select_all_permanently_deletes_actual_disk_files_preserves_kept_pending_and_restored_files');window.grab().save(str(output/'deleted-empty.png'))
                 report={'ok':True,'platform':application.platformName(),'checks':checks}
             finally:window.prompt_on_close=False;window.close();application.processEvents()
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');faulthandler.cancel_dump_traceback_later();trace.close();print('PASS deleted album',len(checks),'checks')

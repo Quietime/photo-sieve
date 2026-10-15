@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [full, update_ui, features, review_ui, zoom_ui, cache_all, deletion, responsiveness, cache_ui]
+        options: [full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all'
+        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
         run: python tools/prepare_feature_fixtures.py
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
@@ -62,6 +62,20 @@ jobs:
           QT_SCALE_FACTOR: '1.5'
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: python tools/check_features.py --output features-hidpi-ci
+      - name: Verify only updated disk-delete controls
+        if: env.CHECK_SCOPE == 'cache_all_final'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          python -m unittest tests.test_operation_audit.OperationAuditTest.test_restore_all_deleted_includes_photos_beyond_loaded_page tests.test_operation_audit.OperationAuditTest.test_deselect_after_select_all_is_preserved_when_next_page_loads tests.test_operation_audit.OperationAuditTest.test_restore_selected_restores_only_selected_photos -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_deleted_album.py deleted-disk-ci
+      - name: Verify disk-delete controls at 150 percent scaling
+        if: env.CHECK_SCOPE == 'cache_all_final'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_deleted_album.py deleted-disk-hidpi-ci
       - name: Test only full-folder cache, retention and file coordination
         if: env.CHECK_SCOPE == 'cache_all'
         env:
@@ -232,6 +246,8 @@ jobs:
             features-hidpi-ci/*
             small-dialogs-ci/*
             arw-rating-ci/*
+            deleted-disk-ci/*
+            deleted-disk-hidpi-ci/*
             full-cache-ci/*
             full-cache-hidpi-ci/*
             cache-all-settings-ci/*
@@ -276,7 +292,7 @@ jobs:
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--arw-self-test', 'feature-fixtures/sony.ARW', 'arw-rating-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Packaged ARW verification failed' }
       - name: Verify full-folder cache and safe handoff in packaged EXE
-        if: env.CHECK_SCOPE == 'cache_all'
+        if: env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
@@ -285,6 +301,14 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content full-cache-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged full-folder cache failed' }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--cache-settings-self-test', 'cache-all-settings-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content cache-all-settings-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings failed' }
+      - name: Verify permanent disk-delete controls in packaged EXE
+        if: env.CHECK_SCOPE == 'cache_all_final'
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-disk-frozen-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Get-Content deleted-disk-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged permanent disk-delete controls failed' }
       - name: Verify zoom and album motion in packaged EXE
         if: env.CHECK_SCOPE == 'zoom_ui'
         env:
@@ -351,6 +375,7 @@ jobs:
             frozen-update-offer-ci/*
             features-frozen-ci/*
             arw-rating-frozen-ci/*
+            deleted-disk-frozen-ci/*
             full-cache-frozen-ci/*
             cache-all-settings-frozen-ci/*
             zoom-frozen-ci/*
