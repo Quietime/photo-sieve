@@ -1,9 +1,9 @@
 """Independent photo grading; displayed stars come from verified photo metadata."""
 from collections import OrderedDict
 from pathlib import Path
-from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,Signal
-from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider
+from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal
+from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence,QColor,QPen,QPainter
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle
 from photo_grid import PhotoGrid
 from apple_ui import GlassDock
 from widgets import PhotoView
@@ -19,18 +19,74 @@ ACTIONS=[(f'star{i}',f'{i} 星',(str(i),),True) for i in range(1,6)]+[
  ('next','下一张',('Right',),True),('undo','撤销评级',('Ctrl+Z',),True),
  ('zoom','放大到 100%',('Z',),False),('unzoom','还原缩放',('Esc',),False)]
 
+class RatingDelegate(QStyledItemDelegate):
+    """Keep two compact caption lines visible, independently of photo orientation."""
+    def regions(self,rect):
+        view=self.parent();line=view.fontMetrics().height()
+        picture=rect.adjusted(8,5,-8,-(line*2+8))
+        return picture,QRect(rect.x()+8,picture.bottom()+3,rect.width()-16,line),QRect(rect.x()+8,picture.bottom()+3+line,rect.width()-16,line)
+    def paint(self,painter,option,index):
+        painter.save();painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(theme.ELEVATED));painter.setPen(QPen(QColor(theme.BLUE_HOVER),2) if option.state & QStyle.StateFlag.State_Selected else Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(option.rect.adjusted(2,2,-2,-2),6,6)
+        picture,name,stars=self.regions(option.rect)
+        icon=index.data(Qt.ItemDataRole.DecorationRole)
+        if icon and not icon.isNull():icon.paint(painter,picture,Qt.AlignmentFlag.AlignCenter)
+        lines=(index.data(Qt.ItemDataRole.DisplayRole) or '').split('\n',1)
+        painter.setFont(option.font)
+        for rect,text in zip((name,stars),lines):
+            painter.setPen(QColor(theme.LABEL if rect==name else theme.SECONDARY))
+            painter.drawText(rect,Qt.AlignmentFlag.AlignCenter,option.fontMetrics.elidedText(text,Qt.TextElideMode.ElideMiddle,rect.width()))
+        painter.restore()
+
 class RatingGrid(PhotoGrid):
     zoom_requested=Signal(int,QPoint)
     def __init__(self):
-        super().__init__();self.wheel_remainder=0
+        self.wheel_remainder=0;self.scroll_motion=None;self.scroll_target=0;self.scroll_direction=0;self.scroll_applying=False;super().__init__()
+        self.setItemDelegate(RatingDelegate(self));self.verticalScrollBar().setSingleStep(24)
+        self.verticalScrollBar().valueChanged.connect(self.external_scroll)
+        self.verticalScrollBar().sliderPressed.connect(self.stop_scroll)
+        self.verticalScrollBar().rangeChanged.connect(self.stop_scroll)
+    def stop_scroll(self,*_):
+        motion=self.scroll_motion;self.scroll_motion=None
+        if motion:motion.stop()
+        self.scroll_target=self.verticalScrollBar().value();self.scroll_direction=0
+    def external_scroll(self,*_):
+        if not self.scroll_applying:self.stop_scroll()
+    def scrollTo(self,*args):
+        self.stop_scroll();super().scrollTo(*args)
+    def hideEvent(self,event):
+        self.stop_scroll();super().hideEvent(event)
+    def resizeEvent(self,event):
+        self.stop_scroll();super().resizeEvent(event)
+    def set_tile_size(self,value):
+        self.stop_scroll();self.tile_width=value
+        self.tile_height=max(118,round(value*.56)+self.fontMetrics().height()*2+16)
+        self.setGridSize(QSize(value,self.tile_height))
+        self.setIconSize(QSize(value-16,self.tile_height-self.fontMetrics().height()*2-13))
     def wheelEvent(self,event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            delta=event.angleDelta().y()
+            self.stop_scroll();delta=event.angleDelta().y()
             self.wheel_remainder+=delta if delta else event.pixelDelta().y()*3
             steps=int(self.wheel_remainder/120);self.wheel_remainder-=steps*120
             if steps:self.zoom_requested.emit(steps,event.position().toPoint())
             event.accept();return
-        self.wheel_remainder=0;super().wheelEvent(event)
+        self.wheel_remainder=0;bar=self.verticalScrollBar()
+        if event.pixelDelta().y():
+            self.stop_scroll();bar.setValue(bar.value()-event.pixelDelta().y());event.accept();return
+        distance=-event.angleDelta().y()*48/120
+        if distance:
+            direction=1 if distance>0 else -1
+            target=self.scroll_target if self.scroll_motion and direction==self.scroll_direction else bar.value()
+            target=max(bar.minimum(),min(bar.maximum(),round(target+distance)))
+            self.stop_scroll();self.scroll_target=target;self.scroll_direction=direction
+            def step(value):
+                self.scroll_applying=True
+                try:bar.setValue(round(value))
+                finally:self.scroll_applying=False
+            def done():self.scroll_motion=None;self.scroll_direction=0
+            self.scroll_motion=theme.animate(self,110,step,curve=theme.EASE,done=done,start=bar.value(),end=target)
+        event.accept()
 
 class RatingPage(QWidget):
     def __init__(self,host):
@@ -60,7 +116,7 @@ class RatingPage(QWidget):
         self.gallery_larger=host.button('+',lambda:self.gallery_size.setValue(self.gallery_size.value()+20));self.gallery_larger.setFixedSize(28,28);self.gallery_larger.setToolTip('放大缩略图');gallery_heading.addWidget(self.gallery_larger);gallery_layout.addLayout(gallery_heading)
         self.gallery_smaller.setEnabled(self.gallery_size.value()>120);self.gallery_larger.setEnabled(self.gallery_size.value()<360)
         self.gallery_size.setStyleSheet('QSlider::groove:horizontal {height:4px;background:'+theme.SEPARATOR+';border-radius:2px;} QSlider::sub-page:horizontal {background:'+theme.BLUE_HOVER+';border-radius:2px;} QSlider::handle:horizontal {width:12px;margin:-4px 0;background:'+theme.LABEL+';border-radius:6px;}')
-        self.grid=RatingGrid();self.grid.tile_width=self.grid.tile_height=self.gallery_size.value();self.grid.setGridSize(QSize(self.grid.tile_width,self.grid.tile_height));self.grid.setIconSize(QSize(self.grid.tile_width-20,self.grid.tile_height-70));self.grid.setWordWrap(True)
+        self.grid=RatingGrid();self.grid.set_tile_size(self.gallery_size.value());self.grid.setWordWrap(False)
         self.gallery_size.setToolTip('缩略图大小 · 鼠标在图库内按 Ctrl + 滚轮也可调整');self.gallery_size.valueChanged.connect(self.resize_gallery);self.grid.zoom_requested.connect(self.wheel_gallery_zoom)
         self.grid.setStyleSheet('QListView {background:transparent;border:0;outline:0;} QListView::item {background:'+theme.ELEVATED+';border:2px solid transparent;border-radius:6px;margin:4px;} QListView::item:selected {border:2px solid '+theme.BLUE_HOVER+';background:'+theme.ELEVATED+';}')
         gallery_layout.addWidget(self.grid,1);self.splitter.addWidget(gallery)
@@ -200,7 +256,7 @@ class RatingPage(QWidget):
         if not anchor.isValid():
             visible=self.grid.visible_ids();anchor=self.grid.photo_model.index(self.grid.index_of(visible[0])) if visible else self.grid.currentIndex()
         old=self.grid.visualRect(anchor);fraction=(point.y()-old.y())/max(1,old.height())
-        self.grid.tile_width=self.grid.tile_height=value;self.grid.setGridSize(QSize(value,value));self.grid.setIconSize(QSize(value-20,value-70));self.grid.doItemsLayout()
+        self.grid.set_tile_size(value);self.grid.doItemsLayout()
         if anchor.isValid():
             rect=self.grid.visualRect(anchor);bar=self.grid.verticalScrollBar();bar.setValue(round(bar.value()+rect.y()+fraction*rect.height()-point.y()))
         self.gallery_smaller.setEnabled(value>120);self.gallery_larger.setEnabled(value<360)

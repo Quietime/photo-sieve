@@ -72,12 +72,17 @@ jobs:
           python tools/check_rating_latency.py rating-latency-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_ratings.py rating-latency-related-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_zoom.py rating-zoom-ci
       - name: Verify rating response at 150 percent scaling
         if: env.CHECK_SCOPE == 'rating_latency'
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
-        run: python tools/check_rating_latency.py rating-latency-hidpi-ci
+        run: |
+          python tools/check_rating_latency.py rating-latency-hidpi-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_zoom.py rating-zoom-hidpi-ci
       - name: Verify only grading thumbnail zoom and splitter preview fitting
         if: env.CHECK_SCOPE == 'rating_zoom'
         env:
@@ -364,7 +369,7 @@ jobs:
           $p.Refresh()
           if ($p.ExitCode -ne 0 -or !(Get-Content rating-latency-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged rating response check failed' }
       - name: Verify grading zoom in packaged EXE
-        if: env.CHECK_SCOPE == 'rating_zoom'
+        if: env.CHECK_SCOPE == 'rating_zoom' || env.CHECK_SCOPE == 'rating_latency'
         timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: windows

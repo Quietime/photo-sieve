@@ -40,7 +40,7 @@ def run(output):
                 current=p.pid();size=p.grid.tile_width
                 p.gallery_larger.click();assert p.grid.tile_width==size+20
                 p.gallery_smaller.click();assert p.grid.tile_width==size
-                p.gallery_size.setValue(300);assert p.grid.tile_width==300 and p.grid.iconSize().width()==280
+                p.gallery_size.setValue(300);assert p.grid.tile_width==300 and p.grid.iconSize().width()==284
                 assert settings.value('rating_gallery_size',0,type=int)==300 and p.pid()==current
                 checks.append('buttons_slider_resize_gallery_and_persist_without_changing_selection')
                 until(lambda:not p.loading and all(p.thumb_sizes.get(pid)==p.grid.iconSize()*p.devicePixelRatioF() for pid in p.grid.visible_ids()))
@@ -60,6 +60,32 @@ def run(output):
                 assert p.grid.tile_width==220
                 wheel(p.pane.viewport(),-120);assert p.grid.tile_width==220
                 checks.append('ordinary_wheel_scrolls_and_right_preview_does_not_resize_gallery')
+                until(lambda:p.grid.scroll_motion is None)
+                bar.setValue(0);samples=[];bar.valueChanged.connect(samples.append)
+                wheel(p.grid.viewport(),-120);assert bar.value()==0
+                until(lambda:p.grid.scroll_motion is None)
+                assert bar.value()==48 and len(set(samples))>=3 and samples==sorted(samples),samples
+                checks.append('one_notch_moves_only_48_pixels_with_short_monotonic_animation')
+                wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120)
+                until(lambda:p.grid.scroll_motion is None);assert bar.value()==192
+                wheel(p.grid.viewport(),-120);QTest.qWait(35);turn=bar.value();wheel(p.grid.viewport(),120)
+                until(lambda:p.grid.scroll_motion is None);assert bar.value()==max(0,turn-48)
+                checks.append('rapid_notches_accumulate_and_reversal_discards_forward_momentum')
+                wheel(p.grid.viewport(),-120);bar.setValue(20);QTest.qWait(160);assert bar.value()==20
+                wheel(p.grid.viewport(),-120);p.select(0);QTest.qWait(160);assert bar.value()==0
+                checks.append('scrollbar_and_photo_selection_cancel_stale_wheel_animation')
+                # Three columns: both caption lines must fit every tile and the final row.
+                p.splitter.setSizes([3*220+30,p.splitter.width()-(3*220+30)])
+                p.grid.doItemsLayout();app.processEvents()
+                assert p.grid.viewport().width()//220==3,p.grid.viewport().size()
+                assert p.grid.tile_height<190 and p.grid.tile_height<220
+                bar.setValue(bar.maximum());app.processEvents()
+                last=p.grid.visualRect(p.grid.photo_model.index(len(p.ids)-1))
+                picture,name,stars=p.grid.itemDelegate().regions(last)
+                assert p.grid.viewport().rect().contains(last) and last.contains(stars) and name.bottom()<stars.top()
+                assert picture.bottom()<name.top() and stars.height()>=p.grid.fontMetrics().height()
+                until(lambda:not p.loading);w.grab().save(str(output/'grading-compact-three-columns.png'))
+                checks.append('three_column_mixed_photos_fit_compact_tiles_and_last_caption_is_fully_scrollable')
                 p.gallery_size.setValue(360);wheel(p.grid.viewport(),120,True);assert p.grid.tile_width==360
                 p.gallery_size.setValue(120);wheel(p.grid.viewport(),-120,True);assert p.grid.tile_width==120
                 p.gallery_size.setValue(220);p.select(0);until(lambda:not p.loading and not p.resize_timer.isActive())

@@ -1640,7 +1640,7 @@ class Window(QMainWindow):
             event.ignore(); QTimer.singleShot(120, self.close); return
         if self.prompt_on_close and self.session_active and not self.updates.installing and self.close_choice is None:
             box=CloseOfferDialog(self);box.exec()
-            if box.choice is None:event.ignore();self.closing=False;self.uninstall_requested=False;return
+            if box.choice is None:event.ignore();self.closing=False;self.uninstall_requested=False;self.update_actions();return
             self.close_choice=box.choice
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.full_cache.stop();self.full_cache.timer.stop();self.full_faces.stop();self.full_faces.timer.stop()

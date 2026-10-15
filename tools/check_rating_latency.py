@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PIL import Image
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings,QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from app import Library
@@ -101,6 +101,17 @@ def run(output):
                 p.filter.setCurrentIndex(0);until(lambda:not p.listing and p.pid() in p.info)
                 checks.append('filtered_auto_next_keeps_selected_photo_when_write_finishes')
                 p.auto.setChecked(False)
+                p.select(14);until(lambda:p.pane.photo and p.pane.photo['id']==p.pid() and p.pane.pixmap is not None)
+                p.grade(3);w.prompt_on_close=True;w.close_choice=None;w.close()
+                assert w.closing and not w.closed
+                def cancel_close():
+                    dialog=app.activeModalWidget()
+                    if dialog:dialog.reject()
+                    else:QTimer.singleShot(20,cancel_close)
+                QTimer.singleShot(80,cancel_close);engine.permits.release()
+                until(lambda:not p.writing and not w.closing)
+                assert not w.closed and p.star_buttons[0].isEnabled()
+                checks.append('cancelling_close_after_queue_drains_reenables_rating_controls')
                 p.select(11);until(lambda:p.pid() in p.info);last=p.pid();p.grade(4);w.prompt_on_close=False;w.close();app.processEvents()
                 assert not w.closed and w.closing and w.pending_ops==1
                 p.grade(1);assert p.pending_count==1
