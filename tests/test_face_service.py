@@ -584,15 +584,15 @@ class FaceServiceTest(unittest.TestCase):
             self.assertEqual(result['face_count'], 1)
             self.assertTrue(face_service.cache_path(self.library, second).exists())
 
-    def test_processed_face_png_is_expired_but_metadata_and_original_survive(self):
+    def test_kept_face_png_is_retained_with_metadata_and_original(self):
         first = self.host.queue[0]
         with patch.object(self.service, '_isolated', return_value=crop_result()):
             self.service._read_or_compute(self.library, first)
         path = face_service.cache_path(self.library, first)
         self.library.mark(first['id'], 1)
         os.utime(path, (1, 1))
-        self.assertEqual(self.library.cleanup_processed_cache(), 1)
-        self.assertFalse(path.exists())
+        self.assertEqual(self.library.cleanup_processed_cache(), 0)
+        self.assertTrue(path.exists())
         with self.library.connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM face_metadata').fetchone()[0], 1)
         self.assertEqual(self.library.photo(first['id'])['status'], 1)

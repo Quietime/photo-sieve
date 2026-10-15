@@ -28,14 +28,14 @@ class CacheIndexTest(unittest.TestCase):
         self.library.preview(1,1600)
         return self.library.cache_path(self.source,self.row['size'],self.row['mtime'],320)
 
-    def test_processed_cleanup_does_not_hash_uncached_ten_thousand_rows(self):
+    def test_kept_cache_is_retained_without_hashing_uncached_ten_thousand_rows(self):
         old=self.preview(); self.library.mark(1,1); os.utime(old,(1,1))
         with self.library.connect() as db:
             db.executemany('INSERT INTO photos(id,path,size,mtime,status) VALUES (?,?,1,1,1)',
                            ((i,str(self.photos/f'{i}.jpg')) for i in range(2,10002)))
         with patch('app.cache_file',side_effect=AssertionError('Recurring cleanup must not derive hashes from all photos')):
-            self.assertEqual(self.library.cleanup_processed_cache(),1)
-        self.assertTrue(self.source.is_file()); self.assertFalse(old.exists())
+            self.assertEqual(self.library.cleanup_processed_cache(),0)
+        self.assertTrue(self.source.is_file()); self.assertTrue(old.exists())
         self.assertEqual(self.library.state()['counts']['keep'],10001)
 
     def test_legacy_previews_migrate_once_and_preserve_undo(self):
@@ -57,7 +57,8 @@ class CacheIndexTest(unittest.TestCase):
         with self.library.connect() as db: self.assertEqual(db.execute('SELECT COUNT(*) FROM cache_index').fetchone()[0],0)
         self.preview(); self.library.mark(1,1)
         for path in self.library.cache.glob('*.jpg'): os.utime(path,(1,1))
-        self.assertEqual(self.library.cleanup_processed_cache(),2); self.assertTrue(self.source.exists())
+        self.assertEqual(self.library.cleanup_processed_cache(),0); self.assertTrue(self.source.exists())
+        self.assertEqual(len(list(self.library.cache.glob('*.jpg'))),2)
 
     def test_missing_preview_index_is_removed_and_rebuilt_after_decode(self):
         old=self.preview(); old.unlink(); self.library.cleanup_processed_cache()
@@ -74,7 +75,8 @@ class CacheIndexTest(unittest.TestCase):
         library.preview(1,1600); library.mark(1,1)
         for path in library.cache.glob('*.jpg'): os.utime(path,(1,1))
         with patch('app.cache_file',side_effect=AssertionError('Inactive cleanup must reuse its cache index')):
-            self.assertEqual(expire_inactive_workspaces(self.base/'workspaces',self.library.directory),2)
+            self.assertEqual(expire_inactive_workspaces(self.base/'workspaces',self.library.directory),0)
+        self.assertEqual(len(list(library.cache.glob('*.jpg'))),2)
         self.assertTrue(self.source.exists()); self.assertTrue(library.database.exists())
 
     def test_cache_index_cannot_delete_files_outside_derived_cache(self):
@@ -86,7 +88,7 @@ class CacheIndexTest(unittest.TestCase):
 
     def test_cleanup_skips_busy_photo_then_removes_after_release(self):
         import threading
-        old=self.preview();self.library.mark(1,1);os.utime(old,(1,1))
+        old=self.preview();self.library.trash(1);os.utime(old,(1,1))
         locked=threading.Event();release=threading.Event()
         def reader():
             with self.library.file_locks[1]:locked.set();release.wait(3)

@@ -19,7 +19,7 @@ import crashlog
 from PIL import Image, ImageFile, ImageOps, TiffImagePlugin
 
 import machine
-from cache_policy import INDEX_SCHEMA
+from cache_policy import INDEX_SCHEMA, MAX_BYTES, linked_directory
 
 try:
     from pillow_heif import register_heif_opener
@@ -55,7 +55,7 @@ class Library:
         crashlog.event('workspace_initializing',directory=str(directory))
         self.directory = directory.resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
-        cache_mb = cache_mb or machine.cache_default_mb(self.directory)
+        cache_mb = cache_mb or MAX_BYTES//1024**2
         self.cache = self.directory / 'cache'
         self.cache.mkdir(exist_ok=True)
         self.database = self.directory / 'library.sqlite3'
@@ -68,6 +68,7 @@ class Library:
         self.prune_lock = threading.Lock()
         self.last_prune = time.monotonic()
         self.cache_indexed = set(); self.cache_sizes={}; self.cache_bytes=0; self.cache_changed=None
+        self.cache_evictions=0  # Capacity eviction only; explicit/deleted-cache cleanup does not increment this.
         self.session_lock=threading.Lock(); self.session_users=0; self.session_connection=None
         self.job = {'revision': secrets.token_hex(8), 'running': False, 'kind': '', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
@@ -638,6 +639,8 @@ class Library:
         """Only derived JPEG/PNG previews; never the database, originals or deletion backups."""
         removed = 0
         with self.prune_lock, self.cache_lock:
+            if linked_directory(self.directory) or linked_directory(self.cache):
+                raise LibraryError(409,'缓存目录已变成链接，已停止清理以保护原照片')
             for path in self.cache.iterdir():
                 if path.suffix.lower() not in ('.jpg','.png'):continue
                 if path.is_file() and not path.is_symlink():
@@ -651,7 +654,7 @@ class Library:
         return removed
 
     def cleanup_processed_cache(self, grace=120):
-        """Expire old previews for kept/deleted/missing photos; undo records remain intact."""
+        """Retain pending and kept caches; expire deleted/missing or obsolete-source derivatives."""
         from cache_policy import cleanup_indexed_cache
         with self.prune_lock:
             return cleanup_indexed_cache(self.database,self.cache,grace,self.file_locks,self.cache_lock,self.cache_indexed)
@@ -724,13 +727,14 @@ class Library:
     def prune_cache(self):
         from cache_policy import prune_workspaces
         removed,total=prune_workspaces(self.directory,self.cache,self.cache_limit,self.cache_lock,include_projects=False)
+        self.cache_evictions+=removed
         previous=self.cache_bytes; self.recount_cache(); delta=self.cache_bytes-previous
         if delta and self.cache_changed: self.cache_changed(delta)
         return removed
 
     def schedule_prune(self):
-        # New preview files update the byte ledger, so reaching a limit triggers a worker immediately.
-        if self.cache_bytes<self.cache_limit or not self.prune_lock.acquire(blocking=False): return
+        # Equality retains every derivative; only exceeding the budget starts eviction.
+        if self.cache_bytes<=self.cache_limit or not self.prune_lock.acquire(blocking=False): return
         def work():
             try: self.prune_cache()
             except OSError: pass

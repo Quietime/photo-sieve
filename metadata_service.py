@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject,QThreadPool,QThread,QTimer
 
 class MetadataService(QObject):
     def __init__(self,host):
-        super().__init__(host);self.host=host;self.cache=OrderedDict();self.retries={};self.working=False;self.stopped=threading.Event()
+        super().__init__(host);self.host=host;self.cache=OrderedDict();self.retries={};self.working=False;self.stopped=threading.Event();self.revision=0
         self.pool=QThreadPool(self);self.pool.setMaxThreadCount(1);self.pool.setThreadPriority(QThread.Priority.LowPriority)
         self.timer=QTimer(self);self.timer.setInterval(80);self.timer.timeout.connect(self.update);self.timer.start()
 
@@ -25,10 +25,10 @@ class MetadataService(QObject):
         h.details[1].set_text(text)
         if self.working:return
         # Snapshot only the nearby future. No FIFO of obsolete photo requests.
-        horizon=max(1,min(9,getattr(h,'ahead_target',9)))
-        wanted=[dict(p) for p in h.queue[:horizon] if p['id'] not in h.inflight and self.key(library,p) not in self.cache and time.monotonic()>=self.retries.get(self.key(library,p),(0,0))[1]]
+        horizon=max(1,min(64,getattr(h,'ahead_target',9)))
+        wanted=[dict(p) for p in h.queue[:horizon] if p['id'] not in h.inflight and self.key(library,p) not in self.cache and time.monotonic()>=self.retries.get(self.key(library,p),(0,0))[1]][:9]
         if not wanted:return
-        self.working=True
+        self.working=True;revision=self.revision
         def work():
             if self.stopped.is_set() or library is not h.library:return []
             wanted_ids={p['id'] for p in h.queue[:horizon]}-h.inflight
@@ -39,6 +39,7 @@ class MetadataService(QObject):
         def done(rows):
             self.working=False
             if self.stopped.is_set():return
+            if revision!=self.revision or library is not h.library:self.update();return
             for photo,text in rows:
                 key=self.key(library,photo)
                 if text is None:self.retry(key,'未能读取此照片的拍摄参数')
@@ -48,6 +49,7 @@ class MetadataService(QObject):
         def failed(message):
             self.working=False
             if self.stopped.is_set():return
+            if revision!=self.revision or library is not h.library:self.update();return
             for photo in wanted:self.retry(self.key(library,photo),message)
             self.update()
         h.submit(work,done,failed,self.pool,-5)
@@ -59,7 +61,7 @@ class MetadataService(QObject):
         crashlog.event('metadata_read_retry',photo_id=key[1],attempt=count,retry_in=delay,error=str(message)[:500])
 
     def clear(self):
-        self.cache.clear();self.retries.clear()
+        self.revision+=1;self.cache.clear();self.retries.clear()
 
     def shutdown(self):
         self.stopped.set();self.timer.stop();self.host.metadata_reader.close();self.pool.waitForDone()

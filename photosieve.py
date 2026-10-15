@@ -5,6 +5,9 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    if 3<=len(sys.argv)<=4 and sys.argv[1]=='--cache-full-self-test':
+        from tools.check_full_cache import run
+        run(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else None);sys.exit(0)
     if len(sys.argv)==3 and sys.argv[1]=='--zoom-motion-self-test':
         from tools.check_zoom_motion import run
         run(sys.argv[2]);sys.exit(0)

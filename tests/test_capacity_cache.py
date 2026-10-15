@@ -1,4 +1,4 @@
-"""Latest policy: reaching the byte limit immediately evicts the oldest 70% by file count."""
+"""Retain caches at the limit; exceeding it evicts the oldest 70% by file count."""
 import os
 import tempfile
 import time
@@ -9,19 +9,21 @@ from app import Library
 from cache_policy import prune_workspaces
 
 class CapacityCacheTest(unittest.TestCase):
-    def test_equal_limit_evicts_exact_oldest_seventy_percent_in_one_pass(self):
+    def test_equal_limit_is_retained_and_exceeding_evicts_oldest_seventy_percent(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); cache=root/'cache'; cache.mkdir()
             files=[]
             for i in range(10):
                 path=cache/f'{i}.jpg';path.write_bytes(b'x'*10);os.utime(path,(100+i,100+i));files.append(path)
-            self.assertEqual(prune_workspaces(root,limit=100),(7,30))
+            self.assertEqual(prune_workspaces(root,limit=100),(0,100))
+            self.assertTrue(all(p.exists() for p in files))
+            self.assertEqual(prune_workspaces(root,limit=99),(7,30))
             self.assertFalse(any(p.exists() for p in files[:7]));self.assertTrue(all(p.exists() for p in files[7:]))
 
     def test_new_cache_registration_triggers_cleanup_without_waiting_for_a_timer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary).resolve(); photos=root/'photos';photos.mkdir(); library=Library(root/'data')
-            library.cache_limit=100; files=[]
+            library.cache_limit=99; files=[]
             for i in range(10):
                 source=photos/f'{i}.jpg';Image.new('RGB',(8,8),'blue').save(source);stat=source.stat()
                 with library.connect() as db:

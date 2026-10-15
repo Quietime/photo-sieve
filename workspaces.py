@@ -8,6 +8,17 @@ from app import Library
 def workspace_key(folder):
     return hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
 
+def clear_previous_workspace_cache(previous, next_folder):
+    """After the caller pauses/drains its workers, release only a different folder's derived cache.
+
+    Rescanning the same folder keeps every cached preview. Originals, reversible
+    trash, ratings, screening/history records and the workspace database remain.
+    """
+    if previous is None or not next_folder:return 0
+    current=previous.meta('root')
+    if not current or Path(current).resolve()==Path(next_folder).resolve():return 0
+    return previous.clear_preview_cache(include_recognition=True)
+
 def open_workspace(root, folder, previous=None, cache_mb=None):
     target=Path(root)/'libraries'/workspace_key(folder)
     database=target/'library.sqlite3'

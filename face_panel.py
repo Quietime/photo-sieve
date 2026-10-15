@@ -8,6 +8,9 @@ class FacePanel(QWidget):
         super().__init__(parent);self.result=None;self.picture=QPixmap()
         self.move(4,4);self.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.hide()
     def show_result(self,result):
+        payload=result.get('imagebytes') if result else None
+        if payload is getattr(self,'_payload',None) and not self.picture.isNull():self.result=result;return
+        self._payload=payload
         self.result=result;self.picture=QPixmap()
         if result and result.get('imagebytes'):self.picture.loadFromData(result['imagebytes'])
         if self.picture.isNull():self.hide();return

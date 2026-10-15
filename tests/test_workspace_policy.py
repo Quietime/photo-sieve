@@ -50,14 +50,15 @@ class WorkspacePolicyTest(unittest.TestCase):
         self.assertTrue(backup.exists()); self.assertTrue(self.lib.job['errors'])
         self.assertEqual(self.lib.state()['counts']['deleted'],1)
 
-    def test_selected_preview_expires_but_originals_records_and_pending_preview_remain(self):
+    def test_deleted_preview_expires_but_old_kept_and_pending_previews_remain(self):
         rows=self.lib.list_photos()
         for row in rows: self.lib.preview(row['id'],320)
         self.lib.mark(rows[0]['id'],1); self.lib.trash(rows[1]['id'])
         recent=self.lib.cache_path(Path(rows[0]['path']),rows[0]['size'],rows[0]['mtime'],320)
         old=self.lib.cache_path(Path(rows[1]['path']),rows[1]['size'],rows[1]['mtime'],320)
         pending=self.lib.cache_path(Path(rows[2]['path']),rows[2]['size'],rows[2]['mtime'],320)
-        os.utime(old,(1,1)); self.lib.cleanup_processed_cache()
+        for path in (recent,old,pending):os.utime(path,(1,1))
+        self.lib.cleanup_processed_cache()
         self.assertTrue(recent.exists()); self.assertFalse(old.exists()); self.assertTrue(pending.exists())
         self.assertEqual(self.lib.state()['counts']['deleted'],1); self.lib.undo(only_delete=True)
         self.assertTrue(Path(rows[1]['path']).is_file())

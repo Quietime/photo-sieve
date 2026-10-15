@@ -355,7 +355,7 @@ def run(output):
 
                 def cache(dialog):
                     fields = dialog.findChildren(QSpinBox)
-                    assert len(fields) == 3
+                    assert len(fields) == 1
                     audit.check('cache_inputs_have_touch_spacing', all(field.height() >= 32 for field in fields))
                     ordered = sorted(fields, key=lambda field: field.mapTo(dialog, QPoint(0, 0)).y())
                     audit.check('cache_form_rows_have_vertical_spacing', all(
@@ -371,14 +371,11 @@ def run(output):
                         audit.check('cache_step_down_'+str(field_index),field.value()==initial)
                         field.setValue(original)
                     fields[0].setValue(350)
-                    fields[1].setValue(0)
-                    fields[2].setValue(128)
                     audit.screenshot('14b_cache_custom_values', dialog)
                     audit.click(audit.button(dialog, '保存'))
                 panel = audit.open_menu(window, '14a_menu_before_cache')
                 audit.modal('14_preload_and_cache', lambda: audit.click(audit.button(panel, '预加载与缓存…')), cache)
-                audit.check('preload_settings_apply', window.preload_count == 350 and window.warm_count == 0 and
-                    window.library.cache_limit == 128 * 1024 * 1024)
+                audit.check('preload_settings_apply', window.preload_count == 350 and window.library.cache_limit == 10 * 1024**3)
 
                 panel = audit.open_menu(window, '14c_menu_before_clear_cache')
                 audit.click(audit.button(panel,'一键清理全部缓存'))

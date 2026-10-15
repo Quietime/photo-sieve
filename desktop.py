@@ -211,7 +211,9 @@ class Window(QMainWindow):
         self.actionbar_visible=settings.value('review/show_actionbar',True,type=bool)
         self.rating_actionbar_visible=settings.value('rating/show_actionbar',True,type=bool)
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
-        self.warm_count=max(0,min(50000,settings.value('warm_count',1200,type=int)))
+        self.warm_count=50000  # compatibility only; disk caching now covers every non-deleted photo
+        self.library.cache_limit=10*1024**3
+        settings.setValue('cache_mb',10240);self.cache_sweep_key=None
         self.cache_clearing=False;self.importing=False;self.import_revision=None
         self.metadata_reader=MetadataReader()
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
@@ -245,6 +247,10 @@ class Window(QMainWindow):
         self.face_panel=FacePanel(self.face_container);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
         from metadata_service import MetadataService
         self.metadata_service=MetadataService(self)
+        from full_cache import FullCache
+        self.full_cache=FullCache(self)
+        from full_faces import FullFaces
+        self.faces.background_all=True;self.full_faces=FullFaces(self);self.face_sweep_library=None
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.apply_mode_preferences()
@@ -256,7 +262,7 @@ class Window(QMainWindow):
 
     def cache_growth(self,delta):
         self.cache_total=max(0,self.cache_total+delta)
-        if self.cache_total>=10*1024**3: self.maintain_cache()
+        if self.cache_total>10*1024**3: self.maintain_cache()
 
     def maintain_cache(self):
         if self.maintenance_running or self.cache_clearing or self.closed: return
@@ -269,6 +275,7 @@ class Window(QMainWindow):
         def finished(result):
             self.maintenance_running=False; self.cache_total=result[1]
             if library is not self.library:return
+            library.cache_evictions=getattr(library,'cache_evictions',0)+result[0]
             jpg_sizes=[size for name,size in list(library.cache_sizes.items()) if name.endswith('.jpg')]
             if jpg_sizes:self.estimated_preview_bytes=max(512*1024,2*sum(jpg_sizes)//len(jpg_sizes))
             self.refresh_cache_plan();self.trim_previews()
@@ -562,36 +569,43 @@ class Window(QMainWindow):
         layout=QVBoxLayout(dialog); layout.setContentsMargins(24,20,24,24); layout.setSpacing(18)
         form=QFormLayout(); form.setContentsMargins(0,0,0,0); form.setVerticalSpacing(16); form.setHorizontalSpacing(20)
         ahead=CacheSpinBox(); ahead.setRange(0,5000); ahead.setSpecialValueText('自动（按内存调整）'); ahead.setValue(self.preload_count)
-        warm=CacheSpinBox(); warm.setRange(0,50000); warm.setValue(self.warm_count)
-        disk=CacheSpinBox(); disk.setRange(64,10240); disk.setSuffix(' MB'); disk.setValue(self.library.cache_limit//(1024*1024))
-        for field in (ahead,warm,disk): field.setMinimumHeight(38); field.setMinimumWidth(240)
-        form.addRow('内存预加载照片数',ahead); form.addRow('后台磁盘预读照片数',warm); form.addRow('磁盘缓存上限',disk)
+        ahead.setMinimumHeight(38);ahead.setMinimumWidth(240)
+        scope=QLabel('全部未删除照片，后台自动生成');scope.setMinimumHeight(38)
+        limit=QLabel('固定 10 GB');limit.setMinimumHeight(38)
+        form.addRow('内存预加载照片数',ahead);form.addRow('磁盘缓存范围',scope);form.addRow('磁盘缓存上限',limit)
         form_box=QWidget();form_box.setLayout(form);form_box.setFixedHeight(3*38+2*16);layout.addWidget(form_box)
-        note=QLabel(); note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
+        note=QLabel();note.setObjectName('caption');note.setWordWrap(True);layout.addWidget(note)
+        progress=QLabel();progress.setObjectName('cache-progress');progress.setWordWrap(True);layout.addWidget(progress)
         def estimate():
-            size=self.display_size or QSize(800,600); count=ahead.value() or machine.PROFILE.buffer(size.width()*size.height()*4)
+            size=self.display_size or QSize(800,600);count=ahead.value() or machine.PROFILE.buffer(size.width()*size.height()*4)
             effective=machine.PROFILE.preview_capacity(max(16,count),size.width()*size.height()*4+160*110*4,COMPOSITING['gpu'])
-            from cache_plan import photo_limits,face_limits
-            _,disk_count=photo_limits(effective,warm.value(),disk.value()*1024**2,self.estimated_preview_bytes)
-            face_memory,face_disk,face_ram=face_limits(self.faces.ahead,effective,disk_count)
-            note.setText(f'当前窗口实际预加载上限 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。后台磁盘预读上限 {disk_count:,} 张。\n人脸跟随照片缓存：预识别后续 {face_disk} 张，内存最多 {face_ram} 份／64 MB，当前照片优先。后台预读设为 0 时，仅处理内存预加载范围。\n照片预览和人脸共用磁盘限额；达到限额按生成时间清除最旧 70%，已处理且生成超过 2 分钟的缓存自动清理。全部工作文件夹总上限 10 GB。照片与筛选记录会保留。')
+            from cache_plan import face_limits
+            _,face_disk,face_ram=face_limits(self.faces.ahead,effective,max(effective,self.faces.ahead+1))
+            note.setText(f'内存仅预加载附近 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。全部未筛选与保留照片按当前显示分辨率持续生成磁盘预览，不受内存张数限制。\n全部未筛选照片在后台识别人脸，附近 {face_disk} 张预载人脸结果；内存最多 {face_ram} 份／64 MB。已有照片与人脸缓存保留，只有总缓存超过 10 GB 才清除最旧 70%。\n切换到其他文件夹后，清除上一文件夹的照片与人脸缓存；原片、评级和筛选记录保留。')
             note.setMinimumHeight(note.heightForWidth(dialog.minimumWidth()-48))
-        for field in (ahead,warm,disk):field.valueChanged.connect(estimate)
-        estimate()
+        def show_progress():
+            state=self.full_cache.status();visited=state.get('visited',0);total=state.get('total') or 0
+            status='本轮缓存检查完成' if state.get('finished') else '后台缓存生成中' if state.get('running') else '等待后台缓存'
+            face=self.full_faces.status();face_text=f"；人脸已处理 {face.get('visited',0):,} / {face.get('total') or 0:,} 张" if self.faces.enabled else '；人脸识别已关闭'
+            failures=state.get('errors',0)+face.get('errors',0)
+            extra=f'；{failures} 项失败，可查看运行日志' if failures else ''
+            if state.get('capacity_evictions') or face.get('capacity_evictions'):extra+='；超限旧缓存已按规则清理'
+            progress.setText(f'{status}：{visited:,} / {total:,} 张；当前磁盘缓存 {self.library.cache_bytes/1024**3:.2f} GB'+face_text+extra)
+        ahead.valueChanged.connect(estimate);estimate();show_progress()
+        refresh=QTimer(dialog);refresh.timeout.connect(show_progress);refresh.start(500)
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
         def save():
-            self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0; self.warm_count=warm.value(); self.library.cache_limit=disk.value()*1024*1024
-            settings=QSettings('PhotoSieve','PhotoSieve')
-            for key,value in [('preload_count',self.preload_count),('warm_count',self.warm_count),('cache_mb',disk.value())]: settings.setValue(key,value)
-            settings.sync(); self.display_size=None; self.update_display_size(); self.trim_previews(); self.library.schedule_prune(); self.maintain_cache(); self.prefetch(); dialog.accept()
-        buttons.addWidget(self.button('保存',save,'primary')); layout.addLayout(buttons); dialog.exec()
+            self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0;self.library.cache_limit=10*1024**3
+            settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue('preload_count',self.preload_count);settings.setValue('cache_mb',10240);settings.sync()
+            self.display_size=None;self.update_display_size();self.trim_previews();self.library.schedule_prune();self.maintain_cache();self.prefetch();dialog.accept()
+        buttons.addWidget(self.button('保存',save,'primary'));layout.addLayout(buttons);dialog.exec();refresh.stop()
 
     def clear_cache(self):
         if self.cache_clearing or self.busy or self.job_running() or self.pending_ops or self.rating_page.writing:return
         from cache_policy import clear_workspace_caches
         if getattr(self,'more_panel',None):self.more_panel.hide()
         self.finish_motion()
-        self.cache_clearing=True;library=self.library;self.busy=True;self.update_actions()
+        self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.cache_sweep_key=None;self.face_sweep_library=None;library=self.library;self.busy=True;self.update_actions()
         rating_active=self.rating_page.active
         if rating_active:self.rating_page.deactivate()
         self.album.revision+=1
@@ -611,7 +625,7 @@ class Window(QMainWindow):
                 self.rating_page.active=True;self.rating_page.show_current();self.rating_page.visible()
             elif self.stack.currentWidget() is self.album and self.album.photo:self.album.open(self.album.photo['id'])
             else:self.render();self.prefetch();self.queue_kept_thumbnails();self.queue_deleted_thumbnails()
-            self.update_actions()
+            self.ensure_full_cache(force=True);self.update_actions()
         def done(count):
             resume();self.maintain_cache();self.toast.show_message(f'已清理 {count:,} 个缓存文件；当前照片按需重新加载','info')
         def failed(message):resume();self.error(message)
@@ -710,7 +724,7 @@ class Window(QMainWindow):
                 self.import_page.set_progress(job.get('phase','正在打开照片文件夹'),job['done'],job['total'],state['root'],job.get('found',0))
                 if running:
                     self.timer.start(180);self.progress.set_progress(job['done'],job['total']);self.was_running=True;self.update_actions();return
-                self.importing=False;self.busy=False;self.stack.setCurrentIndex(1 if self.view=='deleted' else 4 if self.view=='keep' else 0);self.keep_back_button.hide();self.place_overlays()
+                self.importing=False;self.busy=False;self.ensure_full_cache(force=True);self.stack.setCurrentIndex(1 if self.view=='deleted' else 4 if self.view=='keep' else 0);self.keep_back_button.hide();self.place_overlays()
                 if self.rating_active:
                     self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate();self.timer.stop();self.progress.set_progress(0,0,False);self.was_running=False;self.update_actions();return
                 self.toast.hide();self.load(anchor=max(0,state['cursor']-1))
@@ -729,7 +743,7 @@ class Window(QMainWindow):
                 self.was_running=running;self.update_actions();return
             if first:
                 self.stack.setCurrentIndex(2 if not state['root'] and not running else (1 if self.view == 'deleted' else 4 if self.view=='keep' else 0)); self.place_overlays()
-                if state['root'] or running: self.load(anchor=max(0, state['cursor'] - 1))
+                if state['root'] or running: self.load(anchor=max(0, state['cursor'] - 1));self.ensure_full_cache()
             elif not running and (self.was_running or job.get('revision') != old['job'].get('revision')):
                 errors = job.get('errors', []); message = job['kind'] + '：' + job['message'] + (f'，{len(errors)} 项失败' if errors else '')
                 self.toast.show_message(message, 'error' if errors or job['message'] != '已完成' else 'info', 3600)
@@ -811,9 +825,18 @@ class Window(QMainWindow):
         target=target_id if target_id is not None else anchor+1 if anchor else 0
         self.submit(lambda: library.list_photos(view,target,'next',60 if view=='deleted' else PAGE,inclusive=bool(anchor) or target_id is not None,**options),done,failed)
 
+    def ensure_full_cache(self,force=False):
+        if not hasattr(self,'full_cache') or self.closed or not self.session_active or self.importing or self.cache_clearing or self.display_size is None:return
+        edge=self.preview_edge(self.display_size);key=(id(self.library),edge)
+        if (not force and key==self.cache_sweep_key) or self.library.job['running']:return
+        if not self.library.meta('root'):return
+        self.cache_sweep_key=key
+        self.full_cache.start(self.library,edge,total=self.counts.get('all'))
+        if force or self.face_sweep_library is not self.library:
+            self.face_sweep_library=self.library;self.full_faces.start(self.library,1600,total=self.counts.get('pending'))
+
     def refresh_cache_plan(self):
-        from cache_plan import photo_limits
-        _,self.disk_horizon=photo_limits(self.ahead_target,self.warm_count,self.library.cache_limit,self.estimated_preview_bytes)
+        self.disk_horizon=max(self.ahead_target,getattr(getattr(self,'faces',None),'ahead',50)+1)
         if hasattr(self,'faces'):self.faces.update()
 
     def refill(self):
@@ -844,7 +867,7 @@ class Window(QMainWindow):
             requested=max(STRIP,self.preload_count) if self.preload_count else machine.PROFILE.buffer(pixel_bytes)
             self.ahead_target=machine.PROFILE.preview_capacity(requested,pixel_bytes,COMPOSITING['gpu'])
             self.cache_limit = self.ahead_target + BEHIND
-            self.refresh_cache_plan()
+            self.refresh_cache_plan();self.ensure_full_cache()
             return old is not None
         return False
 
@@ -892,6 +915,7 @@ class Window(QMainWindow):
             self.cache.pop(old); self.cache_size.pop(old,None); self.sources.pop(old,None)
 
     def prefetch(self):
+        self.ensure_full_cache()
         if self.rating_active or self.view!='pending':return
         if not self.session_active or self.importing or self.cache_clearing or self.view == 'deleted' or self.view=='keep' and self.stack.currentIndex()==4 or self.display_size is None: return
         self.refill()  # custom horizons can exceed the first 1,200 metadata rows
@@ -899,24 +923,7 @@ class Window(QMainWindow):
         for index, photo in enumerate(self.queue[:self.ahead_target]):
             if len(self.loading) >= self.in_flight: break
             self.request_image(photo, 1000 - index)
-        # Beyond that, build disk previews ahead with every decoder, but only once the nearest photos are ready.
-        library = self.library; limit = 0 if self.loading else self.workers
-        if len(self.warming) >= limit: return
-        # Previews average roughly 0.4 MB; never warm further ahead than 40% of the disk cache holds.
-        horizon = self.disk_horizon
-        for photo in self.queue[self.ahead_target:horizon]:
-            if len(self.warming) >= limit: break
-            pid = photo['id']
-            if pid in self.warming or pid in self.warmed or pid in self.cache: continue
-            self.warming.add(pid)
-            def settled(_, pid=pid):
-                if library is not self.library:return
-                self.warming.discard(pid); self.warmed.add(pid); self.prefetch()
-            def warm_work(pid=pid):
-                if library is not self.library or pid in self.inflight:return
-                if not any(p['id']==pid for p in self.queue[self.ahead_target:self.disk_horizon]):return
-                library.preview(pid,1600)
-            self.submit(warm_work, settled, settled, self.image_pool, -10)
+        self.full_cache.pump()
 
     @staticmethod
     def preview_edge(size):
@@ -976,8 +983,8 @@ class Window(QMainWindow):
     def face_settings(self):
         dialog=QDialog(self);dialog.setWindowTitle('人脸预览');dialog.setMinimumWidth(480);layout=QVBoxLayout(dialog)
         enabled=QCheckBox('显示当前左图的人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
-        form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('向后预处理照片数',ahead);layout.addLayout(form)
-        note=QLabel('完全本地检测，当前照片优先。实际预识别数量与缓存设置中的内存预加载、后台磁盘预读和容量上限联动。\n0 表示只处理当前照片。人脸缓存计入照片缓存总限额，已处理照片会自动清理。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
+        form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('附近人脸内存预加载数',ahead);layout.addLayout(form)
+        note=QLabel('全部未筛选照片在后台完成本地识别，切换时只显示已有缓存。这里调整附近人脸结果的内存预加载范围，不限制整库识别数量。\n0 表示不预载后续照片的人脸。人脸与照片共用 10 GB 缓存限额；切换文件夹后清理旧缓存。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
         row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
         def save():self.faces.configure(enabled.isChecked(),ahead.value());self.face_changed(self.queue[0]['id'] if self.queue else None,None);dialog.accept()
         row.addWidget(self.button('保存',save,'primary'));layout.addLayout(row);dialog.exec()
@@ -1006,7 +1013,7 @@ class Window(QMainWindow):
         self.load_strip_thumbnails()
 
     def load_strip_thumbnails(self,*_):
-        if self.closed or self.importing or self.view!='pending':return
+        if self.closed or self.importing or self.cache_clearing or self.view!='pending':return
         ids=[pid for pid in self.strip.visible_ids() if pid not in self.thumb_cache and pid not in self.cache and pid not in self.strip_loading and pid not in self.image_errors]
         available=max(0,8-len(self.strip_loading));ids=ids[:available]
         library=self.library
@@ -1207,6 +1214,7 @@ class Window(QMainWindow):
             self.restore_running=False
             if generation != self.generation: return
             pid = result['id']; photo = result['photo']; self.delete_streak = 0;self.refresh_strip()
+            if result.get('restored') and photo:self.full_cache.refresh_photo(pid);self.full_faces.refresh_photo(pid)
             if self.state_data is not None:self.state_data['can_undo']=result['can_undo']
             if self.counts and photo:
                 destination='keep' if photo['status']==1 else 'pending'
@@ -1257,7 +1265,7 @@ class Window(QMainWindow):
             result,state=payload
             self.busy=False;self.deleted_grid.setEnabled(True);self.all_deleted_selected=False
             self.state_data=state;self.counts=dict(state['counts']);self.was_running=False
-            self.show_counts();self.load();self.timer.start(180)
+            self.show_counts();self.load();self.ensure_full_cache(force=True);self.timer.start(180)
             errors=result.get('errors',[])
             self.toast.show_message(f'已完成，{len(errors)} 项失败；未完成的照片仍保留' if errors else message,'error' if errors else 'info',3000)
             self.update_actions()
@@ -1386,17 +1394,33 @@ class Window(QMainWindow):
         if self.rating_page.writing:return
         self.rating_page.deactivate()
         if folder is None: self.choose_source(); return
-        if self.busy: return
+        if self.busy or self.pending_ops or self.job_running(): return
         folder = str(folder); self.session_active=True; self.state_data=None; current = self.library.meta('root')
         self.busy=True;self.importing=True;self.import_revision=None;self.update_actions();self.toast.hide()
         self.import_page.set_progress('正在打开筛选记录',folder=folder);self.stack.setCurrentIndex(3);self.place_overlays()
         crashlog.event('opening_folder',folder=folder,preload_requested=self.preload_count,done=0,total=0,found=0,file='')
         if (current and Path(current).resolve() != Path(folder).resolve()) or (self.managed_workspaces and (not current or not self.library.directory.is_relative_to(self.data_root.resolve()))):
             newdir = self.data_root / 'libraries' / hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
+            previous=self.library
+            self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.cache_sweep_key=None;self.face_sweep_library=None;self.faces.timer.stop();self.thumb_wanted.clear()
+            self.album.revision+=1;self.album.stop_transition();self.album.full_preview=None;self.album.preview=None;self.album.photo=None;self.album.pane.show_photo(None)
+            for pane in (*self.photos,*self.rating_page.panes):pane.show_photo(None)
+            self.import_page.set_progress('正在清理上一文件夹缓存',folder=folder)
+            def prepare():
+                if not Path(folder).is_dir():raise ValueError('文件夹不存在，或硬盘尚未连接')
+                library=open_workspace(self.data_root,folder,self.previous_library,10240) if self.managed_workspaces else Library(newdir,10240)
+                # No producer can enqueue more old-workspace writes while paused.
+                # Wait on worker pools, never on this pool executing the barrier.
+                for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool,self.op_pool):pool.waitForDone()
+                from workspaces import clear_previous_workspace_cache
+                clear_previous_workspace_cache(previous,folder)
+                return library
             def changed(library):
                 QSettings('PhotoSieve', 'PhotoSieve').setValue('library', str(library.directory)); library.offload = self.decoders
-                self.library.stop_session(); library.start_session()
+                self.library.cache_changed=None;self.library.stop_session(); library.start_session()
                 self.library = library; library.cache_changed=self.cache_changed.emit; self.generation += 1
+                self.cache_clearing=False;self.faces.clear_memory();self.faces.timer.start(80);self.face_panel.show_result(None);self.metadata_service.clear()
+                self.rating_page.images.clear();self.rating_page.thumbs.clear();self.rating_page.source_widths.clear()
                 self.strip_revision+=1;self.strip.clear();self.kept_revision+=1;self.kept_grid.clear();self.kept_thumb_cache.clear();self.kept_loading.clear()
                 crashlog.event('workspace_ready',library=str(library.directory))
                 for store in (self.cache, self.cache_size, self.sources, self.loading, self.image_errors, self.thumb_cache, self.focus_loading, self.warming, self.warmed,self.strip_loading): store.clear()
@@ -1404,9 +1428,9 @@ class Window(QMainWindow):
                 self.cursor_timer.stop(); self.cursor_id = 0; self.view = 'pending'; self.segments.set_current('pending', False)
                 self.queue = []; self.render(); self.start_scan(library, folder)
             def failed(message):
+                self.cache_clearing=False;self.faces.timer.start(80)
                 self.busy = False;self.importing=False;self.session_active=False;self.stack.setCurrentIndex(2);self.update_actions();self.error(message)
-            cache_mb=QSettings('PhotoSieve','PhotoSieve').value('cache_mb',self.library.cache_limit//1024**2,type=int)
-            self.submit(lambda: open_workspace(self.data_root,folder,self.previous_library,cache_mb) if self.managed_workspaces else Library(newdir,cache_mb), changed, failed)
+            self.submit(prepare, changed, failed)
             return
         self.start_scan(self.library, folder)
 
@@ -1557,6 +1581,7 @@ class Window(QMainWindow):
         self.pump_thumbnails()
 
     def pump_thumbnails(self):
+        if self.cache_clearing or self.closed:return
         library = self.library; generation = self.generation; dpr = self.devicePixelRatioF(); size = (round(176 * dpr), round(118 * dpr))
         while self.thumb_wanted and len(self.thumb_loading) < 3:
             pid = self.thumb_wanted.popleft()
@@ -1614,6 +1639,7 @@ class Window(QMainWindow):
             if box.choice is None:event.ignore();self.closing=False;self.uninstall_requested=False;return
             self.close_choice=box.choice
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
+        self.full_cache.stop();self.full_cache.timer.stop();self.full_faces.stop();self.full_faces.timer.stop()
         self.rating_page.shutdown()
         self.metadata_service.shutdown();self.faces.shutdown();self.faces.pool.waitForDone()
         self.closed = True
@@ -1693,7 +1719,7 @@ def main():
                 existing = Library(directory, args.cache_mb).meta('root')
                 if existing and Path(existing).resolve() != Path(args.folder).resolve():
                     directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
-            library = Library(directory, args.cache_mb or settings.value('cache_mb',0,type=int)); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory)
+            library = Library(directory, args.cache_mb or 10240); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory)
             screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
             window.move(screen.center()-window.rect().center());window.show()
             if args.update_restart_marker:

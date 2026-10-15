@@ -135,6 +135,7 @@ class FaceService(QObject):
         self._current_since = 0.0
         self._refine_failed = set()
         self._job = None
+        self.background_all=False;self._cache_loading=False;self._cache_attempted=set();self._cache_revision=0
         self.timer = QTimer(self)
         self.timer.setInterval(80)
         self.timer.timeout.connect(self.update)
@@ -219,6 +220,10 @@ class FaceService(QObject):
         token = self._synchronize()
         self._trim_results()
         if not self._active():
+            return
+        if self.background_all:
+            self._done.intersection_update(cache_key(p) for p in self.host.queue[:self.memory_ahead+1])
+            self.preload_cached()
             return
         library = self.host.library
         importing = bool(getattr(self.host, 'importing', False))
@@ -318,6 +323,48 @@ class FaceService(QObject):
                 self._sample_after = time.monotonic() + 2
             self.update()
         self.host.submit(work, completed, failed, self.pool)
+
+    def preload_cached(self):
+        """Hydrate nearby disk results while the whole-folder detector runs.
+
+        This path never opens an original or runs recognition after a click.
+        A slow detector cannot block loading an already-generated face crop.
+        """
+        if self._cache_loading:return
+        rows=[dict(p) for p in self.host.queue[:self.memory_ahead+1]]
+        candidates={cache_key(p) for p in rows};self._cache_attempted.intersection_update(candidates)
+        wanted=[p for p in rows if cache_key(p) not in self._results and cache_key(p) not in self._cache_attempted]
+        if not wanted:return
+        self._cache_loading=True;token=self._token();revision=self._cache_revision;library=self.host.library
+        self._cache_attempted.update(cache_key(p) for p in wanted)
+        def work():
+            self._ensure_schema(library);results=[]
+            with library.connect() as db:
+                for photo in wanted:
+                    key=cache_key(photo)
+                    row=db.execute('SELECT faces_json,metadata_json FROM face_metadata WHERE cache_key=?',(key,)).fetchone()
+                    if row is None:continue
+                    try:
+                        metadata=json.loads(row['metadata_json']);faces=json.loads(row['faces_json']);payload=None
+                        if faces:
+                            target=cache_path(library,photo)
+                            if target.is_symlink():continue
+                            payload=library.read_cache(target)
+                            if payload is None:continue
+                            with Image.open(io.BytesIO(payload)) as image:
+                                if image.format!='PNG':continue
+                                image.verify()
+                        results.append((photo,dict(metadata,imagebytes=payload,photo_id=photo['id'],cache_key=key)))
+                    except (ValueError,TypeError,OSError,SyntaxError):continue
+            return results
+        def done(results):
+            self._cache_loading=False
+            if self._closed or token!=self._token() or revision!=self._cache_revision or getattr(self.host,'cache_clearing',False):return
+            for photo,result in results:
+                self._remember(cache_key(photo),result);self.changed.emit(photo['id'],dict(result))
+            self.update()
+        def failed(message):self._cache_loading=False
+        self.host.submit(work,done,failed,getattr(self.host,'thumb_pool',self.pool),100)
 
     def _remember(self, key, result):
         self._results[key] = result
@@ -494,6 +541,7 @@ class FaceService(QObject):
 
     def clear_memory(self):
         """Use after manual cache clearing; face locations remain in SQLite."""
+        self._cache_revision+=1;self._cache_attempted.clear()
         self._results.clear()
         self._import_rows=[]
         self._recent_keys.clear()

@@ -46,14 +46,14 @@ class FaceCachePolicyTest(unittest.TestCase):
         with self.library.connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM cache_index').fetchone()[0],0)
 
-    def test_processed_png_obeys_two_minute_undo_grace(self):
+    def test_kept_face_png_survives_past_two_minutes(self):
         self.library.mark(1,1)
         os.utime(self.face,(time.time()-60,time.time()-60))
         self.assertEqual(self.library.cleanup_processed_cache(),0)
         self.assertTrue(self.face.exists())
         os.utime(self.face,(time.time()-121,time.time()-121))
-        self.assertEqual(self.library.cleanup_processed_cache(),1)
-        self.assertFalse(self.face.exists())
+        self.assertEqual(self.library.cleanup_processed_cache(),0)
+        self.assertTrue(self.face.exists())
         self.assertEqual(self.library.photo(1)['status'],1)
 
     def test_limit_evicts_oldest_seventy_percent_of_mixed_png_jpeg(self):
@@ -64,7 +64,8 @@ class FaceCachePolicyTest(unittest.TestCase):
             path.write_bytes(bytes(100))
             os.utime(path,(index+1,index+1))
             paths.append(path)
-        removed,total = prune_workspaces(self.library.directory,limit=1000)
+        self.assertEqual(prune_workspaces(self.library.directory,limit=1000),(0,1000))
+        removed,total = prune_workspaces(self.library.directory,limit=999)
         self.assertEqual((removed,total),(7,300))
         self.assertEqual([p.name for p in paths if p.exists()],['07.png','08.jpg','09.png'])
 

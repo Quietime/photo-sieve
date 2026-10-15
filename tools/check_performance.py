@@ -209,7 +209,7 @@ def run(args):
             assert all(not p.exists() for p in cache_files[:5]) and all(p.exists() for p in cache_files[5:]) and protected.exists()
             report['checks']['global_cache_budget']={'configured_bytes':MAX_BYTES,'scaled_bytes':3*4096,'removed_in_one_pass':removed,'oldest_first':True,'originals_preserved':True}
 
-            # Diagnostic-only legacy indexed housekeeping helper and real records: mature kept previews expire, recent ones survive.
+            # Indexed housekeeping retains both old and recent kept previews below the cache budget.
             kept_id=initial[1];library.mark(kept_id,1); row=library.photo(kept_id)
             library.preview(kept_id,1600)
             old=library.cache_path(Path(row['path']),row['size'],row['mtime'],320)
@@ -217,8 +217,8 @@ def run(args):
             assert old.exists() and fresh.exists()
             os.utime(old,(time.time()-300,time.time()-300))
             library.cleanup_processed_cache(grace=120)
-            assert not old.exists() and fresh.exists() and Path(row['path']).exists()
-            report['checks']['diagnostic_indexed_cleanup']={'expired_preview_removed':True,'recent_preview_retained':True,'original_preserved':True}
+            assert old.exists() and fresh.exists() and Path(row['path']).exists()
+            report['checks']['diagnostic_indexed_cleanup']={'kept_preview_retained':True,'recent_preview_retained':True,'original_preserved':True}
 
             heartbeat.stop(); report['checks']['ui_timer_excess_delay']=distribution(stalls)
             # Report performance changes without encoding this machine's speed into brittle assertions.
@@ -243,8 +243,8 @@ def run(args):
         dormant.preview(kept_id,1600)
         dormant_cache=dormant.cache_path(Path(row['path']),row['size'],row['mtime'],320)
         os.utime(dormant_cache,(time.time()-300,time.time()-300))
-        assert expire_inactive_workspaces(base/'workspaces',library.directory)==1 and not dormant_cache.exists()
-        report['checks']['inactive_workspace_expiry']={'expired_preview_removed':True,'database_preserved':dormant.database.is_file()}
+        assert expire_inactive_workspaces(base/'workspaces',library.directory)==0 and dormant_cache.exists()
+        report['checks']['inactive_workspace_expiry']={'kept_preview_retained':True,'database_preserved':dormant.database.is_file()}
     report['passed']=True
     return report
 
