@@ -303,11 +303,14 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content cache-all-settings-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings failed' }
       - name: Verify permanent disk-delete controls in packaged EXE
         if: env.CHECK_SCOPE == 'cache_all_final'
+        timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-disk-frozen-ci' -Wait -PassThru
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-disk-frozen-ci' -PassThru -RedirectStandardOutput deleted-disk-frozen.stdout.txt -RedirectStandardError deleted-disk-frozen.stderr.txt
+          if (!$p.WaitForExit(120000)) { taskkill /PID $p.Id /T /F; throw 'Packaged disk-delete check exceeded 120 seconds; inspect captured diagnostics' }
+          $p.Refresh()
           if ($p.ExitCode -ne 0 -or !(Get-Content deleted-disk-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged permanent disk-delete controls failed' }
       - name: Verify zoom and album motion in packaged EXE
         if: env.CHECK_SCOPE == 'zoom_ui'
@@ -376,6 +379,7 @@ jobs:
             features-frozen-ci/*
             arw-rating-frozen-ci/*
             deleted-disk-frozen-ci/*
+            deleted-disk-frozen.*.txt
             full-cache-frozen-ci/*
             cache-all-settings-frozen-ci/*
             zoom-frozen-ci/*
