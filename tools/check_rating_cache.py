@@ -58,6 +58,7 @@ def run(output):
                     window.toggle_rating();window.toggle_rating()
                     until(lambda:page.pid()==first and page.pane.pixmap is not None and not page.loading)
                     assert page.images[first][1] is pix and page.thumbs[first] is thumb
+                    assert page.grid.captions[first].split('\n')[0]=='000.jpg'
                     checks.append('leaving_and_reentering_grading_preserves_same_folder_cache')
                     page.toggle_gallery();until(lambda:all(pid in page.thumbs for pid in page.grid.visible_ids()))
                     window.grab().save(str(output/'grading-cached-gallery.png'))

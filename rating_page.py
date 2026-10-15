@@ -23,7 +23,7 @@ class RatingPage(QWidget):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
         self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.ids=[];self.index=0
-        self.info={};self.source_widths={};self.image_sizes={};self.fingerprints={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
+        self.info={};self.source_widths={};self.image_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
@@ -80,7 +80,7 @@ class RatingPage(QWidget):
             self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.clear_previews()
         self.reload()
     def clear_previews(self):
-        self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.preview_errors.clear()
+        self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.thumb_photos.clear();self.preview_errors.clear()
     def deactivate(self):
         self.active=False;self.generation+=1;self.scanning=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
     def reload(self,*_):
@@ -102,9 +102,12 @@ class RatingPage(QWidget):
             ids,fingerprints=value
             for pid in cached:
                 if self.fingerprints.get(pid)!=fingerprints.get(pid):
-                    self.images.pop(pid,None);self.thumbs.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
+                    self.images.pop(pid,None);self.thumbs.pop(pid,None);self.thumb_photos.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
             self.preview_errors.clear()
-            self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear();self.grid.set_ids(ids);self.strip.set_ids(ids);self.show_current();self.visible()
+            self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear()
+            for pid,photo in self.thumb_photos.items():
+                self.grid.captions[pid]=photo['name']+'\n'+self.star_text(None);self.grid.tips[pid]=photo['path']
+            self.grid.set_ids(ids);self.strip.set_ids(ids);self.show_current();self.visible()
             if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部照片评级”刷新。')
             else:self.note.setText(f'{len(ids):,} 张照片 · 复用整库磁盘缓存，附近照片提前载入内存；星级与保留 / 删除标记独立。')
         self.host.submit(work,done,self.host.error)
@@ -166,6 +169,8 @@ class RatingPage(QWidget):
         while len(self.thumbs)>max(128,min(512,capacity*4)):self.thumbs.popitem(last=False)
         for pid in list(self.fingerprints):
             if pid not in self.images and pid not in self.thumbs:self.fingerprints.pop(pid,None)
+        for pid in list(self.thumb_photos):
+            if pid not in self.thumbs:self.thumb_photos.pop(pid,None)
     def preview(self,pid,large=False):
         key=(pid,large)
         if self.host.cache_clearing or key in self.preview_errors:return
@@ -193,7 +198,7 @@ class RatingPage(QWidget):
                 self.source_widths[pid]=result[2][0];self.images[pid]=(photo,pix);self.image_sizes[pid]=size
                 self.install_preview(pid,photo,pix)
             else:
-                self.thumbs[pid]=QIcon(pix);self.strip.set_preview_width(pid,pix)
+                self.thumbs[pid]=QIcon(pix);self.thumb_photos[pid]=photo;self.strip.set_preview_width(pid,pix)
                 while len(self.thumbs)>128:self.thumbs.popitem(last=False)
                 self.grid.captions[pid]=photo['name']+'\n'+self.star_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
                 if row>=0:self.grid.photo_model.changed(row)
