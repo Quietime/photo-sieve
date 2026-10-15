@@ -193,12 +193,21 @@ class FaceService(QObject):
     def _active(self):
         if self._closed or not self.enabled or getattr(self.host, 'closed', False) or getattr(self.host, 'closing', False):
             return False
-        if getattr(self.host, 'cache_clearing', False) or getattr(self.host, 'rating_active', False):
+        if getattr(self.host, 'cache_clearing', False):
             return False
+        if getattr(self.host,'rating_active',False):
+            page=getattr(self.host,'rating_page',None)
+            return bool(page and page.active and self._queue() and not getattr(self.host,'busy',False))
         if getattr(self.host, 'importing', False):
             return True
         return (getattr(self.host, 'session_active', True) and getattr(self.host, 'view', 'pending') == 'pending'
                 and self.host.stack.currentIndex() == 0 and not getattr(self.host, 'busy', False))
+
+    def _queue(self):
+        page=getattr(self.host,'rating_page',None)
+        if getattr(self.host,'rating_active',False) and page and page.active:
+            return page.nearby_photos(self.memory_ahead+1)
+        return getattr(self.host,'queue',())
 
     def result_for(self, photo):
         """Immediate bounded-RAM lookup; durable-cache I/O runs in the background pool."""
@@ -221,8 +230,8 @@ class FaceService(QObject):
         self._trim_results()
         if not self._active():
             return
-        if self.background_all:
-            self._done.intersection_update(cache_key(p) for p in self.host.queue[:self.memory_ahead+1])
+        if self.background_all or getattr(self.host,'rating_active',False):
+            self._done.intersection_update(cache_key(p) for p in self._queue()[:self.memory_ahead+1])
             self.preload_cached()
             return
         library = self.host.library
@@ -331,7 +340,7 @@ class FaceService(QObject):
         A slow detector cannot block loading an already-generated face crop.
         """
         if self._cache_loading:return
-        rows=[dict(p) for p in self.host.queue[:self.memory_ahead+1]]
+        rows=[dict(p) for p in self._queue()[:self.memory_ahead+1]]
         candidates={cache_key(p) for p in rows};self._cache_attempted.intersection_update(candidates)
         wanted=[p for p in rows if cache_key(p) not in self._results and cache_key(p) not in self._cache_attempted]
         if not wanted:return
@@ -377,7 +386,7 @@ class FaceService(QObject):
         Far-future detections remain on disk. Only the nearest face horizon and
         four recently viewed crops survive in memory, under the byte safety cap.
         """
-        queue=getattr(self.host,'queue',())
+        queue=self._queue()
         if not queue and getattr(self.host,'importing',False):
             queue=self._import_rows
         memory_ahead,_,limit=self._limits

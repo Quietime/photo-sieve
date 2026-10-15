@@ -8,6 +8,7 @@ from metadata_service import MetadataService
 class Label:
     text=''
     def set_text(self,text):self.text=text
+    setText=set_text
 
 class Reader:
     def __init__(self):self.calls=[];self.entered=threading.Event();self.release=threading.Event()
@@ -17,6 +18,22 @@ class Reader:
     def close(self):self.release.set()
 
 class MetadataTests(unittest.TestCase):
+    def test_grading_parameters_follow_selected_photo_and_reuse_shared_cache(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);photos=base/'photos';photos.mkdir()
+            for i in range(3):Image.new('RGB',(20,30)).save(photos/f'{i}.jpg')
+            library=Library(base/'work');library.scan(photos);until(lambda:not library.job['running'])
+            host=Host(library);host.inflight=set();host.details=[Label(),Label()];host.metadata_reader=Reader()
+            selected=list(host.queue[1:]);label=Label();host.rating_active=True
+            host.rating_page=SimpleNamespace(active=True,nearby_photos=lambda limit:selected[:limit],camera_info=label)
+            service=MetadataService(host)
+            try:
+                for photo in selected:service.cache[service.key(library,photo)]='ISO '+str(photo['id'])
+                service.update();self.assertEqual(label.text,'ISO '+str(selected[0]['id']))
+                selected.pop(0);service.update();self.assertEqual(label.text,'ISO '+str(selected[0]['id']))
+                self.assertFalse(host.metadata_reader.calls);self.assertEqual(host.details[1].text,'')
+            finally:service.shutdown();until(lambda:not host.tasks)
     def test_current_priority_bounded_work_and_immediate_cached_next(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp);photos=base/'photos';photos.mkdir()

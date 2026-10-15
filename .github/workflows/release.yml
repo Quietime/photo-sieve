@@ -67,7 +67,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          python -m unittest tests.test_ratings -v
+          python -m unittest tests.test_ratings tests.test_face_service tests.test_full_faces tests.test_metadata_service tests.test_photo_metadata -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_rating_cache.py rating-cache-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

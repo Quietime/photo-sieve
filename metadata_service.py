@@ -14,24 +14,33 @@ class MetadataService(QObject):
 
     def active(self):
         h=self.host
+        if getattr(h,'rating_active',False):
+            page=getattr(h,'rating_page',None)
+            return not self.stopped.is_set() and not h.closed and bool(page and page.active and self.photos())
         return not self.stopped.is_set() and not h.closed and h.view=='pending' and h.stack.currentIndex()==0 and bool(h.queue)
+
+    def photos(self):
+        h=self.host
+        if getattr(h,'rating_active',False):return h.rating_page.nearby_photos(64)
+        return h.queue
 
     def update(self):
         if not self.active():return
-        h=self.host;library=h.library;current=self.key(library,h.queue[0])
+        h=self.host;library=h.library;queue=self.photos();current=self.key(library,queue[0])
         text=self.cache.get(current)
         if text is None:text='拍摄参数暂未读到，稍后重试' if current in self.retries else '正在读取拍摄参数…'
         elif not text:text='未找到拍摄参数'
-        h.details[1].set_text(text)
+        if getattr(h,'rating_active',False):h.rating_page.camera_info.setText(text)
+        else:h.details[1].set_text(text)
         if self.working:return
         # Snapshot only the nearby future. No FIFO of obsolete photo requests.
         horizon=max(1,min(64,getattr(h,'ahead_target',9)))
-        wanted=[dict(p) for p in h.queue[:horizon] if p['id'] not in h.inflight and self.key(library,p) not in self.cache and time.monotonic()>=self.retries.get(self.key(library,p),(0,0))[1]][:9]
+        wanted=[dict(p) for p in queue[:horizon] if p['id'] not in h.inflight and self.key(library,p) not in self.cache and time.monotonic()>=self.retries.get(self.key(library,p),(0,0))[1]][:9]
         if not wanted:return
         self.working=True;revision=self.revision
         def work():
             if self.stopped.is_set() or library is not h.library:return []
-            wanted_ids={p['id'] for p in h.queue[:horizon]}-h.inflight
+            wanted_ids={p['id'] for p in self.photos()[:horizon]}-h.inflight
             photos=[p for p in wanted if p['id'] in wanted_ids]
             reader=h.metadata_reader
             if not hasattr(reader,'read_many'):photos=photos[:1]

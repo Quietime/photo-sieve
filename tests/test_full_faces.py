@@ -19,6 +19,12 @@ class FaceHost(Host):
         self.detected.append((row['id'],quality));return {'faces':[],'face_count':0,'imagebytes':None}
 
 class FullFacesTest(unittest.TestCase):
+    def test_all_view_recognizes_kept_photos_as_well_as_pending(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            library=FakeLibrary(Path(temporary));library.count=40;library.keep={5,22};library.deleted={3}
+            host=FaceHost(library);service=FullFaces(host,auto_timer=False);service.view='all'
+            service.start(library,1600);host.drain()
+            self.assertEqual({pid for pid,_ in host.detected},set(range(1,41))-{3})
     def test_all_pending_rows_recognized_beyond_fifty_even_while_photo_preload_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             library=FakeLibrary(Path(temporary));library.count=1327;library.keep={5,22,1000};library.deleted={3,13}
@@ -57,6 +63,14 @@ class FullFacesTest(unittest.TestCase):
                     for photo in host.queue:self.assertIsNotNone(service.result_for(photo)['imagebytes'])
                 host.queue=host.queue[1:];service.update()
                 self.assertEqual(service.result_for(host.queue[0])['face_count'],1)
+                # Grading follows its selected photo, independently of screening.
+                from types import SimpleNamespace
+                rating_rows=host.queue[1:];host.rating_active=True
+                host.rating_page=SimpleNamespace(active=True,nearby_photos=lambda limit:rating_rows[:limit])
+                service._results.clear();service._cache_attempted.clear()
+                with patch.object(service,'_isolated',side_effect=AssertionError('No grading recognition')):
+                    service.update();until(lambda:service.result_for(rating_rows[0]) is not None)
+                self.assertEqual(service.result_for(rating_rows[0])['photo_id'],rating_rows[0]['id'])
             finally:service.shutdown();service.pool.waitForDone();host.deleteLater();application.processEvents()
 
 if __name__=='__main__':unittest.main()

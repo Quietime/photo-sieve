@@ -250,7 +250,7 @@ class Window(QMainWindow):
         from full_cache import FullCache
         self.full_cache=FullCache(self)
         from full_faces import FullFaces
-        self.faces.background_all=True;self.full_faces=FullFaces(self);self.face_sweep_library=None
+        self.faces.background_all=True;self.full_faces=FullFaces(self);self.full_faces.view='all';self.face_sweep_library=None
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.apply_mode_preferences()
@@ -580,7 +580,7 @@ class Window(QMainWindow):
             effective=machine.PROFILE.preview_capacity(max(16,count),size.width()*size.height()*4+160*110*4,COMPOSITING['gpu'])
             from cache_plan import face_limits
             _,face_disk,face_ram=face_limits(self.faces.ahead,effective,max(effective,self.faces.ahead+1))
-            note.setText(f'内存仅预加载附近 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。全部未筛选与保留照片按当前显示分辨率持续生成磁盘预览，不受内存张数限制。\n全部未筛选照片在后台识别人脸，附近 {face_disk} 张预载人脸结果；内存最多 {face_ram} 份／64 MB。已有照片与人脸缓存保留，只有总缓存超过 10 GB 才清除最旧 70%。\n切换到其他文件夹后，清除上一文件夹的照片与人脸缓存；原片、评级和筛选记录保留。')
+            note.setText(f'内存仅预加载附近 {effective:,} 张，预览内存约 {(effective+BEHIND)*size.width()*size.height()*4/1024**3:.2f} GB。全部未筛选与保留照片按当前显示分辨率持续生成磁盘预览，不受内存张数限制。\n全部未删除照片在后台识别人脸，附近 {face_disk} 张预载人脸结果；内存最多 {face_ram} 份／64 MB。已有照片与人脸缓存保留，只有总缓存超过 10 GB 才清除最旧 70%。\n切换到其他文件夹后，清除上一文件夹的照片与人脸缓存；原片、评级和筛选记录保留。')
             note.setMinimumHeight(note.heightForWidth(dialog.minimumWidth()-48))
         def show_progress():
             state=self.full_cache.status();visited=state.get('visited',0);total=state.get('total') or 0
@@ -833,7 +833,7 @@ class Window(QMainWindow):
         self.cache_sweep_key=key
         self.full_cache.start(self.library,edge,total=self.counts.get('all'))
         if force or self.face_sweep_library is not self.library:
-            self.face_sweep_library=self.library;self.full_faces.start(self.library,1600,total=self.counts.get('pending'))
+            self.face_sweep_library=self.library;self.full_faces.start(self.library,1600,total=self.counts.get('all'))
 
     def refresh_cache_plan(self):
         self.disk_horizon=max(self.ahead_target,getattr(getattr(self,'faces',None),'ahead',50)+1)
@@ -975,6 +975,10 @@ class Window(QMainWindow):
         if hasattr(self,'metadata_service'):self.metadata_service.update()
 
     def face_changed(self,pid,result):
+        if self.rating_active:
+            self.face_panel.hide()
+            if self.rating_page.active and (pid==self.rating_page.pid() or result is None):self.rating_page.show_aux()
+            return
         if not self.faces.enabled or self.view!='pending' or self.stack.currentIndex()!=0 or not self.queue:self.face_panel.hide();return
         photo=self.queue[0]
         if pid!=photo['id']:return
@@ -982,9 +986,9 @@ class Window(QMainWindow):
 
     def face_settings(self):
         dialog=QDialog(self);dialog.setWindowTitle('人脸预览');dialog.setMinimumWidth(480);layout=QVBoxLayout(dialog)
-        enabled=QCheckBox('显示当前左图的人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
+        enabled=QCheckBox('显示当前照片的人脸预览');enabled.setChecked(self.faces.enabled);layout.addWidget(enabled)
         form=QFormLayout();ahead=CacheSpinBox();ahead.setRange(0,500);ahead.setSuffix(' 张');ahead.setValue(self.faces.ahead);ahead.setMinimumHeight(38);form.addRow('附近人脸内存预加载数',ahead);layout.addLayout(form)
-        note=QLabel('全部未筛选照片在后台完成本地识别，切换时只显示已有缓存。这里调整附近人脸结果的内存预加载范围，不限制整库识别数量。\n0 表示不预载后续照片的人脸。人脸与照片共用 10 GB 缓存限额；切换文件夹后清理旧缓存。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
+        note=QLabel('全部未删除照片在后台完成本地识别，切换时只显示已有缓存。这里调整附近人脸结果的内存预加载范围，不限制整库识别数量。\n0 表示不预载后续照片的人脸。人脸与照片共用 10 GB 缓存限额；切换文件夹后清理旧缓存。');note.setWordWrap(True);note.setObjectName('caption');layout.addWidget(note)
         row=QHBoxLayout();row.addStretch();row.addWidget(self.button('取消',dialog.reject))
         def save():self.faces.configure(enabled.isChecked(),ahead.value());self.face_changed(self.queue[0]['id'] if self.queue else None,None);dialog.accept()
         row.addWidget(self.button('保存',save,'primary'));layout.addLayout(row);dialog.exec()

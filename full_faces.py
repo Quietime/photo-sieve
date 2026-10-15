@@ -11,7 +11,7 @@ class FullFaces(FullCache):
                 any(getattr(self.host,name,False) for name in ('closed','importing','cache_clearing','busy','pending_ops')) or
                 bool(getattr(self.library,'job',{}).get('running')))
     def prepare(self,library,current,edge):
-        if current.get('status')!=0 or not current.get('present',1):return 'skipped'
+        if current.get('status') not in ((0,1) if self.view=='all' else (0,)) or not current.get('present',1):return 'skipped'
         # Native detector and original crops execute in the existing isolated
         # process. Only compact results/PNGs persist, never every full-size RAW.
         result=self.host.faces._read_or_compute(library,current,'original')
