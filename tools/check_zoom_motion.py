@@ -41,6 +41,9 @@ def run(output):
             draw.text((100,100),'ZOOM '+str(index),fill='white',font_size=140);image.save(photos/f'{index}.jpg',quality=96)
         with patch('desktop.QSettings',return_value=settings),patch('face_service.QSettings',return_value=settings),patch('update_ui.QSettings',return_value=settings):
             window=Window(Library(base/'workspace'),check_updates=False,start_empty=True,data_root=base);errors=[];window.error=errors.append
+            # Hosted Windows runners may disable OS animations. Exercise the
+            # actual motion path here; accessibility behavior has separate tests.
+            reduced_motion=theme.REDUCED_MOTION;theme.REDUCED_MOTION=False
             try:
                 window.resize(1280,900);window.show();window.scan(photos)
                 until(lambda:len(window.queue)==3 and window.ready());photo=window.queue[0];pane=window.photos[0]
@@ -48,12 +51,13 @@ def run(output):
                 point=pane.content_rect().center();scale=pane.transform().m11();began=time.perf_counter()
                 QTest.mouseClick(pane.viewport(),Qt.MouseButton.LeftButton,pos=point)
                 first_ms=(time.perf_counter()-began)*1000
-                assert pane.detail and pane.transform().m11()>scale,'Click must change zoom before waiting for decode or animation tick'
+                assert pane.detail and scale<pane.transform().m11()<pane.zoom_target(),'Click must start an actual animation before waiting for decode'
                 motion=pane.zoom_animation;assert motion and motion.duration()==200
                 QTimer.singleShot(70,lambda:window.grab().save(str(output/'review-zoom-moving.png')))
                 until(lambda:pane.full_resolution and pane.zoom_animation is None)
                 window.grab().save(str(output/'review-zoom-sharp.png'))
                 gaps=[(b[1]-a[1])*1000 for a,b in zip(observer.times,observer.times[1:]) if a[0]==b[0]]
+                assert len(observer.times)>=3,'Enabled zoom must paint intermediate animation frames'
                 measurements.append({'view':'review','reported_display_hz':window.screen().refreshRate(),'timer_ms':theme.FrameClock.interval(pane),'same_event_response_ms':round(first_ms,3),'paint_events':len(observer.times),'mean_paint_gap_ms':round(sum(gaps)/len(gaps),3) if gaps else None,'max_paint_gap_ms':round(max(gaps),3) if gaps else None})
                 checks.append('review_responds_in_click_event_and_installs_original_without_serial_zoom_animation')
                 for _ in range(4):
@@ -93,7 +97,7 @@ def run(output):
                 album_check('deleted')
                 assert not errors,errors
                 report={'ok':True,'platform':application.platformName(),'checks':checks,'measurements':measurements,'note':'Paint timings describe this runner; 240 Hz timer selection and migration are tested separately with simulated screen rates, not physical 240 Hz display hardware.'}
-            finally:window.prompt_on_close=False;window.close();application.processEvents()
+            finally:window.prompt_on_close=False;window.close();application.processEvents();theme.REDUCED_MOTION=reduced_motion
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
     print('PASS zoom interaction',len(checks),'checks')
 
