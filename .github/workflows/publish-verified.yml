@@ -1,0 +1,69 @@
+name: Publish an already verified Windows build
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful main Windows build run ID
+        required: true
+      commit:
+        description: Exact tested source commit
+        required: true
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: ${{ inputs.run_id }}
+      TESTED_COMMIT: ${{ inputs.commit }}
+    steps:
+      - name: Verify the requested build completed successfully on main
+        run: |
+          python - <<'PY'
+          import json,os,re,subprocess
+          assert os.environ['BUILD_RUN'].isdigit()
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['TESTED_COMMIT'])
+          run=json.loads(subprocess.check_output(['gh','run','view',os.environ['BUILD_RUN'],'--json','headSha,headBranch,event,conclusion,workflowName']))
+          assert run==dict(headSha=os.environ['TESTED_COMMIT'],headBranch='main',event='push',conclusion='success',workflowName='Build and release Windows APP'),run
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhotoSieve-Windows-x64
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: verified-build
+      - name: Verify version and release checksums without rebuilding
+        run: |
+          python - <<'PY'
+          import hashlib,json,zipfile
+          from pathlib import Path
+          from version import APP_VERSION
+          root=Path('verified-build/release')
+          sums=dict((line.split()[1],line.split()[0]) for line in (root/'SHA256SUMS.txt').read_text().splitlines() if line.strip())
+          assert set(sums)=={'PhotoSieve-Windows-x64.zip','PhotoSieve-Setup-Windows-x64.exe'}
+          for name,digest in sums.items():assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest,name
+          metadata=json.loads((root/'update.json').read_text())
+          assert metadata['version']==APP_VERSION and metadata['sha256']==sums[metadata['asset']]
+          assert (root/metadata['asset']).stat().st_size==metadata['size']
+          with zipfile.ZipFile(root/metadata['asset']) as archive:
+              assert json.loads(archive.read('PhotoSieve/installed-files.json'))['version']==APP_VERSION
+          print('Verified existing build:',APP_VERSION)
+          PY
+      - name: Complete the draft release with the verified files
+        run: |
+          version=$(python -c 'from version import APP_VERSION; print(APP_VERSION)')
+          tag="v$version"
+          if gh release view "$tag" --json isDraft > release-state.json; then
+            python -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Refusing to replace an already published release"'
+            gh release edit "$tag" --draft --target "$TESTED_COMMIT" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$tag" --draft --target "$TESTED_COMMIT" --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$tag" verified-build/release/PhotoSieve-Windows-x64.zip verified-build/release/PhotoSieve-Setup-Windows-x64.exe verified-build/release/update.json verified-build/release/SHA256SUMS.txt --clobber
+          gh release edit "$tag" --draft=false --latest --target "$TESTED_COMMIT"
