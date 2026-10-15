@@ -1636,7 +1636,7 @@ class Window(QMainWindow):
             QMessageBox.information(self, '任务正在进行', '请等待扫描或文件夹切换完成后再退出。'); event.ignore(); return
         if self.pending_ops:
             # Queued keeps and deletions finish first; the window stays responsive and closes by itself.
-            self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项筛选记录…', 'info', 2000)
+            self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项'+('评级写入…' if self.rating_page.writing else '筛选记录…'), 'info', 2000)
             event.ignore(); QTimer.singleShot(120, self.close); return
         if self.prompt_on_close and self.session_active and not self.updates.installing and self.close_choice is None:
             box=CloseOfferDialog(self);box.exec()

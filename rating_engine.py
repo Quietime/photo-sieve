@@ -32,9 +32,20 @@ def job(path,stars,expected):
         LOGGER.exception('Windows rating handler failed');raise
     finally:faulthandler.cancel_dump_traceback_later()
 
+def warm_worker():return True
+
 class RatingEngine:
     def __init__(self,logs):
         self.logs=Path(logs);self.pool=None;self.write_pool=None;self.lock=threading.Lock();self.closed=False
+    def warm_writes(self):
+        """Start the isolated writer before the first click; never touch a photo."""
+        if os.name!='nt':return False
+        with self.lock:
+            if self.closed:return False
+            if self.write_pool is None:self.write_pool=ProcessPoolExecutor(1,mp_context=multiprocessing.get_context('spawn'),initializer=initialize,initargs=(str(self.logs),))
+            pool=self.write_pool;future=pool.submit(warm_worker)
+        try:return future.result(timeout=8)
+        except (TimeoutError,BrokenProcessPool):self.reset(pool);return False
     def run(self,path,stars=None,expected=None):
         if os.name!='nt':raise RatingError('Windows 系统评级仅在 Windows 上可用')
         with self.lock:

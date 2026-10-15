@@ -36,7 +36,8 @@ class RatingPage(QWidget):
     def __init__(self,host):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
-        self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.listing=False;self.ids=[];self.index=0
+        self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.listing=False;self.list_context=None;self.ids=[];self.index=0
+        self.rating_pending={};self.rating_failures={};self.rating_confirmed={};self.rating_versions={};self.rating_serial=0;self.pending_count=0;self.undoing=False;self.warm_started=False
         self.info={};self.source_widths={};self.image_sizes={};self.thumb_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
@@ -108,7 +109,9 @@ class RatingPage(QWidget):
         self.active=True;self.setFocus()
         if not self.host.session_active:return
         if self.library is not self.host.library:
-            self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.clear_previews()
+            self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.rating_failures.clear();self.rating_versions.clear();self.rating_confirmed.clear();self.clear_previews()
+        if not self.warm_started and hasattr(self.engine,'warm_writes'):
+            self.warm_started=True;self.host.submit(self.engine.warm_writes,pool=self.pool,priority=-10)
         self.reload()
     def clear_previews(self):
         self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.thumb_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.thumb_photos.clear();self.preview_errors.clear()
@@ -119,6 +122,7 @@ class RatingPage(QWidget):
         if not self.active or self.writing or not self.records:return
         self.generation+=1;gen=self.generation;self.scanning=False;self.listing=True;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部照片评级')
         records=self.records;scope='keep' if self.scope.currentIndex() else 'all';stars=self.filter.currentIndex()-1 if self.filter.currentIndex() else None
+        context=(id(self.library),scope,stars);anchor=self.pid() if context==self.list_context else None;self.list_context=context
         self.status.setText('正在读取分级列表…')
         cached=list(self.fingerprints);library=self.library
         def work():
@@ -137,7 +141,7 @@ class RatingPage(QWidget):
                 if self.fingerprints.get(pid)!=fingerprints.get(pid):
                     self.images.pop(pid,None);self.thumbs.pop(pid,None);self.thumb_photos.pop(pid,None);self.thumb_sizes.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
             self.preview_errors.clear()
-            self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear()
+            self.ids=ids;self.index=ids.index(anchor) if anchor in ids else 0;self.info={};self.grid.captions.clear();self.grid.tips.clear()
             for pid,photo in self.thumb_photos.items():
                 self.grid.captions[pid]=photo['name']+'\n'+self.star_text(None);self.grid.tips[pid]=photo['path']
             self.grid.set_ids(ids);self.show_current(ensure_visible=True);self.visible()
@@ -163,14 +167,14 @@ class RatingPage(QWidget):
         if photo:self.host.metadata_service.update()
         else:self.camera_info.setText('正在读取拍摄参数…' if self.pid() else '没有符合条件的照片')
     def select(self,index):
-        if self.writing:return
+        if self.undoing or self.host.closing:return
         self.index=index
         self.show_aux()
         for pane in self.panes:
             if pane.detail:pane.show_photo(None)
         self.show_current(ensure_visible=True);self.setFocus()
     def move(self,delta):
-        if self.writing or not self.ids:return
+        if self.undoing or self.host.closing or not self.ids:return
         self.select(max(0,min(len(self.ids)-1,self.index+delta)))
     def showEvent(self,event):
         super().showEvent(event)
@@ -218,11 +222,16 @@ class RatingPage(QWidget):
     def install_preview(self,pid,photo,pix):
         for offset,pane in enumerate(self.panes):
             if self.index+offset<len(self.ids) and self.ids[self.index+offset]==pid and not pane.detail:
-                pane.show_photo(photo,pix);pane.source_width=self.source_widths.get(pid,pix.width());self.names[offset].setText(f'{photo["name"]}  ·  {self.index+offset+1:,} / {len(self.ids):,}')
-                self.show_aux()
+                changed=not pane.photo or pane.photo['id']!=pid or pane.pixmap is not pix
+                if changed:pane.show_photo(photo,pix)
+                pane.source_width=self.source_widths.get(pid,pix.width())
+                text=f'{photo["name"]}  ·  {self.index+offset+1:,} / {len(self.ids):,}'
+                if self.names[offset].text()!=text:self.names[offset].setText(text)
+                if changed:self.show_aux()
     def visible(self,*_):
-        if not self.active or not self.records:return
+        if not self.active or not self.records or self.host.closing:return
         for pid in self.grid.visible_ids():self.preview(pid);self.read(pid)
+        for pid in self.ids[self.index:self.index+min(64,max(16,self.cache_plan()[1]))]:self.read(pid)
     def preview_size(self):
         dpr=self.devicePixelRatioF()
         return QSize(max(300,round(self.pane.width()*dpr)),max(200,round(self.pane.height()*dpr)))
@@ -297,41 +306,49 @@ class RatingPage(QWidget):
         self.host.submit(work,done,failed,self.host.image_pool if large else self.host.thumb_pool,100 if large and current else -5 if large else 0)
     @staticmethod
     def star_text(info):
-        if not info:return '尚未读取'
+        if not info or info['state']=='unread':return '尚未读取'
         if info['state']!='ready':return 'Windows 评级不可用'
-        return '★'*info['stars']+'☆'*(5-info['stars']) if info['stars'] else '未评级'
+        text='★'*info['stars']+'☆'*(5-info['stars']) if info['stars'] else '未评级'
+        return text+(' · 待保存' if info.get('pending') else ' · 保存失败' if info.get('write_error') else '')
     def read(self,pid,force=False):
-        if pid in self.reading or len(self.reading)>=2 or self.writing:return
+        if pid in self.reading or len(self.reading)>=2 or pid in self.rating_pending or self.undoing or self.host.closing:return
         if pid in self.info and not force:return
-        self.reading.add(pid);gen=self.generation;read_revision=self.read_revision;records=self.records
+        self.reading.add(pid);gen=self.generation;read_revision=self.read_revision;version=self.rating_versions.get(pid,0);records=self.records
         def work():
             cached={} if force else records.cached([pid])
             return cached.get(pid) or records.read(pid,self.engine)
         def done(info):
             if not self.valid(gen):return
             self.reading.discard(pid)
-            if read_revision!=self.read_revision:
-                if not self.writing:self.visible()
+            if read_revision!=self.read_revision or version!=self.rating_versions.get(pid,0) or pid in self.rating_pending:
+                self.visible()
                 return
+            if pid in self.rating_failures:info=dict(info,write_error=self.rating_failures[pid])
             self.info[pid]=info;self.update_caption(pid);self.update_controls();self.pump_reads();self.visible()
         def failed(message):done({'state':'error','stars':None,'writable':False,'error':message})
         self.host.submit(work,done,failed,self.pool,100 if pid==self.pid() else 0)
     def update_caption(self,pid):
         text=self.grid.captions.get(pid,'照片 #'+str(pid)).split('\n')[0];self.grid.captions[pid]=text+'\n'+self.star_text(self.info.get(pid));row=self.grid.index_of(pid)
         if row>=0:self.grid.photo_model.changed(row)
+    def can_grade(self):
+        info=self.info.get(self.pid())
+        if info and info['state'] in ('ready','error'):return info['state']=='ready' and bool(info['writable'])
+        return bool(self.pane.photo and self.pane.photo['id']==self.pid() and self.pane.pixmap is not None)
     def update_controls(self):
         info=self.info.get(self.pid())
         self.stars.setText('★'*info['stars']+'☆'*(5-info['stars']) if info and info['state']=='ready' else '☆☆☆☆☆')
         self.stars.setToolTip(self.star_text(info))
-        writable=bool(info and info['state']=='ready' and info['writable']);allowed=writable and not self.writing and not self.listing and not self.host.busy and not self.host.job_running()
+        writable=self.can_grade();allowed=writable and not self.undoing and self.pending_count<256 and not self.listing and not self.host.closing and not self.host.busy and not self.host.job_running()
         for button in self.star_buttons+[self.clear_button]:button.setEnabled(allowed)
-        self.previous.setEnabled(bool(self.ids) and self.index>0 and not self.writing);self.next.setEnabled(bool(self.ids) and self.index+1<len(self.ids) and not self.writing)
+        self.previous.setEnabled(bool(self.ids) and self.index>0 and not self.undoing and not self.host.closing);self.next.setEnabled(bool(self.ids) and self.index+1<len(self.ids) and not self.undoing and not self.host.closing)
         self.scope.setEnabled(not self.writing);self.filter.setEnabled(not self.writing);self.read_button.setEnabled(bool(self.records) and not self.writing)
         undo=False
-        if self.records:
+        if self.records and not self.writing:
             with self.library.connect() as db:undo=bool(db.execute('SELECT 1 FROM rating_history h JOIN photos p ON p.id=h.photo_id WHERE p.present=1 LIMIT 1').fetchone())
         self.undo_button.setEnabled(undo and not self.writing and not self.host.busy and not self.host.job_running())
-        if self.writing:self.status.setText('正在安全写入并验证照片星级…')
+        if self.pending_count:self.status.setText(f'后台待保存 {self.pending_count:,} 项评级 · '+('保存完毕后退出' if self.host.closing else '队列已满，请稍候' if self.pending_count>=256 else '可以继续选片和打分'))
+        elif self.rating_failures:self.status.setText(f'{len(self.rating_failures)} 张照片的评级未保存，请检查后重新打分')
+        elif self.writing:self.status.setText('正在安全写入并验证照片星级…')
         elif info:
             embedded=info.get('backend')=='embedded'
             origin='ARW 原图星级' if embedded else 'Windows 系统评级'
@@ -355,24 +372,60 @@ class RatingPage(QWidget):
         self.read_button.setText(f'停止读取 · {max(0,self.total-len(self.remaining)-len(self.reading)):,} / {self.total:,}')
         if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部照片评级');self.reload()
     def grade(self,stars):
-        info=self.info.get(self.pid())
-        if self.host.busy or self.host.job_running() or self.writing or self.listing or not info or info['state']!='ready' or not info['writable']:return
+        pid=self.pid();info=self.info.get(pid)
+        if self.host.busy or self.host.job_running() or self.undoing or self.listing or self.host.closing or self.pending_count>=256 or not self.can_grade():return
+        info=info or dict(photo_id=pid,state='unread',stars=None,writable=False,error='')
         if info['stars']==stars:
             if self.auto.isChecked():self.move(1)
             return
-        pid=self.pid();records=self.records;self.change(lambda:records.write(pid,stars,self.engine))
+        records=self.records;library=self.library;self.rating_serial+=1;token=self.rating_serial
+        if pid not in self.rating_pending:self.rating_confirmed[pid]=dict(info)
+        self.rating_pending.setdefault(pid,OrderedDict())[token]=stars;self.pending_count+=1;self.writing=True
+        self.rating_versions[pid]=self.rating_versions.get(pid,0)+1
+        self.info[pid]=dict(info,stars=stars,state='ready',writable=True,pending=True,write_error='');self.scanning=False;self.remaining=[];self.read_button.setText('读取全部照片评级')
+        self.update_caption(pid)
+        # File backup, verified writes and history remain serial, but no longer
+        # block the next input or the first visible response.
+        self.host.op(lambda:records.write(pid,stars,self.engine),
+                     lambda result:self.grade_finished(pid,token,result,None,library),
+                     lambda message:self.grade_finished(pid,token,None,message,library))
+        if self.auto.isChecked():self.move(1)
+        self.host.update_actions()
+    def grade_finished(self,pid,token,result,error,library):
+        if library is not self.library:return
+        pending=self.rating_pending.get(pid)
+        if not pending or token not in pending:return
+        pending.pop(token);self.pending_count-=1
+        if result:self.rating_confirmed[pid]=result;self.rating_failures.pop(pid,None)
+        if error:self.rating_failures[pid]=str(error)
+        confirmed=self.rating_confirmed[pid]
+        if pending:
+            self.info[pid]=dict(confirmed,stars=next(reversed(pending.values())),state='ready',writable=True,pending=True)
+        else:
+            self.rating_pending.pop(pid);self.info[pid]=dict(confirmed,pending=False,write_error=error or '')
+            self.rating_confirmed.pop(pid,None)
+        self.writing=bool(self.pending_count);self.update_caption(pid)
+        if error:
+            photo=self.images[pid][0] if pid in self.images else self.thumb_photos.get(pid,{})
+            self.host.error('评级未保存：'+photo.get('name',str(pid))+' · '+str(error))
+            if pid not in self.rating_pending:self.read(pid,force=True)
+        self.update_controls();self.host.update_actions();self.visible()
+        if not self.writing:
+            if self.rating_failures:self.note.setText(f'{len(self.rating_failures)} 项评级未保存，请检查后重新打分，详情见提示。')
+            else:self.note.setText('评级已写入并验证 · 保留 / 删除标记不变')
+            if self.active and self.filter.currentIndex():self.reload()
     def undo(self):
         if self.writing or not self.records or not self.undo_button.isEnabled():return
         records=self.records;self.change(lambda:records.undo(self.engine),advance=False)
     def change(self,work,advance=True):
-        self.writing=True;self.read_revision+=1;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
+        self.writing=True;self.undoing=True;self.read_revision+=1;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
         def done(result):
-            self.writing=False;pid=result['photo_id'];self.info[pid]=result;self.update_caption(pid)
+            self.writing=False;self.undoing=False;pid=result['photo_id'];self.info[pid]=result;self.update_caption(pid)
             if advance and self.auto.isChecked():self.move(1)
             elif not advance and pid in self.ids:self.select(self.ids.index(pid))
             self.update_controls();self.visible();self.host.update_actions();self.note.setText('已写入 Windows 系统评级：'+self.star_text(result)+' · 保留 / 删除标记不变')
             if self.filter.currentIndex():self.reload()
-        def failed(message):self.writing=False;self.update_controls();self.host.update_actions();self.host.error(message)
+        def failed(message):self.writing=False;self.undoing=False;self.update_controls();self.host.update_actions();self.host.error(message)
         self.host.op(work,done,failed)
     def zoom(self,point=None,pane=None):
         pane=pane or self.pane
