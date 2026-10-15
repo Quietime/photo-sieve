@@ -1,9 +1,9 @@
 """Independent photo grading; displayed stars come from verified photo metadata."""
 from collections import OrderedDict
 from pathlib import Path
-from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize
+from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,Signal
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider
 from photo_grid import PhotoGrid
 from apple_ui import GlassDock
 from widgets import PhotoView
@@ -19,12 +19,25 @@ ACTIONS=[(f'star{i}',f'{i} 星',(str(i),),True) for i in range(1,6)]+[
  ('next','下一张',('Right',),True),('undo','撤销评级',('Ctrl+Z',),True),
  ('zoom','放大到 100%',('Z',),False),('unzoom','还原缩放',('Esc',),False)]
 
+class RatingGrid(PhotoGrid):
+    zoom_requested=Signal(int,QPoint)
+    def __init__(self):
+        super().__init__();self.wheel_remainder=0
+    def wheelEvent(self,event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta=event.angleDelta().y()
+            self.wheel_remainder+=delta if delta else event.pixelDelta().y()*3
+            steps=int(self.wheel_remainder/120);self.wheel_remainder-=steps*120
+            if steps:self.zoom_requested.emit(steps,event.position().toPoint())
+            event.accept();return
+        self.wheel_remainder=0;super().wheelEvent(event)
+
 class RatingPage(QWidget):
     def __init__(self,host):
         super().__init__();self.host=host;self.library=None;self.records=None
         self.engine=RatingEngine(host.data_root/'logs');self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2)
         self.generation=0;self.read_revision=0;self.active=False;self.writing=False;self.listing=False;self.ids=[];self.index=0
-        self.info={};self.source_widths={};self.image_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
+        self.info={};self.source_widths={};self.image_sizes={};self.thumb_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
@@ -39,8 +52,15 @@ class RatingPage(QWidget):
         self.splitter.setStyleSheet('QSplitter#ratingSplit::handle:horizontal {background:'+theme.SEPARATOR+';margin:0 3px;} QSplitter#ratingSplit::handle:horizontal:hover {background:'+theme.BLUE_HOVER+';}')
         self.split_ratio=max(.05,min(.95,QSettings('PhotoSieve','PhotoSieve').value('rating_split_ratio',.6,type=float)));self.split_restored=False
         gallery=QWidget();gallery.setMinimumWidth(230);gallery_layout=QVBoxLayout(gallery);gallery_layout.setContentsMargins(0,0,8,0);gallery_layout.setSpacing(8)
-        gallery_title=QLabel('照片图库');gallery_title.setObjectName('caption');gallery_layout.addWidget(gallery_title)
-        self.grid=PhotoGrid();self.grid.tile_width=220;self.grid.tile_height=220;self.grid.setGridSize(QSize(220,220));self.grid.setIconSize(QSize(200,150));self.grid.setWordWrap(True)
+        gallery_heading=QHBoxLayout();gallery_heading.setSpacing(4);gallery_title=QLabel('照片图库');gallery_title.setObjectName('caption');gallery_heading.addWidget(gallery_title);gallery_heading.addStretch()
+        self.gallery_smaller=host.button('−',lambda:self.gallery_size.setValue(self.gallery_size.value()-20));self.gallery_smaller.setFixedSize(28,28);self.gallery_smaller.setToolTip('缩小缩略图');gallery_heading.addWidget(self.gallery_smaller)
+        self.gallery_size=QSlider(Qt.Orientation.Horizontal);self.gallery_size.setRange(120,360);self.gallery_size.setSingleStep(20);self.gallery_size.setPageStep(40);self.gallery_size.setMinimumWidth(70);self.gallery_size.setMaximumWidth(150);self.gallery_size.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.gallery_size.setAccessibleName('图库缩略图大小')
+        self.gallery_size.setValue(max(120,min(360,QSettings('PhotoSieve','PhotoSieve').value('rating_gallery_size',220,type=int))));gallery_heading.addWidget(self.gallery_size)
+        self.gallery_larger=host.button('+',lambda:self.gallery_size.setValue(self.gallery_size.value()+20));self.gallery_larger.setFixedSize(28,28);self.gallery_larger.setToolTip('放大缩略图');gallery_heading.addWidget(self.gallery_larger);gallery_layout.addLayout(gallery_heading)
+        self.gallery_smaller.setEnabled(self.gallery_size.value()>120);self.gallery_larger.setEnabled(self.gallery_size.value()<360)
+        self.gallery_size.setStyleSheet('QSlider::groove:horizontal {height:4px;background:'+theme.SEPARATOR+';border-radius:2px;} QSlider::sub-page:horizontal {background:'+theme.BLUE_HOVER+';border-radius:2px;} QSlider::handle:horizontal {width:12px;margin:-4px 0;background:'+theme.LABEL+';border-radius:6px;}')
+        self.grid=RatingGrid();self.grid.tile_width=self.grid.tile_height=self.gallery_size.value();self.grid.setGridSize(QSize(self.grid.tile_width,self.grid.tile_height));self.grid.setIconSize(QSize(self.grid.tile_width-20,self.grid.tile_height-70));self.grid.setWordWrap(True)
+        self.gallery_size.setToolTip('缩略图大小 · 鼠标在图库内按 Ctrl + 滚轮也可调整');self.gallery_size.valueChanged.connect(self.resize_gallery);self.grid.zoom_requested.connect(self.wheel_gallery_zoom)
         self.grid.setStyleSheet('QListView {background:transparent;border:0;outline:0;} QListView::item {background:'+theme.ELEVATED+';border:2px solid transparent;border-radius:6px;margin:4px;} QListView::item:selected {border:2px solid '+theme.BLUE_HOVER+';background:'+theme.ELEVATED+';}')
         gallery_layout.addWidget(self.grid,1);self.splitter.addWidget(gallery)
         preview=QWidget();preview.setMinimumWidth(250);column=QVBoxLayout(preview);column.setContentsMargins(12,0,0,0);column.setSpacing(6)
@@ -91,7 +111,7 @@ class RatingPage(QWidget):
             self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.clear_previews()
         self.reload()
     def clear_previews(self):
-        self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.thumb_photos.clear();self.preview_errors.clear()
+        self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.thumb_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.thumb_photos.clear();self.preview_errors.clear()
         self.face_panel.show_result(None);self.camera_info.setText('请选择照片')
     def deactivate(self):
         self.active=False;self.generation+=1;self.scanning=False;self.listing=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
@@ -115,7 +135,7 @@ class RatingPage(QWidget):
             ids,fingerprints=value
             for pid in cached:
                 if self.fingerprints.get(pid)!=fingerprints.get(pid):
-                    self.images.pop(pid,None);self.thumbs.pop(pid,None);self.thumb_photos.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
+                    self.images.pop(pid,None);self.thumbs.pop(pid,None);self.thumb_photos.pop(pid,None);self.thumb_sizes.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
             self.preview_errors.clear()
             self.ids=ids;self.index=0;self.info={};self.grid.captions.clear();self.grid.tips.clear()
             for pid,photo in self.thumb_photos.items():
@@ -163,7 +183,24 @@ class RatingPage(QWidget):
         left,right=self.splitter.sizes();total=left+right
         if total:
             self.split_ratio=left/total;QSettings('PhotoSieve','PhotoSieve').setValue('rating_split_ratio',self.split_ratio)
+        if self.pane.pixmap and not self.pane.detail:self.pane.fit();self.pane.viewport().update()
         self.visible();self.resize_timer.start(150)
+    def wheel_gallery_zoom(self,steps,point):
+        self.gallery_zoom_point=point
+        self.gallery_size.setValue(self.gallery_size.value()+steps*20)
+        self.gallery_zoom_point=None
+    def resize_gallery(self,value):
+        point=getattr(self,'gallery_zoom_point',None)
+        if point is None:point=self.grid.viewport().rect().center()
+        anchor=self.grid.indexAt(point)
+        if not anchor.isValid():
+            visible=self.grid.visible_ids();anchor=self.grid.photo_model.index(self.grid.index_of(visible[0])) if visible else self.grid.currentIndex()
+        old=self.grid.visualRect(anchor);fraction=(point.y()-old.y())/max(1,old.height())
+        self.grid.tile_width=self.grid.tile_height=value;self.grid.setGridSize(QSize(value,value));self.grid.setIconSize(QSize(value-20,value-70));self.grid.doItemsLayout()
+        if anchor.isValid():
+            rect=self.grid.visualRect(anchor);bar=self.grid.verticalScrollBar();bar.setValue(round(bar.value()+rect.y()+fraction*rect.height()-point.y()))
+        self.gallery_smaller.setEnabled(value>120);self.gallery_larger.setEnabled(value<360)
+        QSettings('PhotoSieve','PhotoSieve').setValue('rating_gallery_size',value);self.visible()
     def show_current(self,ensure_visible=False):
         if not self.active:return
         pid=self.pid()
@@ -211,6 +248,8 @@ class RatingPage(QWidget):
             if pid not in self.images and pid not in self.thumbs:self.fingerprints.pop(pid,None)
         for pid in list(self.thumb_photos):
             if pid not in self.thumbs:self.thumb_photos.pop(pid,None)
+        for pid in list(self.thumb_sizes):
+            if pid not in self.thumbs:self.thumb_sizes.pop(pid,None)
     def preview(self,pid,large=False):
         key=(pid,large)
         if self.host.cache_clearing or key in self.preview_errors:return
@@ -218,7 +257,8 @@ class RatingPage(QWidget):
         size=self.preview_size()
         if large and pid in self.images and self.image_sizes.get(pid)==size:
             photo,pix=self.images[pid];self.install_preview(pid,photo,pix);return
-        if not large and pid in self.thumbs:return
+        dpr=self.devicePixelRatioF();thumb_size=self.grid.iconSize()*dpr
+        if not large and pid in self.thumbs and self.thumb_sizes.get(pid)==thumb_size:return
         if sum(flag==large for _,flag in self.loading)>=(2 if large else 4):return
         self.loading.add(key);gen=self.generation;library=self.library
         if large:
@@ -229,8 +269,8 @@ class RatingPage(QWidget):
         dpr=self.devicePixelRatioF();width=size.width();height=size.height();edge=self.host.preview_edge(size)
         def work():
             from desktop import display_image
-            photo=library.public(library.photo(pid));thumb_edge=320 if 200*dpr<=320 else 1600
-            result=display_image(library.preview_image(pid,edge if large else thumb_edge),width if large else round(200*dpr),height if large else round(150*dpr),(8,8));return photo,result
+            photo=library.public(library.photo(pid));thumb_edge=320 if max(thumb_size.width(),thumb_size.height())<=320 else 1600
+            result=display_image(library.preview_image(pid,edge if large else thumb_edge),width if large else thumb_size.width(),height if large else thumb_size.height(),(8,8));return photo,result
         def done(value):
             if not self.valid(gen):return
             self.loading.discard(key);photo,result=value;pix=QPixmap.fromImage(result[0][0]);pix.setDevicePixelRatio(dpr)
@@ -239,7 +279,7 @@ class RatingPage(QWidget):
                 self.source_widths[pid]=result[2][0];self.images[pid]=(photo,pix);self.image_sizes[pid]=size
                 self.install_preview(pid,photo,pix)
             else:
-                self.thumbs[pid]=QIcon(pix);self.thumb_photos[pid]=photo
+                self.thumbs[pid]=QIcon(pix);self.thumb_photos[pid]=photo;self.thumb_sizes[pid]=thumb_size
                 while len(self.thumbs)>128:self.thumbs.popitem(last=False)
                 self.grid.captions[pid]=photo['name']+'\n'+self.star_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
                 if row>=0:self.grid.photo_model.changed(row)
@@ -251,7 +291,7 @@ class RatingPage(QWidget):
             self.preview_errors.add(key)
             # Do not retry a broken preview in a tight loop.
             if large and pid==self.pid():self.pane.show_photo({'id':pid},error=message)
-            if not large:self.thumbs[pid]=self.host.tile
+            if not large:self.thumbs[pid]=self.host.tile;self.thumb_sizes[pid]=thumb_size
             self.prefetch();self.visible()
         current=pid in self.ids[self.index:self.index+2]
         self.host.submit(work,done,failed,self.host.image_pool if large else self.host.thumb_pool,100 if large and current else -5 if large else 0)
