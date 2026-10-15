@@ -84,7 +84,8 @@ class MetadataTest(unittest.TestCase):
         arguments=command.call_args.args[0]
         self.assertEqual(arguments[1:3],['-charset','filename=UTF8'])
         self.assertIn('-LensModel',arguments);self.assertIn('-FocalLength',arguments)
-        self.assertEqual(arguments[-2:],['照片/正确.ARW','照片/不存在.ARW'])
+        self.assertEqual(arguments[-2:],['-@','-'])
+        self.assertEqual(command.call_args.kwargs['input'],('\n'.join(os.path.abspath(path) for path in ['照片/正确.ARW','照片/不存在.ARW'])+'\n').encode('utf8'))
         self.assertFalse(command.call_args.kwargs['check'],'A partial metadata error must not erase valid rows')
 
     def test_metadata_runner_reports_command_timeout_and_invalid_output_as_retryable(self):

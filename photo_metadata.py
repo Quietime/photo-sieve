@@ -50,8 +50,14 @@ def _run_metadata(paths):
     can contain a moved/missing photo while other rows are perfectly readable.
     """
     from embedded_rating import executable
-    arguments=['-charset','filename=UTF8','-j','-n',*('-'+tag for tag in CAMERA_TAGS),'--',*map(str,paths)]
-    options={'capture_output':True,'timeout':4,'check':False}
+    # Windows ExifTool's Perl launcher can lose Unicode on the command line
+    # before -charset is interpreted. UTF-8 argument-file input avoids that
+    # conversion entirely; do not shell-quote argument-file lines.
+    filenames=[os.path.abspath(path) for path in paths]
+    if any('\n' in path or '\r' in path for path in filenames):
+        raise MetadataReadError('拍摄参数文件路径包含换行符，无法读取')
+    arguments=['-charset','filename=UTF8','-j','-n',*('-'+tag for tag in CAMERA_TAGS),'-@','-']
+    options={'capture_output':True,'timeout':4,'check':False,'input':('\n'.join(filenames)+'\n').encode('utf8')}
     if os.name=='nt':options['creationflags']=subprocess.CREATE_NO_WINDOW
     try:
         result=subprocess.run([executable(),*arguments],**options)
