@@ -8,6 +8,7 @@ from PySide6.QtCore import QSettings,QPoint,QPointF,Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
+import theme
 from app import Library
 from desktop import Window,STYLE
 from tools.check_ratings import FakeEngine
@@ -60,20 +61,25 @@ def run(output):
                 assert p.grid.tile_width==220
                 wheel(p.pane.viewport(),-120);assert p.grid.tile_width==220
                 checks.append('ordinary_wheel_scrolls_and_right_preview_does_not_resize_gallery')
-                until(lambda:p.grid.scroll_motion is None)
-                bar.setValue(0);samples=[];bar.valueChanged.connect(samples.append)
-                wheel(p.grid.viewport(),-120);assert bar.value()==0
-                until(lambda:p.grid.scroll_motion is None)
-                assert bar.value()==48 and len(set(samples))>=3 and samples==sorted(samples),samples
-                checks.append('one_notch_moves_only_48_pixels_with_short_monotonic_animation')
-                wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120)
-                until(lambda:p.grid.scroll_motion is None);assert bar.value()==192
-                wheel(p.grid.viewport(),-120);QTest.qWait(35);turn=bar.value();wheel(p.grid.viewport(),120)
-                until(lambda:p.grid.scroll_motion is None);assert bar.value()==max(0,turn-48)
-                checks.append('rapid_notches_accumulate_and_reversal_discards_forward_momentum')
-                wheel(p.grid.viewport(),-120);bar.setValue(20);QTest.qWait(160);assert bar.value()==20
-                wheel(p.grid.viewport(),-120);p.select(0);QTest.qWait(160);assert bar.value()==0
-                checks.append('scrollbar_and_photo_selection_cancel_stale_wheel_animation')
+                with patch.object(theme,'REDUCED_MOTION',False):
+                    until(lambda:p.grid.scroll_motion is None)
+                    bar.setValue(0);samples=[];bar.valueChanged.connect(samples.append)
+                    wheel(p.grid.viewport(),-120);assert bar.value()==0
+                    until(lambda:p.grid.scroll_motion is None)
+                    assert bar.value()==48 and len(set(samples))>=3 and samples==sorted(samples),samples
+                    checks.append('one_notch_moves_only_48_pixels_with_short_monotonic_animation')
+                    wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120);wheel(p.grid.viewport(),-120)
+                    until(lambda:p.grid.scroll_motion is None);assert bar.value()==192
+                    wheel(p.grid.viewport(),-120);QTest.qWait(35);turn=bar.value();wheel(p.grid.viewport(),120)
+                    until(lambda:p.grid.scroll_motion is None);assert bar.value()==max(0,turn-48)
+                    checks.append('rapid_notches_accumulate_and_reversal_discards_forward_momentum')
+                    wheel(p.grid.viewport(),-120);bar.setValue(20);QTest.qWait(160);assert bar.value()==20
+                    wheel(p.grid.viewport(),-120);p.select(0);QTest.qWait(160);assert bar.value()==0
+                    checks.append('scrollbar_and_photo_selection_cancel_stale_wheel_animation')
+                with patch.object(theme,'REDUCED_MOTION',True):
+                    bar.setValue(0);wheel(p.grid.viewport(),-120);assert bar.value()==48
+                    until(lambda:p.grid.scroll_motion is None)
+                checks.append('reduced_motion_respects_immediate_scrolling_with_same_small_step')
                 # Three columns: both caption lines must fit every tile and the final row.
                 p.splitter.setSizes([3*220+30,p.splitter.width()-(3*220+30)])
                 p.grid.doItemsLayout();app.processEvents()
