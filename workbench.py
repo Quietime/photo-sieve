@@ -7,6 +7,7 @@ from rating_combo import RoundedCombo
 from widgets import CapsuleProgress
 from workflow_data import WorkRecords,LABELS,COLORS
 from xmp_sync import sync_out,sync_in
+from xmp_queue import AutoXmpQueue
 import theme
 
 class GroupChoiceModel(QAbstractListModel):
@@ -43,6 +44,7 @@ class GroupModel(QAbstractTableModel):
 class Workbench:
     def __init__(self,page,layout,heading):
         self.page=page;self.host=page.host;self.records=None;self.annotations={};self.groups=[];self.group_map={};self.syncing=set();self.xmp_errors={};self.dialog=None;self.last_summary=0;self.summary_pending=False;self.filter_dirty=False;self.last_interaction=time.monotonic()
+        self.xmp_queue=AutoXmpQueue(self)
         self.auto_xmp=page.host.mode_settings('rating').value('auto_xmp',True,type=bool)
         self.button=self.host.button('选片工具',self.open);heading.insertWidget(heading.count()-1,self.button)
         row=QHBoxLayout();row.setSpacing(8)
@@ -110,7 +112,7 @@ class Workbench:
             p.grid.label_colors={pid:COLORS.get(a['label']) for pid,a in self.annotations.items() if a['label']};p.grid.viewport().update()
             self.host.toast.show_message('颜色标签已保存：'+LABELS[key],'info',1500)
             if self.auto_xmp:
-                for pid in ids:self.export_one(pid,label=key)
+                for pid in ids:self.xmp_queue.schedule(pid,label=key)
             if self.label_filter.currentData() is not None:
                 self.filter_dirty=True
                 if not p.writing:self.filter_dirty=False;p.reload()
@@ -137,7 +139,7 @@ class Workbench:
             if complete:complete(False,message)
         self.host.op(lambda:sync_out(records,pid,stars,label,force),done,failed)
     def after_rating(self,result):
-        if self.auto_xmp:self.export_one(result['photo_id'],stars=result['stars'])
+        if self.auto_xmp:self.xmp_queue.schedule(result['photo_id'],stars=result['stars'])
     def tick(self):
         if self.host.closed:return
         p=self.page
@@ -241,7 +243,7 @@ class WorkbenchDialog(QDialog):
         def done(_):
             t.refresh_filters()
             if t.auto_xmp:
-                for pid,label in getattr(records,'last_undo_labels',{}).items():t.export_one(pid,label=label)
+                for pid,label in getattr(records,'last_undo_labels',{}).items():t.xmp_queue.schedule(pid,label=label)
         t.host.op(records.undo,done,t.host.error)
     def refresh(self):
         t=self.tools;t.host.mode_settings('rating').setValue('segment_gap',self.gap.value());t.host.analysis.finished=True;t.host.analysis.start(t.host.library);t.reset_groups();t.refresh_filters()

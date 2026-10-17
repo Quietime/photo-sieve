@@ -50,6 +50,21 @@ class LibraryError(Exception):
         self.detail = detail
 
 
+class SessionConnection(sqlite3.Connection):
+    """An exclusively leased connection; cursors never survive their lease."""
+    def cursor(self,*args,**kwargs):
+        result=super().cursor(*args,**kwargs);self._leased_cursors.append(result);return result
+    def execute(self,*args,**kwargs):
+        result=super().execute(*args,**kwargs);self._leased_cursors.append(result);return result
+    def executemany(self,*args,**kwargs):
+        result=super().executemany(*args,**kwargs);self._leased_cursors.append(result);return result
+    def executescript(self,*args,**kwargs):
+        result=super().executescript(*args,**kwargs);self._leased_cursors.append(result);return result
+    def release_cursors(self):
+        for cursor in self._leased_cursors:cursor.close()
+        self._leased_cursors.clear()
+
+
 class Library:
     def __init__(self, directory: Path, cache_mb=None):
         crashlog.event('workspace_initializing',directory=str(directory))
@@ -69,7 +84,7 @@ class Library:
         self.last_prune = time.monotonic()
         self.cache_indexed = set(); self.cache_sizes={}; self.cache_bytes=0; self.cache_changed=None
         self.cache_evictions=0  # Capacity eviction only; explicit/deleted-cache cleanup does not increment this.
-        self.session_lock=threading.Lock(); self.session_users=0; self.session_connection=None
+        self.session_lock=threading.Lock(); self.session_users=0; self.session_connection=None; self.connection_pool=[]
         self.job = {'revision': secrets.token_hex(8), 'running': False, 'kind': '', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
         # Optional callable that builds a preview in another process (see build_preview); None decodes in-thread.
         self.offload = None
@@ -154,22 +169,35 @@ class Library:
             self.session_users+=1
 
     def stop_session(self):
+        closing=[]
         with self.session_lock:
             self.session_users=max(0,self.session_users-1)
-            if self.session_users==0 and self.session_connection is not None:
-                self.session_connection.close(); self.session_connection=None
+            if self.session_users==0:
+                closing,self.connection_pool=self.connection_pool,[]
+                if self.session_connection is not None:
+                    closing.append(self.session_connection);self.session_connection=None
+        for db in closing:db.close()
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.database, timeout=30)
-        db.row_factory = sqlite3.Row
-        db.execute('PRAGMA journal_mode=WAL')
-        db.execute('PRAGMA busy_timeout=30000')
+        with self.session_lock:
+            pooled=self.session_users>0
+            db=self.connection_pool.pop() if pooled and self.connection_pool else None
+        if db is None:
+            db=sqlite3.connect(self.database,timeout=30,check_same_thread=not pooled,
+                              factory=SessionConnection if pooled else sqlite3.Connection)
+            if pooled:db._leased_cursors=[]
+            db.row_factory=sqlite3.Row
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('PRAGMA busy_timeout=30000')
         try:
-            with db:
-                yield db
+            with db:yield db
         finally:
-            db.close()
+            if pooled:db.release_cursors()
+            with self.session_lock:
+                keep=pooled and self.session_users>0 and len(self.connection_pool)<16
+                if keep:self.connection_pool.append(db)
+            if not keep:db.close()
 
     def state(self):
         with self.connect() as db:
