@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
+        options: [workbench_ui, workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:workbench-ui]') && 'workbench_ui') || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui' || env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
         run: python tools/prepare_feature_fixtures.py
       - name: Verify workbench unit and existing library regressions
         if: env.CHECK_SCOPE == 'workbench'
@@ -44,7 +44,7 @@ jobs:
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Verify all workbench functions and native metadata interactions
-        if: env.CHECK_SCOPE == 'workbench'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         env:
           QT_QPA_PLATFORM: windows
         run: |
@@ -60,7 +60,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_fast_delete.py workbench-delete500-ci --count 500
       - name: Verify workbench and responsive gallery at 150 percent scaling
-        if: env.CHECK_SCOPE == 'workbench'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
@@ -393,7 +393,7 @@ jobs:
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--cache-settings-self-test', 'cache-all-settings-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content cache-all-settings-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings failed' }
       - name: Verify packaged workbench and native RAW interoperability
-        if: env.CHECK_SCOPE == 'workbench'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         timeout-minutes: 8
         env:
           QT_QPA_PLATFORM: windows
@@ -408,7 +408,7 @@ jobs:
           $p.Refresh()
           if ($p.ExitCode -ne 0 -or !(Get-Content workbench-raw-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged RAW interoperability failed' }
       - name: Verify immediate rating feedback and safe draining in packaged EXE
-        if: env.CHECK_SCOPE == 'rating_latency' || env.CHECK_SCOPE == 'workbench'
+        if: env.CHECK_SCOPE == 'rating_latency' || env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: windows

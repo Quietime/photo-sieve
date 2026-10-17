@@ -114,7 +114,8 @@ def run(output):
                 assert page.info[first]['stars']==4 and path.read_bytes()==external and first in tools.xmp_errors
                 checks.append('external_xmp_conflict_does_not_rollback_verified_native_rating_or_overwrite_external_edit')
                 errors.clear();tools.open();dialog=tools.dialog;dialog.tabs.setCurrentIndex(2);dialog.import_current();until(lambda:not w.pending_ops and not page.listing)
-                assert page.engine.run(folder/'000.jpg')['stars']==1 and first not in tools.xmp_errors
+                actual=page.engine.run(library.photo(first)['path'])
+                assert actual['stars']==1 and first not in tools.xmp_errors,dict(native=actual['stars'],photo_id=first,current=page.pid(),xmp_errors=tools.xmp_errors,errors=errors)
                 checks.append('explicit_xmp_import_resolves_conflict_via_verified_native_rating')
                 dialog.export_all();until(lambda:not getattr(dialog,'bulk_running',False),60)
                 assert all((folder/f'{i:03}.xmp').is_file() for i in range(32))
