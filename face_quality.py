@@ -1,6 +1,8 @@
 """Conservative local quality hints, never an automatic deletion decision."""
 from pathlib import Path
+import threading
 from PIL import Image,ImageOps,ImageFilter,ImageStat
+_detector=None;_detector_key=None;_lock=threading.Lock()
 EYE_MODEL=Path(__file__).parent/'assets/haarcascade_eye_tree_eyeglasses.xml'
 
 def assess_face(image,face=None):
@@ -14,8 +16,11 @@ def assess_face(image,face=None):
         try:
             import cv2,numpy as np
             cv2.setNumThreads(1)
-            detector=cv2.CascadeClassifier(str(EYE_MODEL));pixels=np.array(gray)
-            detected=detector.detectMultiScale(pixels[:round(gray.height*.68)],scaleFactor=1.08,minNeighbors=5,minSize=(12,8))
+            global _detector,_detector_key
+            stat=EYE_MODEL.stat();key=(str(EYE_MODEL),stat.st_size,stat.st_mtime_ns);pixels=np.array(gray)
+            with _lock:
+                if _detector is None or _detector_key!=key:_detector=cv2.CascadeClassifier(str(EYE_MODEL));_detector_key=key
+                detected=_detector.detectMultiScale(pixels[:round(gray.height*.68)],scaleFactor=1.08,minNeighbors=5,minSize=(12,8))
             # A missing eye detection is not proof of closed eyes (profile, glasses, lights).
             eyes='visible' if len(detected)>=2 else 'review'
             if eyes=='review':warnings.append('眼部待核对：可能闭眼、侧脸或遮挡')

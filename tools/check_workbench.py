@@ -44,6 +44,9 @@ def run(output):
                 checks.append('color_label_persists_draws_and_syncs_xmp_without_changing_culling')
                 page.setFocus();QTest.keyClick(w,Qt.Key.Key_1,Qt.KeyboardModifier.AltModifier);until(lambda:not w.pending_ops)
                 assert records.annotations()[first]['label']=='Red'
+                tools.open();tools.dialog.undo();until(lambda:not w.pending_ops and not page.listing)
+                assert records.annotations()[first]['label']=='Blue' and inspect(folder/'000.xmp')['label']=='Blue'
+                tools.label('Red');until(lambda:not w.pending_ops);tools.dialog.close()
                 tools.label_filter.setCurrentIndex(tools.label_filter.findData('Red'));until(lambda:not page.listing)
                 assert page.ids==[first]
                 tools.label_filter.setCurrentIndex(0);until(lambda:not page.listing)
@@ -106,7 +109,7 @@ def run(output):
                 assert page.info[first]['stars']==4 and path.read_bytes()==external and first in tools.xmp_errors
                 checks.append('external_xmp_conflict_does_not_rollback_verified_native_rating_or_overwrite_external_edit')
                 errors.clear();tools.open();dialog=tools.dialog;dialog.tabs.setCurrentIndex(2);dialog.import_current();until(lambda:not w.pending_ops and not page.listing)
-                assert page.engine.run(folder/'000.jpg')['stars']==1
+                assert page.engine.run(folder/'000.jpg')['stars']==1 and first not in tools.xmp_errors
                 checks.append('explicit_xmp_import_resolves_conflict_via_verified_native_rating')
                 dialog.export_all();until(lambda:not getattr(dialog,'bulk_running',False),60)
                 assert all((folder/f'{i:03}.xmp').is_file() for i in range(32))
@@ -139,14 +142,28 @@ def run(output):
                 assert quality.get('sharpness') is not None
                 page.select(page.ids.index(first));page.images.pop(first,None);page.image_sizes.pop(first,None);page.show_current();until(lambda:not page.loading);assert page.images[first][0]['_work_quality']['sharpness'] is not None
                 checks.append('face_quality_hints_are_background_cached_and_follow_current_photo')
+                # Concurrent native rating and label edits while both filters are active.
+                target=page.ids[-1];tools.label('Blue',[target]);until(lambda:not w.pending_ops)
+                tools.label_filter.setCurrentIndex(tools.label_filter.findData('Blue'));until(lambda:not page.listing)
+                tools.mode.setCurrentIndex(1);until(lambda:not page.listing)
+                assert page.ids==[target];until(lambda:page.can_grade() and not page.listing);page.grade(5,advance=False);assert page.info[target]['stars']==5;tools.label('Green')
+                until(lambda:not w.pending_ops and not page.writing and not page.listing)
+                assert not page.ids and records.annotations()[target]['label']=='Green'
+                assert inspect(Path(library.photo(target)['path']).with_suffix('.xmp'))['stars']==5
+                tools.label_filter.setCurrentIndex(0);tools.mode.setCurrentIndex(0);until(lambda:not page.listing)
+                assert len(page.ids)==32;page.select(page.ids.index(first));until(lambda:not page.loading)
+                checks.append('concurrent_rating_and_label_edits_refresh_active_group_and_color_filters_without_stale_results')
                 w.grab().save(str(output/'workbench-rating.png'))
                 # Late callbacks after comparison closes or modes change must be ignored.
                 compare=CompareDialog(page);compare.show();compare.close();w.toggle_rating();w.toggle_rating();until(lambda:not page.listing and not page.loading)
                 assert not compare.alive and page.active
+                tools.open();visible_dialog=tools.dialog;w.toggle_rating();assert not visible_dialog.isVisible()
+                before=records.annotations()[first]['label'];tools.label('Purple');app.processEvents();assert records.annotations()[first]['label']==before
+                w.toggle_rating();until(lambda:not page.listing and not page.loading)
                 checks.append('mode_changes_and_late_comparison_results_do_not_mix_photo_identity')
                 assert not errors,errors
             finally:
                 if dialog:dialog.close()
                 w.prompt_on_close=False;w.close();until(lambda:w.closed)
-    report=dict(ok=True,checks=checks,rating_inputs=500,max_rating_handler_ms=max(rating_timings),peak_pending=peak);(output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(report,ensure_ascii=False),flush=True)
+    report=dict(ok=True,checks=checks,rating_inputs=500,max_rating_handler_ms=max(rating_timings),p95_rating_handler_ms=sorted(rating_timings)[int(len(rating_timings)*.95)],peak_pending=peak);(output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(report,ensure_ascii=False),flush=True)
 if __name__=='__main__':run(sys.argv[1])

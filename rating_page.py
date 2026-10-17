@@ -1,6 +1,7 @@
 """Independent photo grading; displayed stars come from verified photo metadata."""
 from collections import OrderedDict
 from pathlib import Path
+import time
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence,QColor,QPen,QPainter
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle
@@ -181,7 +182,7 @@ class RatingPage(QWidget):
         self.images.clear();self.thumbs.clear();self.image_sizes.clear();self.thumb_sizes.clear();self.source_widths.clear();self.fingerprints.clear();self.thumb_photos.clear();self.preview_errors.clear()
         self.face_panel.show_result(None);self.camera_info.setText('请选择照片')
     def deactivate(self):
-        self.active=False;self.generation+=1;self.scanning=False;self.listing=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
+        self.active=False;self.tools.hide();self.generation+=1;self.scanning=False;self.listing=False;self.resize_timer.stop();self.reading.clear();self.loading.clear()
     def reload(self,*_):
         if not self.active or self.writing or not self.records:return
         self.generation+=1;gen=self.generation;self.scanning=False;self.listing=True;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部照片评级')
@@ -232,6 +233,7 @@ class RatingPage(QWidget):
         else:self.camera_info.setText('正在读取拍摄参数…' if self.pid() else '没有符合条件的照片')
         self.tools.show_quality()
     def select(self,index):
+        self.tools.last_interaction=time.monotonic()
         if self.undoing or self.host.closing:return
         self.index=index
         self.show_aux()
@@ -443,6 +445,7 @@ class RatingPage(QWidget):
         self.read_button.setText(f'停止读取 · {max(0,self.total-len(self.remaining)-len(self.reading)):,} / {self.total:,}')
         if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部照片评级');self.reload()
     def grade(self,stars,advance=True):
+        self.tools.last_interaction=time.monotonic()
         pid=self.pid();info=self.info.get(pid)
         if self.host.busy or self.host.job_running() or self.undoing or self.listing or self.host.closing or self.pending_count>=256 or not self.can_grade():return
         info=info or dict(photo_id=pid,state='unread',stars=None,writable=False,error='')

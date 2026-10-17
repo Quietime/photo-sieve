@@ -15,7 +15,8 @@ def inspect(path):
         if path.stat().st_size>8*1024**2:raise XmpError('XMP 文件过大')
         data=path.read_bytes()
     except FileNotFoundError:data=b''
-    if b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():raise XmpError('XMP 含不支持的实体定义')
+    upper=data.replace(b'\x00',b'').upper()
+    if b'<!DOCTYPE' in upper or b'<!ENTITY' in upper:raise XmpError('XMP 含不支持的实体定义')
     try:root=ET.fromstring(data) if data else ET.Element('{'+NS['x']+'}xmpmeta')
     except ET.ParseError as exc:raise XmpError('XMP 格式损坏，未覆盖原文件') from exc
     def get(name):

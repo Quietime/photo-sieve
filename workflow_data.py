@@ -82,8 +82,11 @@ class WorkRecords:
                 db.execute('BEGIN IMMEDIATE');row=db.execute('SELECT * FROM work_history ORDER BY seq DESC LIMIT 1').fetchone()
                 if not row:return None
                 rows=list(db.execute('SELECT * FROM work_history WHERE batch=? ORDER BY seq DESC',(row['batch'],))) if row['batch'] else [row]
+                self.last_undo_labels={}
                 for entry in rows:
-                    old=json.loads(entry['before_json']);db.execute('INSERT OR REPLACE INTO work_annotations VALUES(?,?,?,?,?)',tuple(old[k] for k in ('photo_id','label','segment','split_before','merge_key')));db.execute('DELETE FROM work_history WHERE seq=?',(entry['seq'],))
+                    old=json.loads(entry['before_json'])
+                    if old['label']!=json.loads(entry['after_json'])['label']:self.last_undo_labels[old['photo_id']]=old['label']
+                    db.execute('INSERT OR REPLACE INTO work_annotations VALUES(?,?,?,?,?)',tuple(old[k] for k in ('photo_id','label','segment','split_before','merge_key')));db.execute('DELETE FROM work_history WHERE seq=?',(entry['seq'],))
                 return row['photo_id']
     def save_feature(self,photo,feature):
         with self.library.connect() as db:

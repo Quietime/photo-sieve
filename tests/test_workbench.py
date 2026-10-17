@@ -64,7 +64,7 @@ class WorkbenchTests(unittest.TestCase):
         self.records.annotate([self.ids[0]],label='Green');self.lib.trash(self.ids[0]);self.lib.undo();self.assertEqual(self.records.annotations()[self.ids[0]]['label'],'Green')
     def test_bulk_annotation_undo_reverts_the_entire_action(self):
         self.records.annotate(self.ids,label='Purple',segment='song');self.records.undo()
-        self.assertTrue(all(a['label']=='' and a['segment']=='' for a in self.records.annotations().values()))
+        self.assertTrue(all(a['label']=='' and a['segment']=='' for a in self.records.annotations().values()));self.assertEqual(set(self.records.last_undo_labels),set(self.ids))
     def test_manual_merged_group_split_divides_suffix_without_overlapping(self):
         for pid in self.ids:self.feature(pid,when=1)
         self.records.annotate(self.ids,merge_key='one');self.records.split(self.ids[3],self.ids)
@@ -99,6 +99,8 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(),b'broken')
     def test_xml_entities_and_oversize_rejected(self):
         path=self.root/'bad.xmp';path.write_text('<!DOCTYPE x [<!ENTITY x "boom">]><x/>')
+        with self.assertRaises(XmpError):inspect(path)
+        path.write_bytes('<?xml version="1.0" encoding="utf-16"?><!DOCTYPE x [<!ENTITY x "boom">]><x/>'.encode('utf-16'))
         with self.assertRaises(XmpError):inspect(path)
         path.write_bytes(b' '* (8*1024**2+1))
         with self.assertRaises(XmpError):inspect(path)
@@ -138,6 +140,11 @@ class WorkbenchTests(unittest.TestCase):
         sharp=assess_face(image);blur=assess_face(image.filter(ImageFilter.GaussianBlur(9)));self.assertGreater(sharp['sharpness'],blur['sharpness']);self.assertEqual(blur['state'],'review');self.assertEqual(assess_face(Image.new('RGB',(30,30)))['state'],'uncertain')
     def test_missing_eye_classifier_is_unknown_not_closed(self):
         with patch('face_quality.EYE_MODEL',self.root/'missing.xml'):self.assertEqual(assess_face(Image.effect_noise((256,256),100).convert('RGB'))['eyes'],'unknown')
+    def test_group_choice_model_keeps_all_16000_groups_without_per_item_widgets(self):
+        from workbench import GroupChoiceModel
+        from PySide6.QtCore import Qt
+        groups=[dict(key=str(i),title='组 '+str(i),ids=[i]) for i in range(16000)];model=GroupChoiceModel(groups)
+        self.assertEqual(model.rowCount(),16001);self.assertEqual(model.data(model.index(16000,0),Qt.ItemDataRole.UserRole),'15999');self.assertEqual(model.positions['15999'],16000)
     def test_16000_inventory_grouping_is_bounded_and_complete(self):
         f=self.feature(self.ids[0]);sig=json.dumps(f['signature']);t=time.monotonic()
         with self.lib.connect() as db:

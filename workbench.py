@@ -1,13 +1,33 @@
 """Compact entry points for local grouping, labels, progress and XMP exchange."""
 import json,secrets,time
-from PySide6.QtCore import Qt,QTimer,QAbstractTableModel,QModelIndex
+from PySide6.QtCore import Qt,QTimer,QAbstractTableModel,QAbstractListModel,QModelIndex,QSize
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTabWidget,QWidget,QCheckBox,QSpinBox,QLineEdit,QTableView,QAbstractItemView,QMenu,QMessageBox,QScrollArea
+from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTabWidget,QWidget,QCheckBox,QSpinBox,QLineEdit,QTableView,QAbstractItemView,QMenu,QMessageBox,QScrollArea,QHeaderView,QComboBox
 from rating_combo import RoundedCombo
 from widgets import CapsuleProgress
 from workflow_data import WorkRecords,LABELS,COLORS
 from xmp_sync import sync_out,sync_in
 import theme
+
+class GroupChoiceModel(QAbstractListModel):
+    def __init__(self,groups,parent=None):super().__init__(parent);self.groups=groups;self.positions={g['key']:i+1 for i,g in enumerate(groups)}
+    def rowCount(self,parent=QModelIndex()):return 0 if parent.isValid() else len(self.groups)+1
+    def data(self,index,role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0<=index.row()<=len(self.groups):return None
+        if index.row()==0:return '全部组' if role==Qt.ItemDataRole.DisplayRole else None
+        group=self.groups[index.row()-1]
+        if role==Qt.ItemDataRole.UserRole:return group['key']
+        if role==Qt.ItemDataRole.DisplayRole:return f'{index.row()}. {group["title"]} · {len(group["ids"])} 张'
+        if role==Qt.ItemDataRole.ToolTipRole:return group['title']
+
+class GroupCombo(RoundedCombo):
+    def __init__(self):
+        super().__init__();self.choice_model=None;self.setMaximumWidth(340);self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.setMinimumContentsLength(12);self.view().setUniformItemSizes(True);self.set_groups([])
+    def set_groups(self,groups):
+        old=self.currentData();previous=self.choice_model;self.choice_model=GroupChoiceModel(groups,self);self.setModel(self.choice_model);self.setCurrentIndex(self.choice_model.positions.get(old,0))
+        if previous:previous.deleteLater()
+    def sizeHint(self):return QSize(max(180,min(280,self.fontMetrics().horizontalAdvance(self.currentText())+44)),38)
+    def minimumSizeHint(self):return QSize(150,38)
 
 class GroupModel(QAbstractTableModel):
     def __init__(self,groups):super().__init__();self.groups=groups
@@ -22,7 +42,7 @@ class GroupModel(QAbstractTableModel):
 
 class Workbench:
     def __init__(self,page,layout,heading):
-        self.page=page;self.host=page.host;self.records=None;self.annotations={};self.groups=[];self.group_map={};self.syncing=set();self.xmp_errors={};self.dialog=None;self.last_summary=0;self.summary_pending=False;self.filter_dirty=False
+        self.page=page;self.host=page.host;self.records=None;self.annotations={};self.groups=[];self.group_map={};self.syncing=set();self.xmp_errors={};self.dialog=None;self.last_summary=0;self.summary_pending=False;self.filter_dirty=False;self.last_interaction=time.monotonic()
         self.auto_xmp=page.host.mode_settings('rating').value('auto_xmp',True,type=bool)
         self.button=self.host.button('选片工具',self.open);heading.insertWidget(heading.count()-1,self.button)
         row=QHBoxLayout();row.setSpacing(8)
@@ -30,7 +50,7 @@ class Workbench:
         for key,text in LABELS.items():self.label_filter.addItem(text,key)
         self.mode=RoundedCombo();self.mode.setMinimumWidth(125)
         for text,key in [('不分组','none'),('相似连拍分组','similar'),('按时间分段','time')]:self.mode.addItem(text,key)
-        self.group=RoundedCombo();self.group.setMinimumWidth(150);self.group.addItem('全部组',None);self.group.hide()
+        self.group=GroupCombo();self.group.setMinimumWidth(150);self.group.hide()
         self.mark=self.host.button('颜色标签 ▾',self.label_menu);self.compare=self.host.button('多图对比',self.open_compare)
         for widget in (self.label_filter,self.mode,self.group,self.mark,self.compare):row.addWidget(widget)
         row.addStretch();layout.insertLayout(2,row)
@@ -50,6 +70,7 @@ class Workbench:
         self.label_filter.blockSignals(True);self.label_filter.setCurrentIndex(0);self.label_filter.blockSignals(False)
         self.mode.blockSignals(True);self.mode.setCurrentIndex(0);self.mode.blockSignals(False)
         self.reset_groups()
+        if self.dialog:self.dialog.summary.setText('正在读取当前文件夹…');self.dialog.sync_status.clear();self.dialog.bulk_cancelled=True
     def snapshot(self):return dict(label=self.label_filter.currentData(),mode=self.mode.currentData(),group=self.group.currentData(),gap=self.host.mode_settings('rating').value('segment_gap',90,type=int))
     def filter_ids(self,ids,options,records=None):
         records=records or self.records;annotations=records.annotations();wanted=set(ids)
@@ -63,16 +84,15 @@ class Workbench:
         return ordered,groups,annotations
     def reloaded(self,groups,annotations):
         self.annotations=annotations;self.page.grid.label_colors={pid:COLORS.get(a['label']) for pid,a in annotations.items() if a['label']};self.groups=groups;self.group_map={pid:g for g in groups for pid in g['ids']}
-        old=self.group.currentData();self.group.blockSignals(True);self.group.clear();self.group.addItem('全部组',None)
-        for i,g in enumerate(groups):self.group.addItem(f'{i+1}. {g["title"]} · {len(g["ids"])} 张',g['key'])
-        index=self.group.findData(old);self.group.setCurrentIndex(max(0,index));self.group.blockSignals(False);self.group.setVisible(self.mode.currentData()!='none');self.show_quality()
-        if self.dialog:self.dialog.table.setModel(GroupModel(groups))
+        self.group.blockSignals(True);self.group.set_groups(groups);self.group.blockSignals(False);self.group.setVisible(self.mode.currentData()!='none');self.show_quality()
+        if self.dialog:
+            self.dialog.set_groups(groups);self.dialog.group_mode.blockSignals(True);self.dialog.group_mode.setCurrentIndex(self.mode.currentIndex());self.dialog.group_mode.blockSignals(False)
     def reset_groups(self):
-        self.group.blockSignals(True);self.group.clear();self.group.addItem('全部组',None);self.group.blockSignals(False)
+        self.group.blockSignals(True);self.group.set_groups([]);self.group.blockSignals(False)
     def refresh_filters(self):
         self.filter_dirty=True
         if not self.page.writing:self.filter_dirty=False;self.page.reload()
-    def mode_changed(self):self.reset_groups();self.refresh_filters()
+    def mode_changed(self):self.last_interaction=time.monotonic();self.reset_groups();self.refresh_filters()
     def label_menu(self):
         menu=QMenu(self.page)
         for index,(key,name) in enumerate(LABELS.items()):
@@ -80,7 +100,7 @@ class Workbench:
         menu.exec(self.mark.mapToGlobal(self.mark.rect().bottomLeft()))
     def label(self,key,ids=None):
         p=self.page
-        if not self.records or p.host.closing or p.host.busy or p.listing:return
+        if not p.active or not self.records or self.records.library is not self.host.library or p.host.closing or p.host.busy or p.listing:return
         ids=list(ids or ([p.pid()] if p.pid() else []))
         if not ids:return
         records=self.records
@@ -100,11 +120,12 @@ class Workbench:
         if not self.records or not pid:self.quality.clear();return
         # This is an in-memory copy populated by background reads, never face inference here.
         photo=p.images.get(pid,(p.thumb_photos.get(pid,{}),))[0]
-        hint=photo.get('_work_quality') or getattr(self,'quality_map',{}).get(pid)
+        cached=getattr(self,'quality_map',{}).get(pid);embedded=photo.get('_work_quality')
+        hint=cached if cached and cached.get('state')!='pending' else embedded or cached
         self.quality.setText(hint.get('text','') if hint else '人脸质量后台分析中' if self.host.faces.enabled else '人脸预览已关闭')
         self.quality.setToolTip((hint or {}).get('notice','只作选片参考，不会自动删除或评级'))
     def export_one(self,pid,stars=None,label=None,force=False,complete=None):
-        if not self.records or self.host.closing:return
+        if not self.records or self.records.library is not self.host.library or self.host.closing:return
         records=self.records;library=records.library;self.syncing.add(pid)
         def done(result):
             self.syncing.discard(pid)
@@ -124,6 +145,9 @@ class Workbench:
         cache=self.host.full_cache.status();faces=self.host.full_faces.status();analysis=self.host.analysis.status()
         def count(s):return f'{s.get("visited",s.get("done",0)):,}/{s.get("total") or 0:,}'
         self.progress.setText('后台缓存 · 预览 '+count(cache)+' · 人脸 '+(count(faces) if self.host.faces.enabled else '已关闭')+' · 分析 '+count(analysis)+(f' · XMP {len(self.xmp_errors)} 项待处理' if self.xmp_errors else ''))
+        token=(id(self.records),self.host.analysis.generation,analysis['done'])
+        if time.monotonic()-self.last_interaction>1 and not (self.dialog and self.dialog.isVisible()) and analysis['finished'] and getattr(self,'last_analysis_done',None)!=token and self.mode.currentData()!='none' and not p.listing and not p.writing:
+            self.last_analysis_done=token;self.refresh_filters()
         self.progress.setVisible(bool(self.host.session_active));self.button.setEnabled(not self.host.closing and not self.host.busy)
         for widget in (self.label_filter,self.mode,self.group):widget.setEnabled(not p.writing and not p.listing and not self.host.closing and not self.host.busy)
         self.mark.setEnabled(bool(p.pid()) and not p.listing and not self.host.closing);self.compare.setEnabled(bool(p.pid()) and not p.listing and not self.host.closing)
@@ -144,16 +168,20 @@ class Workbench:
             self.host.submit(work,done,lambda _:setattr(self,'summary_pending',False),priority=-15)
         if self.dialog and self.dialog.isVisible():self.dialog.update_progress(cache,faces,analysis)
     def open(self):
-        if not self.records or self.host.closing:return
-        if self.dialog:self.dialog.show();self.dialog.raise_();return
+        if not self.page.active or not self.records or self.records.library is not self.host.library or self.host.closing:return
+        if self.dialog:self.dialog.show();self.dialog.raise_();self.last_summary=0;self.tick();return
         self.dialog=WorkbenchDialog(self);self.dialog.show();self.last_summary=0;self.tick()
     def open_compare(self):
         if not self.page.pid():return
         from compare_view import CompareDialog
-        dialog=CompareDialog(self.page);dialog.exec()
-    def shutdown(self):
-        self.timer.stop()
-        if self.dialog:self.dialog.close()
+        dialog=CompareDialog(self.page);self.compare_dialog=dialog
+        try:dialog.exec()
+        finally:self.compare_dialog=None
+    def hide(self):
+        if self.dialog:self.dialog.bulk_cancelled=True;self.dialog.close()
+        compare=getattr(self,'compare_dialog',None)
+        if compare and compare.alive:compare.close()
+    def shutdown(self):self.timer.stop();self.hide()
 
 class WorkbenchDialog(QDialog):
     def __init__(self,tools):
@@ -168,7 +196,7 @@ class WorkbenchDialog(QDialog):
         self.group_mode=RoundedCombo();self.group_mode.addItems(['不分组','相似连拍分组','按时间分段']);self.group_mode.setCurrentIndex(tools.mode.currentIndex());self.group_mode.currentIndexChanged.connect(tools.mode.setCurrentIndex);g.addWidget(self.group_mode)
         gaprow=QHBoxLayout();gaprow.addWidget(QLabel('时间分段间隔（秒）'));self.gap=QSpinBox();self.gap.setRange(1,7200);self.gap.setValue(tools.host.mode_settings('rating').value('segment_gap',90,type=int));gaprow.addWidget(self.gap)
         gaprow.addWidget(tools.host.button('重新分析 / 刷新分组',self.refresh));g.addLayout(gaprow)
-        self.table=QTableView();self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection);self.table.setModel(GroupModel(tools.groups));self.table.horizontalHeader().setStretchLastSection(True);g.addWidget(self.table)
+        self.table=QTableView();self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection);self.set_groups(tools.groups);g.addWidget(self.table)
         row=QHBoxLayout();self.segment=QLineEdit();self.segment.setPlaceholderText('歌曲 / 环节名称');self.segment.setMaxLength(120);row.addWidget(self.segment);row.addWidget(tools.host.button('命名所选分段',self.name_groups));g.addLayout(row)
         row=QHBoxLayout()
         for name,fn in [('在当前照片前拆分',self.split),('合并所选组',self.merge),('取消所选组手动合并',self.unmerge),('撤销分组 / 标签修改',self.undo)]:row.addWidget(tools.host.button(name,fn))
@@ -191,6 +219,9 @@ class WorkbenchDialog(QDialog):
             if key=='face' and not self.tools.host.faces.enabled:label.setText('人脸裁剪 · 已关闭');bar.setRange(0,1);bar.setValue(0);continue
             done=state.get('visited',state.get('done',0));total=state.get('total') or 0;bar.setRange(0,max(1,total));bar.setValue(min(done,total));label.setText({'cache':'清晰预览','face':'人脸裁剪','analysis':'分组与质量分析'}[key]+f' · {done:,}/{total:,}'+(' · 运行中' if state.get('running') else ' · 本轮结束'))
         self.cache_note.setText('缓存仅超过 10 GB 才按旧到新清理 70%；切换文件夹清理上一文件夹的派生缓存。\n'+f'预览就绪 {cache.get("ready",0):,} · 失败 {cache.get("errors",0):,} · 容量淘汰 {cache.get("capacity_evictions",0):,}；“本轮结束”不代表磁盘中永久保留全部缓存。')
+    def set_groups(self,groups):
+        self.table.setModel(GroupModel(groups));header=self.table.horizontalHeader();header.setStretchLastSection(False)
+        for index,mode in enumerate((QHeaderView.ResizeMode.ResizeToContents,QHeaderView.ResizeMode.Stretch,QHeaderView.ResizeMode.ResizeToContents)):header.setSectionResizeMode(index,mode)
     def selected_groups(self):return [self.tools.groups[i.row()] for i in self.table.selectionModel().selectedRows() if i.row()<len(self.tools.groups)]
     def selected_ids(self):return [pid for g in self.selected_groups() for pid in g['ids']]
     def mutate(self,ids,**changes):
@@ -206,7 +237,12 @@ class WorkbenchDialog(QDialog):
     def merge(self):self.mutate(self.selected_ids(),merge_key=secrets.token_hex(8))
     def unmerge(self):self.mutate(self.selected_ids(),merge_key='')
     def undo(self):
-        t=self.tools;t.host.op(t.records.undo,lambda _:t.refresh_filters(),t.host.error)
+        t=self.tools;records=t.records
+        def done(_):
+            t.refresh_filters()
+            if t.auto_xmp:
+                for pid,label in getattr(records,'last_undo_labels',{}).items():t.export_one(pid,label=label)
+        t.host.op(records.undo,done,t.host.error)
     def refresh(self):
         t=self.tools;t.host.mode_settings('rating').setValue('segment_gap',self.gap.value());t.host.analysis.finished=True;t.host.analysis.start(t.host.library);t.reset_groups();t.refresh_filters()
     def auto_changed(self,value):self.tools.auto_xmp=value;self.tools.host.mode_settings('rating').setValue('auto_xmp',value)
@@ -223,6 +259,7 @@ class WorkbenchDialog(QDialog):
         if not pid or p.writing:return
         def done(result):
             if result['rating']:p.info[pid]=result['rating'];p.update_caption(pid);p.update_controls()
+            t.xmp_errors.pop(pid,None)
             p.reload();self.sync_status.setText('已从 XMP 读取；原有筛选标记不变。')
         t.host.op(lambda:sync_in(records,pid,p.records,p.engine),done,t.host.error)
     def export_all(self):
@@ -231,7 +268,7 @@ class WorkbenchDialog(QDialog):
         ids=list(t.page.ids);records=t.records;rating=t.page.records;self.bulk_running=True;self.bulk_cancelled=False;self.bulk_done=0;self.bulk_errors={}
         self.sync_status.setText('正在同步当前筛选结果…')
         def pump():
-            if self.bulk_cancelled or t.host.closing or t.records is not records or self.bulk_done>=len(ids):
+            if self.bulk_cancelled or t.host.closing or t.records is not records or t.host.library is not records.library or self.bulk_done>=len(ids):
                 self.bulk_running=False;self.sync_status.setText(f'已处理 {self.bulk_done:,}/{len(ids):,} 张；{len(self.bulk_errors):,} 项需处理。');return
             batch=ids[self.bulk_done:self.bulk_done+16]
             def work():
@@ -241,7 +278,10 @@ class WorkbenchDialog(QDialog):
                     except Exception as error:result.append((pid,str(error)))
                 return result
             def done(rows):
-                self.bulk_done+=len(rows);self.bulk_errors.update({pid:error for pid,error in rows if error});t.xmp_errors.update(self.bulk_errors)
+                self.bulk_done+=len(rows)
+                for pid,error in rows:
+                    if not error:t.xmp_errors.pop(pid,None)
+                self.bulk_errors.update({pid:error for pid,error in rows if error});t.xmp_errors.update(self.bulk_errors)
                 self.sync_status.setText(f'正在同步 {self.bulk_done:,}/{len(ids):,} 张；{len(self.bulk_errors):,} 项需处理。');QTimer.singleShot(0,pump)
             def failed(error):self.bulk_running=False;self.sync_status.setText(str(error))
             t.host.op(work,done,failed)
