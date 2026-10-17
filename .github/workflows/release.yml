@@ -59,7 +59,9 @@ jobs:
         timeout-minutes: 4
         env:
           QT_QPA_PLATFORM: windows
-        run: python tools/check_workbench_raw.py feature-fixtures/sony.ARW workbench-raw-ci
+        run: |
+          python -m unittest tests.test_embedded_rating -v
+          python tools/check_workbench_raw.py feature-fixtures/sony.ARW workbench-raw-ci
       - name: Verify existing immediate ratings native handlers and gallery controls
         if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         timeout-minutes: 5

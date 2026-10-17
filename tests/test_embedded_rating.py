@@ -72,6 +72,17 @@ class EmbeddedRatingTests(unittest.TestCase):
             with self.assertRaises(embedded.EmbeddedRatingError):embedded.write(self.original,value)
         with patch.object(embedded,'_run',return_value=b'not json'):
             with self.assertRaises(embedded.EmbeddedRatingError):embedded.read(self.original)
+    def test_unicode_path_uses_utf8_argument_input_without_lossy_command_line(self):
+        result=subprocess.CompletedProcess([],0,b'[{}]',b'')
+        with patch.object(embedded,'executable',return_value='exiftool'),patch.object(embedded.subprocess,'run',return_value=result) as run:
+            self.assertEqual(embedded.read(self.original)['stars'],0)
+        arguments=run.call_args.args[0];payload=run.call_args.kwargs['input'].decode('utf8')
+        self.assertEqual(arguments,['exiftool','-charset','filename=UTF8','-@','-'])
+        self.assertIn(str(self.original),payload);self.assertIn('\n--\n',payload)
+    def test_argument_file_rejects_newline_in_path(self):
+        with patch.object(embedded.subprocess,'run') as run:
+            with self.assertRaisesRegex(embedded.EmbeddedRatingError,'换行符'):embedded.read('bad\n-overwrite_original.ARW')
+        run.assert_not_called()
     def test_subprocess_timeout_uses_safe_component_error(self):
         with patch.object(embedded,'executable',return_value='exiftool'),patch.object(embedded.subprocess,'run',side_effect=subprocess.TimeoutExpired('exiftool',1)):
             with self.assertRaisesRegex(embedded.EmbeddedRatingError,'超时'):embedded._run(['--',self.original],1)

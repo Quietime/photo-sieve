@@ -24,9 +24,15 @@ def executable():
     raise EmbeddedRatingError('ARW 原图星级组件未安装，请使用完整安装包')
 
 def _run(arguments,timeout):
-    options={'capture_output':True,'timeout':timeout,'check':False}
+    arguments=list(map(str,arguments))
+    if any('\n' in value or '\r' in value for value in arguments):
+        raise EmbeddedRatingError('ARW 元数据参数包含换行符，无法处理')
+    # The Windows Perl launcher can lose Unicode before parsing command-line
+    # charset options. Pass arguments as UTF-8 stdin, including original/copy paths.
+    options={'capture_output':True,'timeout':timeout,'check':False,
+             'input':('\n'.join(arguments)+'\n').encode('utf8')}
     if os.name=='nt':options['creationflags']=subprocess.CREATE_NO_WINDOW
-    try:result=subprocess.run([executable(),*map(str,arguments)],**options)
+    try:result=subprocess.run([executable(),'-charset','filename=UTF8','-@','-'],**options)
     except subprocess.TimeoutExpired as exc:raise EmbeddedRatingError('ARW 元数据处理超时，原照片未由元数据子进程修改') from exc
     except OSError as exc:raise EmbeddedRatingError('无法启动 ARW 星级组件：'+str(exc)) from exc
     if result.returncode:raise EmbeddedRatingError('ARW 星级处理失败：'+result.stderr.decode('utf8','replace').strip()[:500])
