@@ -187,6 +187,7 @@ class ModeSettings:
     """The two work modes share storage, never each other's display choices."""
     def __init__(self,settings,mode):self.settings=settings;self.prefix=mode+'/'
     def value(self,name,default=None,**kwargs):return self.settings.value(self.prefix+name,default,**kwargs)
+    def setValue(self,name,value):self.settings.setValue(self.prefix+name,value)
 
 
 class Window(QMainWindow):
@@ -251,6 +252,9 @@ class Window(QMainWindow):
         self.full_cache=FullCache(self)
         from full_faces import FullFaces
         self.faces.background_all=True;self.full_faces=FullFaces(self);self.full_faces.view='all';self.face_sweep_library=None
+        from work_analysis import WorkAnalysis
+        self.analysis=WorkAnalysis(self)
+        self.faces.changed.connect(lambda pid,_:self.analysis.refresh(pid))
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.apply_mode_preferences()
@@ -604,7 +608,7 @@ class Window(QMainWindow):
         from cache_policy import clear_workspace_caches
         if getattr(self,'more_panel',None):self.more_panel.hide()
         self.finish_motion()
-        self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.cache_sweep_key=None;self.face_sweep_library=None;library=self.library;self.busy=True;self.update_actions()
+        self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.analysis.clear(delete=False);self.cache_sweep_key=None;self.face_sweep_library=None;library=self.library;self.busy=True;self.update_actions()
         rating_active=self.rating_page.active
         if rating_active:self.rating_page.deactivate()
         self.album.revision+=1
@@ -612,7 +616,7 @@ class Window(QMainWindow):
         self.centralWidget().setEnabled(False)
         self.toast.show_message('正在清理全部照片与人脸缓存…','info')
         def work():
-            for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool):pool.waitForDone()
+            for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool,self.analysis.pool):pool.waitForDone()
             return clear_workspace_caches(self.data_root,library)
         def resume():
             self.cache_clearing=False;self.busy=False;self.centralWidget().setEnabled(True)
@@ -832,6 +836,7 @@ class Window(QMainWindow):
         if not self.library.meta('root'):return
         self.cache_sweep_key=key
         self.full_cache.start(self.library,edge,total=self.counts.get('all'))
+        self.analysis.start(self.library,force=force)
         if force or self.face_sweep_library is not self.library:
             self.face_sweep_library=self.library;self.full_faces.start(self.library,1600,total=self.counts.get('all'))
 
@@ -1405,7 +1410,7 @@ class Window(QMainWindow):
         if (current and Path(current).resolve() != Path(folder).resolve()) or (self.managed_workspaces and (not current or not self.library.directory.is_relative_to(self.data_root.resolve()))):
             newdir = self.data_root / 'libraries' / hashlib.sha256(str(Path(folder).resolve()).encode()).hexdigest()[:16]
             previous=self.library
-            self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.cache_sweep_key=None;self.face_sweep_library=None;self.faces.timer.stop();self.thumb_wanted.clear()
+            self.cache_clearing=True;self.full_cache.stop();self.full_faces.stop();self.analysis.clear(delete=False);self.cache_sweep_key=None;self.face_sweep_library=None;self.faces.timer.stop();self.thumb_wanted.clear()
             self.album.revision+=1;self.album.stop_transition();self.album.full_preview=None;self.album.preview=None;self.album.photo=None;self.album.pane.show_photo(None)
             for pane in (*self.photos,*self.rating_page.panes):pane.show_photo(None)
             self.import_page.set_progress('正在清理上一文件夹缓存',folder=folder)
@@ -1414,7 +1419,7 @@ class Window(QMainWindow):
                 library=open_workspace(self.data_root,folder,self.previous_library,10240) if self.managed_workspaces else Library(newdir,10240)
                 # No producer can enqueue more old-workspace writes while paused.
                 # Wait on worker pools, never on this pool executing the barrier.
-                for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool,self.op_pool):pool.waitForDone()
+                for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool,self.op_pool,self.analysis.pool):pool.waitForDone()
                 from workspaces import clear_previous_workspace_cache
                 clear_previous_workspace_cache(previous,folder)
                 return library
@@ -1636,7 +1641,7 @@ class Window(QMainWindow):
             QMessageBox.information(self, '任务正在进行', '请等待扫描或文件夹切换完成后再退出。'); event.ignore(); return
         if self.pending_ops:
             # Queued keeps and deletions finish first; the window stays responsive and closes by itself.
-            self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项'+('评级写入…' if self.rating_page.writing else '筛选记录…'), 'info', 2000)
+            self.closing = True; self.toast.show_message(f'正在完成 {self.pending_ops} 项'+('评级写入…' if self.rating_page.writing else 'XMP 同步…' if self.rating_page.tools.syncing else '筛选记录…'), 'info', 2000)
             event.ignore(); QTimer.singleShot(120, self.close); return
         if self.prompt_on_close and self.session_active and not self.updates.installing and self.close_choice is None:
             box=CloseOfferDialog(self);box.exec()
@@ -1644,6 +1649,7 @@ class Window(QMainWindow):
             self.close_choice=box.choice
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.full_cache.stop();self.full_cache.timer.stop();self.full_faces.stop();self.full_faces.timer.stop()
+        self.analysis.shutdown()
         self.rating_page.shutdown()
         self.metadata_service.shutdown();self.faces.shutdown();self.faces.pool.waitForDone()
         self.closed = True

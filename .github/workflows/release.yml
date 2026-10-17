@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
+        options: [workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,8 +35,39 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
         run: python tools/prepare_feature_fixtures.py
+      - name: Verify workbench unit and existing library regressions
+        if: env.CHECK_SCOPE == 'workbench'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Verify all workbench functions and native metadata interactions
+        if: env.CHECK_SCOPE == 'workbench'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          python tools/check_workbench.py workbench-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_workbench_raw.py feature-fixtures/sony.ARW workbench-raw-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_latency.py rating-latency-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_ratings.py rating-latency-related-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_zoom.py rating-zoom-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_fast_delete.py workbench-delete500-ci --count 500
+      - name: Verify workbench and responsive gallery at 150 percent scaling
+        if: env.CHECK_SCOPE == 'workbench'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: |
+          python tools/check_workbench.py workbench-hidpi-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_rating_zoom.py rating-zoom-hidpi-ci
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
         env:
@@ -282,6 +313,10 @@ jobs:
           path: |
             windows-chrome-ci.json
             ui-screenshots-ci/*
+            workbench-ci/*
+            workbench-hidpi-ci/*
+            workbench-raw-ci/*
+            workbench-delete500-ci/*
             rating-latency-ci/*
             rating-latency-hidpi-ci/*
             rating-latency-related-ci/*
@@ -357,8 +392,23 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content full-cache-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged full-folder cache failed' }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--cache-settings-self-test', 'cache-all-settings-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content cache-all-settings-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged cache settings failed' }
+      - name: Verify packaged workbench and native RAW interoperability
+        if: env.CHECK_SCOPE == 'workbench'
+        timeout-minutes: 8
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--workbench-self-test', 'workbench-frozen-ci' -PassThru
+          if (!$p.WaitForExit(300000)) { taskkill /PID $p.Id /T /F; throw 'Packaged workbench check timed out' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0 -or !(Get-Content workbench-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged workbench check failed' }
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--workbench-raw-self-test', 'feature-fixtures/sony.ARW', 'workbench-raw-frozen-ci' -PassThru
+          if (!$p.WaitForExit(120000)) { taskkill /PID $p.Id /T /F; throw 'Packaged RAW interoperability timed out' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0 -or !(Get-Content workbench-raw-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged RAW interoperability failed' }
       - name: Verify immediate rating feedback and safe draining in packaged EXE
-        if: env.CHECK_SCOPE == 'rating_latency'
+        if: env.CHECK_SCOPE == 'rating_latency' || env.CHECK_SCOPE == 'workbench'
         timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: windows
@@ -460,6 +510,8 @@ jobs:
         with:
           name: Windows-normal-runtime-diagnostics
           path: |
+            workbench-frozen-ci/*
+            workbench-raw-frozen-ci/*
             rating-latency-frozen-ci/*
             rating-zoom-frozen-ci/*
             rating-cache-frozen-ci/*
@@ -519,6 +571,10 @@ jobs:
             windows-chrome-ci.json
             performance-ci.json
             ui-screenshots-ci/*
+            workbench-ci/*
+            workbench-hidpi-ci/*
+            workbench-raw-ci/*
+            workbench-delete500-ci/*
             rating-latency-ci/*
             rating-latency-hidpi-ci/*
             rating-latency-related-ci/*

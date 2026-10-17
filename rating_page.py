@@ -17,6 +17,7 @@ import theme
 ACTIONS=[(f'star{i}',f'{i} 星',(str(i),),True) for i in range(1,6)]+[
  ('clear','清除评级',('0',),True),('previous','上一张',('Left',),True),
  ('next','下一张',('Right',),True),('undo','撤销评级',('Ctrl+Z',),True),
+ *[(f'label{i}',f'颜色标签 {i}',(f'Alt+{i}',),False) for i in range(6)],
  ('zoom','放大到 100%',('Z',),False),('unzoom','还原缩放',('Esc',),False)]
 
 class RatingDelegate(QStyledItemDelegate):
@@ -37,6 +38,9 @@ class RatingDelegate(QStyledItemDelegate):
         for rect,text in zip((name,stars),lines):
             painter.setPen(QColor(theme.LABEL if rect==name else theme.SECONDARY))
             painter.drawText(rect,Qt.AlignmentFlag.AlignCenter,option.fontMetrics.elidedText(text,Qt.TextElideMode.ElideMiddle,rect.width()))
+        color=getattr(self.parent(),'label_colors',{}).get(index.data(Qt.ItemDataRole.UserRole))
+        if color:
+            painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor(color));painter.drawEllipse(option.rect.right()-14,option.rect.top()+8,7,7)
         painter.restore()
 
 class RatingGrid(PhotoGrid):
@@ -144,12 +148,16 @@ class RatingPage(QWidget):
         self.grid.itemClicked.connect(lambda item:self.select(item.row));self.grid.verticalScrollBar().valueChanged.connect(self.visible)
         self.grid.icon_for=lambda pid:self.thumbs.get(pid,host.tile)
         self.resize_timer=QTimer(self);self.resize_timer.setSingleShot(True);self.resize_timer.timeout.connect(self.show_current);self.pane.resized.connect(lambda:self.resize_timer.start(150))
+        from workbench import Workbench
+        self.tools=Workbench(self,layout,row)
         self.apply_keys(keys.load(QSettings('PhotoSieve','PhotoSieve'),ACTIONS,'rating_shortcuts/'))
     def apply_keys(self,chosen):
         self.chosen=chosen
         for shortcut in self.shortcut_objects:shortcut.setEnabled(False);shortcut.deleteLater()
         self.shortcut_objects=[]
         handlers={f'star{i}':lambda i=i:self.grade(i) for i in range(1,6)}
+        from workflow_data import LABELS
+        handlers.update({f'label{i}':lambda key=key:self.tools.label(key) for i,key in enumerate(LABELS)})
         handlers.update(clear=lambda:self.grade(0),previous=lambda:self.move(-1),next=lambda:self.move(1),undo=self.undo,zoom=self.zoom,unzoom=self.unzoom)
         for action,_,_,repeat in ACTIONS:
             for key in chosen[action]:
@@ -165,7 +173,7 @@ class RatingPage(QWidget):
         self.active=True;self.setFocus()
         if not self.host.session_active:return
         if self.library is not self.host.library:
-            self.library=self.host.library;self.records=RatingRecords(self.library);self.info={};self.rating_failures.clear();self.rating_versions.clear();self.rating_confirmed.clear();self.clear_previews()
+            self.library=self.host.library;self.records=RatingRecords(self.library);self.tools.attach(self.library);self.info={};self.rating_failures.clear();self.rating_versions.clear();self.rating_confirmed.clear();self.clear_previews()
         if not self.warm_started and hasattr(self.engine,'warm_writes'):
             self.warm_started=True;self.host.submit(self.engine.warm_writes,pool=self.pool,priority=-10)
         self.reload()
@@ -177,22 +185,22 @@ class RatingPage(QWidget):
     def reload(self,*_):
         if not self.active or self.writing or not self.records:return
         self.generation+=1;gen=self.generation;self.scanning=False;self.listing=True;self.remaining=[];self.reading.clear();self.loading.clear();self.read_button.setText('读取全部照片评级')
-        records=self.records;scope='keep' if self.scope.currentIndex() else 'all';stars=self.filter.currentIndex()-1 if self.filter.currentIndex() else None
-        context=(id(self.library),scope,stars);anchor=self.pid() if context==self.list_context else None;self.list_context=context
+        extra_records=self.tools.records;extra_filter=self.tools.snapshot();records=self.records;scope='keep' if self.scope.currentIndex() else 'all';stars=self.filter.currentIndex()-1 if self.filter.currentIndex() else None
+        context=(id(self.library),scope,stars,extra_filter['label'],extra_filter['mode'],extra_filter['group']);anchor=self.pid() if context==self.list_context else None;self.list_context=context
         self.status.setText('正在读取分级列表…')
         cached=list(self.fingerprints);library=self.library
         def work():
-            ids=records.ids(scope,stars);fingerprints={}
+            ids,groups,annotations=self.tools.filter_ids(records.ids(scope,stars),extra_filter,extra_records);fingerprints={}
             with library.connect() as db:
                 for start in range(0,len(cached),500):
                     part=cached[start:start+500]
                     rows=db.execute('SELECT id,size,mtime FROM photos WHERE present=1 AND id IN ('+','.join('?' for _ in part)+')',part)
                     fingerprints.update((row['id'],(row['size'],row['mtime'])) for row in rows)
-            return ids,fingerprints
+            return ids,fingerprints,groups,annotations
         def done(value):
             if not self.valid(gen):return
             self.listing=False
-            ids,fingerprints=value
+            ids,fingerprints,groups,annotations=value;self.tools.reloaded(groups,annotations)
             for pid in cached:
                 if self.fingerprints.get(pid)!=fingerprints.get(pid):
                     self.images.pop(pid,None);self.thumbs.pop(pid,None);self.thumb_photos.pop(pid,None);self.thumb_sizes.pop(pid,None);self.image_sizes.pop(pid,None);self.source_widths.pop(pid,None);self.fingerprints.pop(pid,None)
@@ -222,6 +230,7 @@ class RatingPage(QWidget):
         self.face_panel.show_result(self.host.faces.result_for(photo) if photo else None)
         if photo:self.host.metadata_service.update()
         else:self.camera_info.setText('正在读取拍摄参数…' if self.pid() else '没有符合条件的照片')
+        self.tools.show_quality()
     def select(self,index):
         if self.undoing or self.host.closing:return
         self.index=index
@@ -334,7 +343,13 @@ class RatingPage(QWidget):
         dpr=self.devicePixelRatioF();width=size.width();height=size.height();edge=self.host.preview_edge(size)
         def work():
             from desktop import display_image
-            photo=library.public(library.photo(pid));thumb_edge=320 if max(thumb_size.width(),thumb_size.height())<=320 else 1600
+            photo=library.public(library.photo(pid))
+            with library.connect() as db:
+                quality=db.execute('SELECT quality FROM work_features WHERE photo_id=? AND size=? AND mtime=?',(pid,photo['size'],photo['mtime'])).fetchone()
+            if quality:
+                import json
+                photo['_work_quality']=json.loads(quality[0])
+            thumb_edge=320 if max(thumb_size.width(),thumb_size.height())<=320 else 1600
             result=display_image(library.preview_image(pid,edge if large else thumb_edge),width if large else thumb_size.width(),height if large else thumb_size.height(),(8,8));return photo,result
         def done(value):
             if not self.valid(gen):return
@@ -427,12 +442,12 @@ class RatingPage(QWidget):
             self.read(self.remaining.pop(),True)
         self.read_button.setText(f'停止读取 · {max(0,self.total-len(self.remaining)-len(self.reading)):,} / {self.total:,}')
         if not self.remaining and not self.reading:self.scanning=False;self.read_button.setText('读取全部照片评级');self.reload()
-    def grade(self,stars):
+    def grade(self,stars,advance=True):
         pid=self.pid();info=self.info.get(pid)
         if self.host.busy or self.host.job_running() or self.undoing or self.listing or self.host.closing or self.pending_count>=256 or not self.can_grade():return
         info=info or dict(photo_id=pid,state='unread',stars=None,writable=False,error='')
         if info['stars']==stars:
-            if self.auto.isChecked():self.move(1)
+            if advance and self.auto.isChecked():self.move(1)
             return
         records=self.records;library=self.library;self.rating_serial+=1;token=self.rating_serial
         if pid not in self.rating_pending:self.rating_confirmed[pid]=dict(info)
@@ -445,14 +460,14 @@ class RatingPage(QWidget):
         self.host.op(lambda:records.write(pid,stars,self.engine),
                      lambda result:self.grade_finished(pid,token,result,None,library),
                      lambda message:self.grade_finished(pid,token,None,message,library))
-        if self.auto.isChecked():self.move(1)
+        if advance and self.auto.isChecked():self.move(1)
         self.host.update_actions()
     def grade_finished(self,pid,token,result,error,library):
         if library is not self.library:return
         pending=self.rating_pending.get(pid)
         if not pending or token not in pending:return
         pending.pop(token);self.pending_count-=1
-        if result:self.rating_confirmed[pid]=result;self.rating_failures.pop(pid,None)
+        if result:self.rating_confirmed[pid]=result;self.rating_failures.pop(pid,None);self.tools.after_rating(result)
         if error:self.rating_failures[pid]=str(error)
         confirmed=self.rating_confirmed[pid]
         if pending:
@@ -469,14 +484,14 @@ class RatingPage(QWidget):
         if not self.writing:
             if self.rating_failures:self.note.setText(f'{len(self.rating_failures)} 项评级未保存，请检查后重新打分，详情见提示。')
             else:self.note.setText('评级已写入并验证 · 保留 / 删除标记不变')
-            if self.active and self.filter.currentIndex():self.reload()
+            if self.active and (self.filter.currentIndex() or self.tools.filter_dirty):self.tools.filter_dirty=False;self.reload()
     def undo(self):
         if self.writing or not self.records or not self.undo_button.isEnabled():return
         records=self.records;self.change(lambda:records.undo(self.engine),advance=False)
     def change(self,work,advance=True):
         self.writing=True;self.undoing=True;self.read_revision+=1;self.scanning=False;self.remaining=[];self.update_controls();self.host.update_actions()
         def done(result):
-            self.writing=False;self.undoing=False;pid=result['photo_id'];self.info[pid]=result;self.update_caption(pid)
+            self.writing=False;self.undoing=False;pid=result['photo_id'];self.info[pid]=result;self.update_caption(pid);self.tools.after_rating(result)
             if advance and self.auto.isChecked():self.move(1)
             elif not advance and pid in self.ids:self.select(self.ids.index(pid))
             self.update_controls();self.visible();self.host.update_actions();self.note.setText('已写入 Windows 系统评级：'+self.star_text(result)+' · 保留 / 删除标记不变')
@@ -498,4 +513,4 @@ class RatingPage(QWidget):
     def unzoom(self):
         for pane in self.panes:
             if pane.detail:pane.unzoom(self.show_current)
-    def shutdown(self):self.deactivate();self.engine.close();self.pool.clear();self.pool.waitForDone()
+    def shutdown(self):self.tools.shutdown();self.deactivate();self.engine.close();self.pool.clear();self.pool.waitForDone()

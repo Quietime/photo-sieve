@@ -5,6 +5,12 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    if len(sys.argv)==3 and sys.argv[1]=='--workbench-self-test':
+        from tools.check_workbench import run
+        run(sys.argv[2]);sys.exit(0)
+    if len(sys.argv)==4 and sys.argv[1]=='--workbench-raw-self-test':
+        from tools.check_workbench_raw import verify
+        verify(sys.argv[2],sys.argv[3]);sys.exit(0)
     if len(sys.argv)==3 and sys.argv[1]=='--rating-latency-self-test':
         from tools.check_rating_latency import run
         run(sys.argv[2]);sys.exit(0)

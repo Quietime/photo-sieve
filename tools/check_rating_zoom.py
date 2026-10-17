@@ -29,7 +29,7 @@ def run(output):
         app.sendEvent(widget,event)
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir()
-        for i in range(48):Image.new('RGB',(1800,600) if i==0 else (600,900) if i%2 else (900,600),(30+i*3,90,130)).save(photos/f'{i:03}.jpg')
+        for i in range(48):Image.new('RGB',(6000,600) if i==0 else (600,900) if i%2 else (900,600),(30+i*3,90,130)).save(photos/f'{i:03}.jpg')
         lib=Library(base/'work');lib.scan(photos);until(lambda:not lib.job['running'])
         for photo in lib.list_photos('all',limit=60):lib.preview_image(photo['id'],4800).close()
         settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat);settings.setValue('preload_count',16);settings.setValue('face_preview',False)

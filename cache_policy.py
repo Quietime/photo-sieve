@@ -86,6 +86,8 @@ def cleanup_indexed_cache(database, cache, grace=120, file_locks=None, cache_loc
                 db.execute('''DELETE FROM face_metadata WHERE NOT EXISTS
                     (SELECT 1 FROM photos p WHERE p.path=face_metadata.path
                      AND p.size=face_metadata.source_size AND p.mtime=face_metadata.source_mtime)''')
+        with db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='work_features'").fetchone():db.execute('DELETE FROM work_features WHERE NOT EXISTS (SELECT 1 FROM photos p WHERE p.id=work_features.photo_id AND p.present=1 AND p.size=work_features.size AND p.mtime=work_features.mtime)')
         if known is not None: known.difference_update(name for name, in forgotten)
     return removed
 
@@ -144,6 +146,6 @@ def clear_workspace_caches(root,active):
         if database.is_file():
             with closing(sqlite3.connect(database,timeout=30)) as db:
                 with db:
-                    for table in ('cache_index','face_metadata'):
+                    for table in ('cache_index','face_metadata','work_features'):
                         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():db.execute('DELETE FROM '+table)
     return removed

@@ -43,3 +43,5 @@ ARW embedded metadata: ExifTool 13.59 by Phil Harvey, redistributed under
 its Perl-compatible license. Full bundled runtime license notices are in
 _internal/assets/exiftool/exiftool_files/LICENSE and Licenses_Strawberry_Perl.zip.
 Source and documentation: https://exiftool.org/
+
+Eye-region classifier: OpenCV haarcascade_eye_tree_eyeglasses.xml, Intel Open Source Computer Vision Library license; full notice in assets/eye-model-license.txt and XML header.

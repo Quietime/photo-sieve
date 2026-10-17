@@ -150,6 +150,7 @@ class Library:
             if self.session_connection is None:
                 self.session_connection=sqlite3.connect(self.database,timeout=30,check_same_thread=False)
                 self.session_connection.execute('PRAGMA journal_mode=WAL')
+                self.work_session_seq=self.session_connection.execute('SELECT coalesce(max(seq),0) FROM history').fetchone()[0]
             self.session_users+=1
 
     def stop_session(self):
@@ -690,7 +691,9 @@ class Library:
                     path.unlink(); removed += 1
             with self.connect() as db:
                 db.execute('DELETE FROM cache_index')
-                if include_recognition and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_metadata'").fetchone():db.execute('DELETE FROM face_metadata')
+                if include_recognition:
+                    for table in ('face_metadata','work_features'):
+                        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():db.execute('DELETE FROM '+table)
                 db.execute("INSERT OR REPLACE INTO meta VALUES ('cache_index_version','1')")
             self.cache_indexed.clear(); delta=-self.cache_bytes; self.cache_sizes.clear(); self.cache_bytes=0
         if delta and self.cache_changed: self.cache_changed(delta)
