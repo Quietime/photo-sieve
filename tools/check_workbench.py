@@ -159,6 +159,13 @@ def run(output):
                 assert len(page.ids)==32;page.select(page.ids.index(first));until(lambda:not page.loading)
                 checks.append('concurrent_rating_and_label_edits_refresh_active_group_and_color_filters_without_stale_results')
                 w.grab().save(str(output/'workbench-rating.png'))
+                # The actual screening undo must rebuild analysis even with face preview disabled.
+                w.faces.enabled=False;w.toggle_rating();until(lambda:w.delete_button.isEnabled());restored_pid=w.queue[0]['id'];w.delete_button.click();until(lambda:not w.pending_ops and w.counts.get('deleted')==1)
+                with library.connect() as db:db.execute('DELETE FROM work_features WHERE photo_id=?',(restored_pid,))
+                w.restore();until(lambda:not w.pending_ops and w.counts.get('deleted')==0)
+                until(lambda:any(r['signature'] for r in records.inventory({restored_pid})),30)
+                w.toggle_rating();until(lambda:not page.listing and not page.loading)
+                checks.append('screening_restore_rebuilds_derived_analysis_when_face_preview_is_disabled')
                 # Late callbacks after comparison closes or modes change must be ignored.
                 compare=CompareDialog(page);compare.show();compare.close();w.toggle_rating();w.toggle_rating();until(lambda:not page.listing and not page.loading)
                 assert not compare.alive and page.active

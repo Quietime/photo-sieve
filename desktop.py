@@ -1222,7 +1222,7 @@ class Window(QMainWindow):
             self.restore_running=False
             if generation != self.generation: return
             pid = result['id']; photo = result['photo']; self.delete_streak = 0;self.refresh_strip()
-            if result.get('restored') and photo:self.full_cache.refresh_photo(pid);self.full_faces.refresh_photo(pid)
+            if result.get('restored') and photo:self.full_cache.refresh_photo(pid);self.full_faces.refresh_photo(pid);self.analysis.refresh(pid)
             if self.state_data is not None:self.state_data['can_undo']=result['can_undo']
             if self.counts and photo:
                 destination='keep' if photo['status']==1 else 'pending'

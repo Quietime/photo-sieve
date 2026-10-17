@@ -23,7 +23,7 @@ def tracked():
 
 def public(name):
     path=PurePosixPath(name)
-    if path.parts[-2:] in {('assets','photosieve.ico'),('assets','photosieve.png'),('assets','welcome-background.png'),('assets','face_detection_yunet_2023mar.onnx')}: return True
+    if path.parts[-2:] in {('assets','photosieve.ico'),('assets','photosieve.png'),('assets','welcome-background.png'),('assets','face_detection_yunet_2023mar.onnx'),('assets','haarcascade_eye_tree_eyeglasses.xml')}: return True
     return path.suffix.lower() not in PRIVATE_TYPES and (path.suffix.lower() in SOURCE_TYPES or path.name in {'LICENSE'})
 
 def sources():

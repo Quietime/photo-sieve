@@ -10,27 +10,30 @@ class WorkAnalysis(QObject):
     changed=Signal()
     def __init__(self,host):
         super().__init__(host);self.host=host;self.pool=QThreadPool(self);self.pool.setMaxThreadCount(1);self.pool.setThreadPriority(QThread.Priority.LowPriority)
-        self.library=None;self.records=None;self.generation=0;self.working=False;self.stopped=False;self.anchor=0;self.done=0;self.missing=0;self.total=0;self.errors=0;self.finished=False;self.retry_at=0;self.revisit=set();self.lock=threading.Lock()
+        self.library=None;self.records=None;self.generation=0;self.working=False;self.stopped=False;self.anchor=0;self.done=0;self.missing=0;self.total=0;self.errors=0;self.finished=False;self.retry_at=0;self.revisit=set();self.refresh_deadlines={};self.lock=threading.Lock()
         self.timer=QTimer(self);self.timer.setInterval(350);self.timer.timeout.connect(self.pump);self.timer.start()
     def start(self,library,force=False):
         if library is self.library and not self.finished and not force:return
-        self.generation+=1;self.library=library;self.records=WorkRecords(library);self.anchor=0;self.done=0;self.missing=0;self.errors=0;self.finished=False;self.revisit.clear();self.retry_at=0
+        self.generation+=1;self.library=library;self.records=WorkRecords(library);self.anchor=0;self.done=0;self.missing=0;self.errors=0;self.finished=False;self.revisit.clear();self.refresh_deadlines.clear();self.retry_at=0
         with library.connect() as db:self.total=db.execute('SELECT count(*) FROM photos WHERE present=1').fetchone()[0]
         self.changed.emit()
     def refresh(self,pid):
-        if self.library is self.host.library:
-            if len(self.revisit)<128:self.revisit.add(pid)
+        if not self.stopped and self.library is self.host.library:
+            if len(self.revisit)<128:self.revisit.add(pid);self.refresh_deadlines[pid]=time.monotonic()+10
             self.finished=False
     def clear(self,delete=True):
-        self.generation+=1;self.anchor=0;self.done=0;self.missing=0;self.finished=False;self.revisit.clear()
+        self.generation+=1;self.anchor=0;self.done=0;self.missing=0;self.finished=False;self.revisit.clear();self.refresh_deadlines.clear()
         if delete and self.records:
             with self.library.connect() as db:db.execute('DELETE FROM work_features')
     def status(self):return dict(done=self.done,total=self.total,errors=self.errors,skipped=self.missing,finished=self.finished,running=not self.finished and self.library is not None)
     def pump(self):
         h=self.host
         if self.stopped or self.working or self.finished or not self.library or self.library is not h.library or time.monotonic()<self.retry_at:return
-        if h.closed or h.closing or h.busy or h.importing or h.cache_clearing or h.pending_ops or self.library.job['running']:return
-        if (h.rating_active and h.rating_page.loading) or (not h.rating_active and (h.loading or h.focus_loading)):return
+        paused=h.closed or h.closing or h.busy or h.importing or h.cache_clearing or h.pending_ops or self.library.job['running']
+        paused=paused or (h.rating_active and h.rating_page.loading) or (not h.rating_active and (h.loading or h.focus_loading))
+        if paused:
+            for pid in self.revisit:self.refresh_deadlines[pid]=max(self.refresh_deadlines.get(pid,0),time.monotonic()+10)
+            return
         self.working=True;library=self.library;records=self.records;gen=self.generation;anchor=self.anchor;revisit=list(self.revisit)[:8]
         for pid in revisit:self.revisit.discard(pid)
         def current():return not self.stopped and gen==self.generation and library is h.library
@@ -39,7 +42,7 @@ class WorkAnalysis(QObject):
             with library.connect() as db:
                 rows=[dict(r) for r in db.execute('SELECT * FROM photos WHERE present=1 AND id>? ORDER BY id LIMIT 8',(anchor,))] if not revisit else [dict(r) for r in db.execute('SELECT * FROM photos WHERE present=1 AND id IN ('+','.join('?' for _ in revisit)+')',revisit)]
                 faces_exist=bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='face_metadata'").fetchone())
-            missing=0;failures=0
+            missing=[];failures=0
             raw_rows=[]
             for p in rows:
                 if not current() or h.pending_ops:return None
@@ -55,7 +58,7 @@ class WorkAnalysis(QObject):
                     if Path(name).name!=name or '/' in name or '\\' in name or Path(name).suffix.lower()!='.jpg':continue
                     candidate=library.cache/name
                     if not candidate.is_symlink() and candidate.is_file():path=candidate;break
-                if path is None:missing+=1;continue
+                if path is None:missing.append(p['id']);continue
                 try:
                     with library.file_locks[p['id']%len(library.file_locks)]:
                         if not current():return None
@@ -96,7 +99,11 @@ class WorkAnalysis(QObject):
                 for pid in revisit:
                     if len(self.revisit)<128:self.revisit.add(pid)
             if result:
-                rows,missing,failures=result;self.errors+=failures;self.missing+=missing
+                rows,missing,failures=result;self.errors+=failures;self.missing+=len(missing)
+                for pid in revisit:
+                    if pid in missing and time.monotonic()<self.refresh_deadlines.get(pid,0):
+                        if len(self.revisit)<128:self.revisit.add(pid)
+                    else:self.refresh_deadlines.pop(pid,None)
                 if not revisit:
                     if rows:self.anchor=rows[-1]['id'];self.done+=len(rows)
                     if len(rows)<8:
