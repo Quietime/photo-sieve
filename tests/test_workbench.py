@@ -1,6 +1,7 @@
 import hashlib,json,os,tempfile,time,unittest
 from pathlib import Path
 from unittest.mock import patch
+os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from PIL import Image,ImageFilter,ImageDraw
 from app import Library
 from rating_records import RatingRecords
@@ -140,6 +141,16 @@ class WorkbenchTests(unittest.TestCase):
         sharp=assess_face(image);blur=assess_face(image.filter(ImageFilter.GaussianBlur(9)));self.assertGreater(sharp['sharpness'],blur['sharpness']);self.assertEqual(blur['state'],'review');self.assertEqual(assess_face(Image.new('RGB',(30,30)))['state'],'uncertain')
     def test_missing_eye_classifier_is_unknown_not_closed(self):
         with patch('face_quality.EYE_MODEL',self.root/'missing.xml'):self.assertEqual(assess_face(Image.effect_noise((256,256),100).convert('RGB'))['eyes'],'unknown')
+    def test_group_combo_replaces_owned_models_and_preserves_selection(self):
+        global _application
+        from PySide6.QtWidgets import QApplication
+        from workbench import GroupCombo
+        _application=QApplication.instance() or QApplication([]);combo=GroupCombo();groups=[dict(key=str(i),title='组 '+str(i),ids=[i]) for i in range(16000)]
+        combo.set_groups(groups);combo.setCurrentIndex(16000);self.assertEqual(combo.currentData(),'15999')
+        self.assertLessEqual(combo.sizeHint().width(),280)
+        combo.set_groups(groups[-1:]);self.assertEqual(combo.currentData(),'15999');self.assertEqual(combo.count(),2)
+        combo.set_groups([]);self.assertIsNone(combo.currentData());self.assertEqual(combo.count(),1)
+        combo.deleteLater();_application.processEvents()
     def test_group_choice_model_keeps_all_16000_groups_without_per_item_widgets(self):
         from workbench import GroupChoiceModel
         from PySide6.QtCore import Qt

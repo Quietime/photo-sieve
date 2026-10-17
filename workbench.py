@@ -25,7 +25,7 @@ class GroupCombo(RoundedCombo):
         super().__init__();self.choice_model=None;self.setMaximumWidth(340);self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.setMinimumContentsLength(12);self.view().setUniformItemSizes(True);self.set_groups([])
     def set_groups(self,groups):
         old=self.currentData();previous=self.choice_model;self.choice_model=GroupChoiceModel(groups,self);self.setModel(self.choice_model);self.setCurrentIndex(self.choice_model.positions.get(old,0))
-        if previous:previous.deleteLater()
+        # QComboBox deletes its previous child model when setModel replaces it.
     def sizeHint(self):return QSize(max(180,min(280,self.fontMetrics().horizontalAdvance(self.currentText())+44)),38)
     def minimumSizeHint(self):return QSize(150,38)
 
