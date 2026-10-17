@@ -29,6 +29,11 @@ def run(output):
             im=Image.new('RGB',(900,600) if i%4<2 else (600,900),('navy','red','green','orange')[i//8]);ImageDraw.Draw(im).rectangle((50,80,200,250),fill='white');exif=Image.Exif();exif[36867]=f'2024:06:29 15:{i//8:02}:{i%8:02}';im.save(folder/f'{i:03}.jpg',exif=exif)
         library=Library(base/'workspace');library.scan(folder);until(lambda:not library.job['running'])
         for p in library.list_photos('all',limit=64):library.preview_image(p['id'],1600).close()
+        # Keep one photo only in the 3200 bucket, like a migrated high-DPI cache.
+        last=dict(library.photo(library.list_photos('all',limit=64)[-1]['id']));old=library.cache_path(last['path'],last['size'],last['mtime'],1600);high=library.cache_path(last['path'],last['size'],last['mtime'],3200);old.replace(high)
+        library.cache_path(last['path'],last['size'],last['mtime'],320).unlink(missing_ok=True)
+        with library.connect() as db:
+            db.execute('DELETE FROM cache_index WHERE photo_id=?',(last['id'],));db.execute('INSERT INTO cache_index VALUES(?,?,?,?,?)',(high.name,last['id'],last['size'],last['mtime'],3200))
         settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat);settings.setValue('face_preview',False);settings.setValue('preload_count',16);settings.setValue('rating/segment_gap',30)
         with patch('desktop.QSettings',return_value=settings),patch('rating_page.QSettings',return_value=settings),patch('face_service.QSettings',return_value=settings),patch('update_ui.QSettings',return_value=settings):
             w=Window(library,check_updates=False,data_root=base/'workspace');w.error=errors.append;w.resize(1600,1100);w.show();dialog=None

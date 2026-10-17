@@ -49,7 +49,7 @@ class WorkAnalysis(QObject):
                 path=None
                 # The cache index includes migrated preview names; never manufacture an original decode.
                 with library.connect() as db:
-                    candidates=list(db.execute('SELECT filename FROM cache_index WHERE photo_id=? AND source_size=? AND source_mtime=? AND edge IN (320,1600,2400,3600,4800) ORDER BY edge DESC',(p['id'],p['size'],p['mtime'])))
+                    candidates=list(db.execute('SELECT filename FROM cache_index WHERE photo_id=? AND source_size=? AND source_mtime=? AND edge IN (320,1600,2400,3200,4800) ORDER BY edge DESC',(p['id'],p['size'],p['mtime'])))
                 for entry in candidates:
                     name=entry[0]
                     if Path(name).name!=name or '/' in name or '\\' in name or Path(name).suffix.lower()!='.jpg':continue
