@@ -1,5 +1,5 @@
 """Real-window feature and interaction matrix; no network or original face work in navigation."""
-import hashlib,json,sys,tempfile,time,shutil
+import hashlib,json,sys,tempfile,time,shutil,faulthandler,traceback
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -15,7 +15,12 @@ from tools.check_ratings import FakeEngine
 from xmp_sync import inspect,sync_out
 
 def run(output):
-    output=Path(output);output.mkdir(parents=True,exist_ok=True);app=QApplication.instance() or QApplication([]);app.setStyleSheet(STYLE);checks=[];errors=[];rating_timings=[]
+    output=Path(output);output.mkdir(parents=True,exist_ok=True)
+    trace=(output/'threads-live.log').open('w');faulthandler.enable(file=trace,all_threads=True);faulthandler.dump_traceback_later(60,repeat=True,file=trace)
+    class Checks(list):
+        def append(self,item):
+            super().append(item);print('CHECK '+item,flush=True);(output/'progress.json').write_text(json.dumps(dict(checks=list(self))),encoding='utf8')
+    app=QApplication.instance() or QApplication([]);app.setStyleSheet(STYLE);checks=Checks();errors=[];rating_timings=[]
     def until(fn,timeout=40):
         end=time.monotonic()+timeout
         while time.monotonic()<end:
@@ -134,6 +139,7 @@ def run(output):
                     start=time.perf_counter();page.grade(stars,advance=False);rating_timings.append((time.perf_counter()-start)*1000)
                     assert page.info[pid]['stars']==stars;expected[pid]=stars;peak=max(peak,page.pending_count)
                     if turn%8==0:app.processEvents()
+                    if turn%100==0:print(f'RATING {turn}/500 pending={page.pending_count}',flush=True)
                 until(lambda:not page.writing and not w.pending_ops,120)
                 assert all(page.engine.run(library.photo(pid)['path'])['stars']==stars and inspect(Path(library.photo(pid)['path']).with_suffix('.xmp'))['stars']==stars for pid,stars in expected.items())
                 assert peak<=32 and records.annotations()[first]['label']==saved_labels[first]['label']
@@ -175,8 +181,13 @@ def run(output):
                 w.toggle_rating();until(lambda:not page.listing and not page.loading)
                 checks.append('mode_changes_and_late_comparison_results_do_not_mix_photo_identity')
                 assert not errors,errors
+            except BaseException as error:
+                (output/'failure.json').write_text(json.dumps(dict(error=str(error),traceback=traceback.format_exc(),checks=list(checks),pending=w.pending_ops,busy=w.busy,job=library.job),ensure_ascii=False,default=str),encoding='utf8')
+                raise
             finally:
+                print('Closing workbench test window',flush=True)
                 if dialog:dialog.close()
                 w.prompt_on_close=False;w.close();until(lambda:w.closed)
+    faulthandler.cancel_dump_traceback_later();trace.close()
     report=dict(ok=True,checks=checks,rating_inputs=500,max_rating_handler_ms=max(rating_timings),p95_rating_handler_ms=sorted(rating_timings)[int(len(rating_timings)*.95)],peak_pending=peak);(output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(report,ensure_ascii=False),flush=True)
 if __name__=='__main__':run(sys.argv[1])

@@ -43,30 +43,51 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
         run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Verify all workbench functions and native metadata interactions
+      - name: Verify workbench window interactions and 500 rating inputs
         if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
+        timeout-minutes: 5
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process python -ArgumentList 'tools/check_workbench.py', 'workbench-ci' -NoNewWindow -PassThru
+          if (!$p.WaitForExit(240000)) { taskkill /PID $p.Id /T /F; throw 'Source workbench check timed out; inspect progress and thread logs' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0) { throw 'Source workbench check failed' }
+      - name: Verify native ARW XMP cache and restore interactions
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
+        timeout-minutes: 4
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_workbench_raw.py feature-fixtures/sony.ARW workbench-raw-ci
+      - name: Verify existing immediate ratings native handlers and gallery controls
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
+        timeout-minutes: 5
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          python tools/check_workbench.py workbench-ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/check_workbench_raw.py feature-fixtures/sony.ARW workbench-raw-ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_rating_latency.py rating-latency-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_ratings.py rating-latency-related-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_rating_zoom.py rating-zoom-ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/check_fast_delete.py workbench-delete500-ci --count 500
+      - name: Verify 500 rapid deletions with real Windows file handles
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
+        timeout-minutes: 10
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tools/check_fast_delete.py workbench-delete500-ci --count 500
       - name: Verify workbench and responsive gallery at 150 percent scaling
         if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
+        timeout-minutes: 6
         run: |
-          python tools/check_workbench.py workbench-hidpi-ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process python -ArgumentList 'tools/check_workbench.py', 'workbench-hidpi-ci' -NoNewWindow -PassThru
+          if (!$p.WaitForExit(240000)) { taskkill /PID $p.Id /T /F; throw 'High-DPI workbench check timed out' }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0) { throw 'High-DPI workbench check failed' }
           python tools/check_rating_zoom.py rating-zoom-hidpi-ci
       - name: Test changed face, cache and rating components
         if: env.CHECK_SCOPE == 'features'
