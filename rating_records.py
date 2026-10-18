@@ -79,7 +79,8 @@ class RatingRecords:
                         current=db.execute('SELECT size,mtime,present FROM photos WHERE id=?',(pid,)).fetchone()
                         if not current or not current['present'] or (current['size'],current['mtime'])!=(row['size'],row['mtime']):raise RatingError('资料库已改变，评级写入已撤销')
                         db.execute('UPDATE photos SET size=?,mtime=?,digest=NULL,error=NULL WHERE id=?',(after.st_size,after.st_mtime_ns,pid))
-                        db.execute('UPDATE history SET size=?,mtime=? WHERE photo_id=? AND size=? AND mtime=?',(after.st_size,after.st_mtime_ns,pid,row['size'],row['mtime']))
+                        # A trash entry describes its staged backup, which this write never touches.
+                        db.execute("UPDATE history SET size=?,mtime=? WHERE photo_id=? AND size=? AND mtime=? AND action!='trash'",(after.st_size,after.st_mtime_ns,pid,row['size'],row['mtime']))
                         if db.execute("SELECT 1 FROM sqlite_master WHERE name='work_features'").fetchone():db.execute('UPDATE work_features SET size=?,mtime=? WHERE photo_id=? AND size=? AND mtime=?',(after.st_size,after.st_mtime_ns,pid,row['size'],row['mtime']))
                         if history and result['before']!=stars:db.execute('INSERT INTO rating_history(photo_id,before,after,created_at) VALUES (?,?,?,?)',(pid,result['before'],stars,time.time()))
                         db.execute('INSERT OR REPLACE INTO rating_cache (photo_id,stars,value,writable,size,mtime,state,error,checked_at,backend,windows_visible) VALUES (?,?,?,?,?,?,?,?,?,?,?)',(pid,result['stars'],result['value'],int(result['writable']),after.st_size,after.st_mtime_ns,'ready',result.get('reason',''),time.time(),result.get('backend','windows'),(None if result.get('windows_visible',True) is None else int(result.get('windows_visible',True)))))

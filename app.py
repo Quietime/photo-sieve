@@ -31,6 +31,9 @@ RAW = {'.cr2', '.cr3', '.nef', '.nrw', '.arw', '.dng', '.raf', '.rw2', '.orf', '
 EXTENSIONS = RAW | {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff', '.bmp', '.gif', '.heic', '.heif', '.avif'}
 STATIC = Path(__file__).parent / 'static'
 TRASH_DIRECTORY = '.photo-sieve-trash'
+# A deletion whose original path holds a file again (the card was copied back) cannot be undone
+# in place. It stays listed in the deleted album, but no longer blocks undoing older actions.
+UNDOABLE = "NOT (action='trash' AND photo_id IN (SELECT id FROM photos WHERE present=1))"
 # Pillow re-takes the GIL after every block it reads; with 64 KB blocks a 20 MB photo decoding beside
 # other threads waits on the GIL hundreds of times (10x slower). Larger blocks avoid that convoy.
 ImageFile.MAXBLOCK = 4 * 1024 * 1024
@@ -190,10 +193,16 @@ class Library:
             db.row_factory=sqlite3.Row
             db.execute('PRAGMA journal_mode=WAL')
             db.execute('PRAGMA busy_timeout=30000')
-        try:
-            with db:yield db
-        finally:
+            # journal_mode returns a row nobody reads; a leased, unread cursor would make this lease's commit fail.
             if pooled:db.release_cursors()
+        try:
+            with db:
+                # Leased cursors close before the commit: a finished executescript cursor still counts as a statement
+                # in progress, and committing a write after it fails ("SQL statements in progress").
+                try:yield db
+                finally:
+                    if pooled:db.release_cursors()
+        finally:
             with self.session_lock:
                 keep=pooled and self.session_users>0 and len(self.connection_pool)<16
                 if keep:self.connection_pool.append(db)
@@ -204,10 +213,14 @@ class Library:
             counts = {row['status']: row['n'] for row in db.execute('SELECT status,COUNT(*) n FROM photos WHERE present=1 GROUP BY status')}
             deleted = db.execute('SELECT COUNT(*) FROM photos WHERE ' + self.query('deleted')).fetchone()[0]
             meta = dict(db.execute("SELECT key,value FROM meta WHERE key IN ('root','cursor')").fetchall())
-            can_undo=bool(db.execute('SELECT 1 FROM history LIMIT 1').fetchone())
+            can_undo=self.can_undo(db)
         return {'root': meta.get('root', ''), 'cursor': int(meta.get('cursor') or 0),
                 'counts': {'all': sum(counts.values()), 'pending': counts.get(0, 0), 'keep': counts.get(1, 0), 'deleted': deleted},
                 'job': {**self.job, 'errors': list(self.job['errors'])}, 'data_dir': str(self.directory), 'can_undo':can_undo}
+
+    @staticmethod
+    def can_undo(db):
+        return bool(db.execute(f'SELECT 1 FROM history WHERE {UNDOABLE} LIMIT 1').fetchone())
 
     def meta(self, key):
         with self.connect() as db:
@@ -366,7 +379,7 @@ class Library:
 
     def query(self, view):
         filters = {'all': 'present=1', 'pending': 'present=1 AND status=0', 'keep': 'present=1 AND status=1',
-                   'deleted': "present=0 AND id IN (SELECT photo_id FROM history WHERE action='trash')"}
+                   'deleted': "id IN (SELECT photo_id FROM history WHERE action='trash')"}
         if view not in filters:
             raise LibraryError(400, '未知筛选条件')
         return filters[view]
@@ -454,7 +467,7 @@ class Library:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             while True:
-                condition = "WHERE action='trash'" if only_delete else ''
+                condition = f"WHERE action='trash' AND {UNDOABLE}" if only_delete else f'WHERE {UNDOABLE}'
                 values = ()
                 if photo_id is not None:
                     condition = "WHERE action='trash' AND photo_id=?"
@@ -667,45 +680,45 @@ class Library:
                 time.sleep(min(delay,remaining));delay=min(.15,delay*2)
 
     def trash(self, photo_id):
-        # Windows cannot rename files while a preview decoder still holds them open.
-        with self.file_locks[photo_id % len(self.file_locks)]:
+        # Serialize with starting scans: scanning could otherwise reinsert a deleted file. The job lock comes before
+        # the photo's lock, the order rating and XMP writes use too, so the two can never deadlock. Windows cannot
+        # rename files while a preview decoder still holds them open.
+        with self.job_lock, self.file_locks[photo_id % len(self.file_locks)]:
             return self._trash(photo_id)
 
     def _trash(self, photo_id):
-        # Serialize with starting scans: scanning could otherwise reinsert a deleted file.
-        with self.job_lock:
-            if self.job['running']:
-                raise LibraryError(409, '请等待当前扫描或检查完成，再删除照片。')
-            row = self.photo(photo_id)
-            path = Path(row['path'])
-            root = Path(self.meta('root'))
-            try:
-                if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
-                    raise LibraryError(409, '文件路径已改变，请重新扫描')
-                stat = path.stat()
-            except OSError:
-                raise LibraryError(409, '照片无法访问，请检查硬盘并重新扫描')
-            if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['mtime']):
-                raise LibraryError(409, '原照片已改变，请重新扫描后再删除')
-            stash = path.parent / TRASH_DIRECTORY
-            if stash.is_symlink():
-                raise LibraryError(409, '待删除目录是符号链接，请检查后重试。')
-            try:
-                stash.mkdir(exist_ok=True)
-                backup = stash / (secrets.token_hex(16) + path.suffix)
-                with self.connect() as db:
-                    entry = db.execute('INSERT INTO trash_log(photo_id,path,deleted_at,result,backup) VALUES (?,?,?,?,?)',
-                                       (photo_id, str(path), time.time(), 'started', str(backup))).lastrowid
-                # Same-directory filesystem move: no decoding or full-size copying.
-                self.rename_for_trash(path, backup)
-            except Exception as exc:
-                raise LibraryError(409, f'无法移入待删除区：{exc}')
+        if self.job['running']:
+            raise LibraryError(409, '请等待当前扫描或检查完成，再删除照片。')
+        row = self.photo(photo_id)
+        path = Path(row['path'])
+        root = Path(self.meta('root'))
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+                raise LibraryError(409, '文件路径已改变，请重新扫描')
+            stat = path.stat()
+        except OSError:
+            raise LibraryError(409, '照片无法访问，请检查硬盘并重新扫描')
+        if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['mtime']):
+            raise LibraryError(409, '原照片已改变，请重新扫描后再删除')
+        stash = path.parent / TRASH_DIRECTORY
+        if stash.is_symlink():
+            raise LibraryError(409, '待删除目录是符号链接，请检查后重试。')
+        try:
+            stash.mkdir(exist_ok=True)
+            backup = stash / (secrets.token_hex(16) + path.suffix)
             with self.connect() as db:
-                db.execute('UPDATE photos SET present=0 WHERE id=?', (photo_id,))
-                db.execute("INSERT INTO history(photo_id,before,after,size,mtime,action,backup) VALUES (?,?,?,?,?,'trash',?)",
-                           (photo_id, row['status'], row['status'], row['size'], row['mtime'], str(backup)))
-                db.execute("UPDATE trash_log SET result='staged' WHERE id=?", (entry,))
-            return {'id': photo_id, 'path': str(path), 'backup': str(backup), 'staged': True}
+                entry = db.execute('INSERT INTO trash_log(photo_id,path,deleted_at,result,backup) VALUES (?,?,?,?,?)',
+                                   (photo_id, str(path), time.time(), 'started', str(backup))).lastrowid
+            # Same-directory filesystem move: no decoding or full-size copying.
+            self.rename_for_trash(path, backup)
+        except Exception as exc:
+            raise LibraryError(409, f'无法移入待删除区：{exc}')
+        with self.connect() as db:
+            db.execute('UPDATE photos SET present=0 WHERE id=?', (photo_id,))
+            db.execute("INSERT INTO history(photo_id,before,after,size,mtime,action,backup) VALUES (?,?,?,?,?,'trash',?)",
+                       (photo_id, row['status'], row['status'], row['size'], row['mtime'], str(backup)))
+            db.execute("UPDATE trash_log SET result='staged' WHERE id=?", (entry,))
+        return {'id': photo_id, 'path': str(path), 'backup': str(backup), 'staged': True}
 
     def clear_preview_cache(self, include_recognition=False):
         """Only derived JPEG/PNG previews; never the database, originals or deletion backups."""
@@ -761,7 +774,8 @@ class Library:
         selected = None if ids is None else set(ids)
         def work():
             with self.connect() as db:
-                rows = db.execute("SELECT photos.*,history.backup FROM photos JOIN history ON history.photo_id=photos.id WHERE photos.present=0 AND history.action='trash' ORDER BY photos.id").fetchall()
+                # A file copied back to the original path is a separate file; only the staged backup is purged.
+                rows = db.execute("SELECT photos.id,photos.path,history.backup,history.size AS trash_size,history.mtime AS trash_mtime FROM photos JOIN history ON history.photo_id=photos.id WHERE history.action='trash' ORDER BY photos.id").fetchall()
             rows = [r for r in rows if selected is None or r['id'] in selected]
             self.job['total'] = len(rows)
             root = Path(self.meta('root')).resolve()
@@ -775,11 +789,11 @@ class Library:
                             raise ValueError('暂存路径已改变，拒绝彻底删除')
                         if backup.exists():
                             stat = backup.stat()
-                            if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['mtime']):
+                            if (stat.st_size, stat.st_mtime_ns) != (row['trash_size'], row['trash_mtime']):
                                 raise ValueError('暂存照片已改变，请先检查文件')
                             backup.unlink()
                         with self.connect() as db:
-                            db.execute("DELETE FROM history WHERE photo_id=? AND action='trash'", (row['id'],))
+                            db.execute("DELETE FROM history WHERE photo_id=? AND action='trash' AND backup=?", (row['id'], str(backup)))
                             db.execute("UPDATE trash_log SET result='purged' WHERE backup=?", (str(backup),))
                 except Exception as exc:
                     self.warn(exc)

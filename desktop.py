@@ -32,7 +32,7 @@ import keys
 import crashlog
 from ui_shell import TitleBar, QDialog, QMessageBox, QFileDialog, SettingsPanel, app_icon, CacheSpinBox
 import machine
-from cache_policy import prune_workspaces, expire_inactive_workspaces
+from cache_policy import MAX_BYTES, prune_workspaces, expire_inactive_workspaces
 from workspaces import open_workspace
 from filmstrip import Filmstrip,MixedFilmstrip
 from photo_grid import PhotoGrid
@@ -195,7 +195,7 @@ class Window(QMainWindow):
     cache_changed=Signal(object)
     fps_label = None   # Qt sends events before __init__ finishes
 
-    def __init__(self, library, check_updates=True, decoders=None, start_empty=False, prompt_on_close=False, data_root=None):
+    def __init__(self, library, check_updates=True, decoders=None, start_empty=False, prompt_on_close=False, data_root=None, cache_mb=MAX_BYTES//1024**2):
         import gui_runtime
         gui_runtime.install()
         super().__init__(); self.library = library; self.decoders = decoders; library.offload = decoders; self.setWindowTitle('照片快筛'); self.resize(1480, 960); self.setAcceptDrops(True)
@@ -213,8 +213,10 @@ class Window(QMainWindow):
         self.rating_actionbar_visible=settings.value('rating/show_actionbar',True,type=bool)
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=50000  # compatibility only; disk caching now covers every non-deleted photo
-        self.library.cache_limit=10*1024**3
-        settings.setValue('cache_mb',10240);self.cache_sweep_key=None
+        # --cache-mb lowers the shared disk budget (developer/testing use); 10 GB is both default and ceiling.
+        self.cache_mb=max(64,min(MAX_BYTES//1024**2,int(cache_mb)));self.cache_bytes_limit=self.cache_mb*1024**2
+        self.library.cache_limit=self.cache_bytes_limit
+        settings.setValue('cache_mb',self.cache_mb);self.cache_sweep_key=None
         self.cache_clearing=False;self.importing=False;self.import_revision=None
         self.metadata_reader=MetadataReader()
         self.pool = QThreadPool(self); self.pool.setMaxThreadCount(2)
@@ -266,7 +268,7 @@ class Window(QMainWindow):
 
     def cache_growth(self,delta):
         self.cache_total=max(0,self.cache_total+delta)
-        if self.cache_total>10*1024**3: self.maintain_cache()
+        if self.cache_total>self.cache_bytes_limit: self.maintain_cache()
 
     def maintain_cache(self):
         if self.maintenance_running or self.cache_clearing or self.closed: return
@@ -274,7 +276,7 @@ class Window(QMainWindow):
         def work():
             library.cleanup_processed_cache()
             expire_inactive_workspaces(self.data_root,library.directory)
-            result=prune_workspaces(self.data_root,library.cache,cache_lock=library.cache_lock)
+            result=prune_workspaces(self.data_root,library.cache,self.cache_bytes_limit,cache_lock=library.cache_lock)
             library.recount_cache(); return result
         def finished(result):
             self.maintenance_running=False; self.cache_total=result[1]
@@ -574,7 +576,7 @@ class Window(QMainWindow):
         ahead=CacheSpinBox(); ahead.setRange(0,5000); ahead.setSpecialValueText('自动（按内存调整）'); ahead.setValue(self.preload_count)
         ahead.setMinimumHeight(38);ahead.setMinimumWidth(240)
         scope=QLabel('全部未删除照片，后台自动生成');scope.setMinimumHeight(38)
-        limit=QLabel('固定 10 GB');limit.setMinimumHeight(38)
+        limit=QLabel('固定 10 GB' if self.cache_bytes_limit==MAX_BYTES else f'{self.cache_mb:,} MB（启动参数指定）');limit.setMinimumHeight(38)
         form.addRow('内存预加载照片数',ahead);form.addRow('磁盘缓存范围',scope);form.addRow('磁盘缓存上限',limit)
         form_box=QWidget();form_box.setLayout(form);form_box.setFixedHeight(3*38+2*16);layout.addWidget(form_box)
         note=QLabel();note.setObjectName('caption');note.setWordWrap(True);layout.addWidget(note)
@@ -598,8 +600,8 @@ class Window(QMainWindow):
         refresh=QTimer(dialog);refresh.timeout.connect(show_progress);refresh.start(500)
         buttons=QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.button('取消',dialog.reject))
         def save():
-            self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0;self.library.cache_limit=10*1024**3
-            settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue('preload_count',self.preload_count);settings.setValue('cache_mb',10240);settings.sync()
+            self.preload_count=max(STRIP,ahead.value()) if ahead.value() else 0;self.library.cache_limit=self.cache_bytes_limit
+            settings=QSettings('PhotoSieve','PhotoSieve');settings.setValue('preload_count',self.preload_count);settings.setValue('cache_mb',self.cache_mb);settings.sync()
             self.display_size=None;self.update_display_size();self.trim_previews();self.library.schedule_prune();self.maintain_cache();self.prefetch();self.rating_page.prefetch();dialog.accept()
         buttons.addWidget(self.button('保存',save,'primary'));layout.addLayout(buttons);dialog.exec();refresh.stop()
 
@@ -1216,7 +1218,7 @@ class Window(QMainWindow):
             result = library.undo(only_delete=not general, photo_id=photo_id)
             try: result['photo'] = library.public(library.photo(result['id']))
             except Exception: result['photo'] = None
-            with library.connect() as db:result['can_undo']=bool(db.execute('SELECT 1 FROM history LIMIT 1').fetchone())
+            with library.connect() as db:result['can_undo']=library.can_undo(db)
             return result
         def done(result):
             self.restore_running=False
@@ -1400,9 +1402,10 @@ class Window(QMainWindow):
 
     def scan(self, folder=None):
         if self.rating_page.writing:return
-        self.rating_page.deactivate()
         if folder is None: self.choose_source(); return
+        # Refused while busy: the rating page must stay active, it is still on screen.
         if self.busy or self.pending_ops or self.job_running(): return
+        self.rating_page.deactivate()
         folder = str(folder); self.session_active=True; self.state_data=None; current = self.library.meta('root')
         self.busy=True;self.importing=True;self.import_revision=None;self.update_actions();self.toast.hide()
         self.import_page.set_progress('正在打开筛选记录',folder=folder);self.stack.setCurrentIndex(3);self.place_overlays()
@@ -1416,7 +1419,7 @@ class Window(QMainWindow):
             self.import_page.set_progress('正在清理上一文件夹缓存',folder=folder)
             def prepare():
                 if not Path(folder).is_dir():raise ValueError('文件夹不存在，或硬盘尚未连接')
-                library=open_workspace(self.data_root,folder,self.previous_library,10240) if self.managed_workspaces else Library(newdir,10240)
+                library=open_workspace(self.data_root,folder,self.previous_library,self.cache_mb) if self.managed_workspaces else Library(newdir,self.cache_mb)
                 # No producer can enqueue more old-workspace writes while paused.
                 # Wait on worker pools, never on this pool executing the barrier.
                 for pool in (self.image_pool,self.detail_pool,self.thumb_pool,self.faces.pool,self.op_pool,self.analysis.pool):pool.waitForDone()
@@ -1647,6 +1650,13 @@ class Window(QMainWindow):
             box=CloseOfferDialog(self);box.exec()
             if box.choice is None:event.ignore();self.closing=False;self.uninstall_requested=False;self.update_actions();return
             self.close_choice=box.choice
+        if self.uninstall_requested:
+            # Started before any service shuts down: a failure leaves a fully working window. The wizard asks for
+            # confirmation first, and Restart Manager waits for this process, which exits within a few seconds.
+            try: subprocess.Popen([str(self.uninstaller_path())],cwd=self.uninstaller_path().parent)
+            except OSError as exc:
+                self.uninstall_requested=False;self.closing=False;self.close_choice=None
+                self.error('无法打开卸载向导：'+str(exc)); event.ignore(); return
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.full_cache.stop();self.full_cache.timer.stop();self.full_faces.stop();self.full_faces.timer.stop()
         self.analysis.shutdown()
@@ -1658,13 +1668,6 @@ class Window(QMainWindow):
         if self.decoders: self.decoders.close()
         if self.cursor_id: self.library.remember('cursor', self.cursor_id if self.close_choice!='forget' else 0)
         self.library.stop_session()
-        if self.uninstall_requested:
-            try: subprocess.Popen([str(self.uninstaller_path())],cwd=self.uninstaller_path().parent)
-            except OSError as exc:
-                self.closed=False; self.closing=False; self.uninstall_requested=False
-                self.library.start_session()
-                self.updates.timer.start(1000); self.maintenance_timer.start(60000); self.poll(); self.prefetch()
-                self.error('无法打开卸载向导：'+str(exc)); event.ignore(); return
         event.accept()
 
 COMPOSITING = {'gpu': False}
@@ -1696,7 +1699,7 @@ def main():
             Path(sys.argv[2]).with_name('helper-error.txt').write_text(traceback.format_exc(), encoding='utf-8'); return 1
     parser = argparse.ArgumentParser(description='照片快筛 · 原生 Qt 桌面版')
     parser.add_argument('--folder'); parser.add_argument('--data-dir', type=Path)
-    parser.add_argument('--cache-mb', type=int, help='磁盘预览缓存（MB）；默认取缓存盘可用空间的 5%%，2 到 20 GB')
+    parser.add_argument('--cache-mb', type=int, help='磁盘预览缓存上限（MB），64 到 10240；默认 10240（10 GB）')
     parser.add_argument('--self-test-output', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--runtime-check-output',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--runtime-check-folders',nargs='+',help=argparse.SUPPRESS)
@@ -1715,7 +1718,7 @@ def main():
         return run(application, args.self_test_output)
     # Only a crash skips the finally, so the next start blames the GPU for nothing else (a locked database, say).
     try:
-        if args.cache_mb is not None and args.cache_mb < 64: parser.error('缓存至少 64 MB')
+        if args.cache_mb is not None and not 64 <= args.cache_mb <= MAX_BYTES//1024**2: parser.error('缓存上限须在 64 到 10240 MB 之间')
         install_directory = Path(sys.executable).resolve().parent if getattr(sys,'frozen',False) else Path(__file__).resolve().parent
         default_directory = install_directory / 'workspaces'
         directory = args.data_dir or default_directory
@@ -1729,7 +1732,8 @@ def main():
                 existing = Library(directory, args.cache_mb).meta('root')
                 if existing and Path(existing).resolve() != Path(args.folder).resolve():
                     directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
-            library = Library(directory, args.cache_mb or 10240); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory)
+            cache_mb = args.cache_mb or MAX_BYTES//1024**2
+            library = Library(directory, cache_mb); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory, cache_mb=cache_mb)
             screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
             window.move(screen.center()-window.rect().center());window.show()
             if args.update_restart_marker:

@@ -1,12 +1,42 @@
 """Adobe-compatible sidecars: atomic updates, preservation and explicit conflicts."""
-import hashlib,os,tempfile,time
+import hashlib,io,os,re,tempfile,threading,time
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from workflow_data import LABELS
 NS={'x':'adobe:ns:meta/','rdf':'http://www.w3.org/1999/02/22-rdf-syntax-ns#','xmp':'http://ns.adobe.com/xap/1.0/'}
 for prefix,uri in NS.items():ET.register_namespace(prefix,uri)
+# ElementTree keeps one process-wide prefix table; serializing holds it so concurrent writes cannot mix prefixes.
+SERIALIZE=threading.Lock()
+PACKET=re.compile(rb'^(?:\xef\xbb\xbf)?\s*(<\?xpacket\s+begin=.*?\?>)\s*',re.S)
+PACKET_END=re.compile(rb'\s*(<\?xpacket\s+end=.*?\?>)\s*$',re.S)
 class XmpConflict(ValueError):pass
 class XmpError(ValueError):pass
+
+def prefixes(data):
+    """The sidecar's own prefix for each namespace, so crs:, photoshop: or lr: are not renamed ns0:, ns1:…"""
+    found={}
+    try:
+        for _,(prefix,uri) in ET.iterparse(io.BytesIO(data),events=('start-ns',)):
+            if prefix and uri not in found and not re.fullmatch(r'ns\d+',prefix) and prefix!='xml':found[uri]=prefix
+    except ET.ParseError:pass
+    return found
+
+def serialize(root,original=b''):
+    """XML for the updated tree: original prefixes and the xpacket wrapper Adobe writes are kept."""
+    with SERIALIZE:
+        saved=dict(ET._namespace_map)
+        try:
+            for uri,prefix in prefixes(original).items():
+                if prefix not in NS or NS[prefix]==uri:
+                    try:ET.register_namespace(prefix,uri)
+                    except ValueError:pass
+            body=ET.tostring(root,encoding='unicode')
+        finally:
+            ET._namespace_map.clear();ET._namespace_map.update(saved)
+    begin=PACKET.match(original);end=PACKET_END.search(original)
+    if begin:
+        return begin.group(1)+b'\n'+body.encode('utf-8')+b'\n'+(end.group(1) if end else b'<?xpacket end="w"?>')
+    return b"<?xml version='1.0' encoding='utf-8'?>\n"+body.encode('utf-8')
 
 def inspect(path):
     path=Path(path)
@@ -69,7 +99,7 @@ def _sync_out(records,pid,stars=None,label=None,force=False):
                     for child in list(node):
                         if child.tag==key:node.remove(child)
                 desc.set(key,str(value))
-            data=ET.tostring(root,encoding='utf-8',xml_declaration=True)
+            data=serialize(root,current['data'])
             fd,tmp=tempfile.mkstemp(prefix='.'+path.name+'-',suffix='.tmp',dir=path.parent)
             try:
                 with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())

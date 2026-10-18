@@ -20,7 +20,10 @@ def format_info(aperture=None,exposure=None,iso=None,date=None,focal=None,make=N
     if aperture:exposure_fields.append(f'f/{float(aperture):g}')
     if exposure:
         seconds=float(exposure)
-        exposure_fields.append(f'1/{round(1/seconds)}s' if 0<seconds<1 else f'{seconds:g}s')
+        # Cameras write 1/2 s as a fraction but 0.8 s or 0.4 s as decimals; 1/round(1/0.8) would read "1/1s".
+        reciprocal=1/seconds if seconds>0 else 0
+        fraction=0<seconds<1 and (reciprocal>=3 or abs(reciprocal-round(reciprocal))<.05)
+        exposure_fields.append(f'1/{round(reciprocal)}s' if fraction else f'{round(seconds,1) if seconds<1 else seconds:g}s')
     if exposure_fields:lines.append(' · '.join(exposure_fields))
     sensitivity=[]
     if focal:sensitivity.append(f'{float(focal):g} mm')
