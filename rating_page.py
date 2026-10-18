@@ -103,13 +103,15 @@ class RatingPage(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,16);layout.setSpacing(14)
         row=QHBoxLayout();heading=QLabel('照片分级');heading.setObjectName('heading');row.addWidget(heading);row.addStretch()
-        options=QHBoxLayout();self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
+        # One row for every filter and tool, so the row uses the page's width instead of stacking on the left.
+        options=QHBoxLayout();options.setSpacing(8);self.options=options;self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
         self.filter=RoundedCombo();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
+        self.options_slot=options.count()   # the workbench puts colour, grouping and its two buttons here
+        options.addStretch()
         self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));options.addWidget(self.auto)
         self.auto.toggled.connect(lambda value:QSettings('PhotoSieve','PhotoSieve').setValue('rating_auto_next',value))
         self.read_button=host.button('读取全部照片评级',self.toggle_read);row.addWidget(self.read_button);layout.addLayout(row);layout.addLayout(options)
         self.note=QLabel('星级写入照片文件。ARW 支持标准原图星级；Windows 是否能显示会单独提示。保留与删除标记独立。');self.note.setObjectName('caption');self.note.setWordWrap(True);layout.addWidget(self.note)
-        options.addStretch()
         self.splitter=QSplitter(Qt.Orientation.Horizontal);self.splitter.setObjectName('ratingSplit');self.splitter.setChildrenCollapsible(False);self.splitter.setHandleWidth(9)
         self.splitter.setStyleSheet('QSplitter#ratingSplit::handle:horizontal {background:'+theme.SEPARATOR+';margin:0 3px;} QSplitter#ratingSplit::handle:horizontal:hover {background:'+theme.BLUE_HOVER+';}')
         self.split_ratio=max(.05,min(.95,QSettings('PhotoSieve','PhotoSieve').value('rating_split_ratio',.6,type=float)));self.split_restored=False
@@ -137,12 +139,12 @@ class RatingPage(QWidget):
         self.splitter.handle(1).setToolTip('左右拖动，调整图库和预览的宽度');self.splitter.splitterMoved.connect(self.split_moved)
         self.pane.clicked.connect(lambda photo,point:self.zoom(point,self.pane));self.pane.escape_requested.connect(self.unzoom);self.pane.next_requested.connect(lambda:self.move(1))
         self.status=QLabel('尚未读取 Windows 系统评级');self.status.setWordWrap(True);self.status.setAlignment(Qt.AlignmentFlag.AlignCenter);self.status.setObjectName('caption');layout.addWidget(self.status)
-        self.action_row=QScrollArea();self.action_row.setWidgetResizable(True);self.action_row.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded);self.action_row.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.action_row.setFixedHeight(52);self.action_row.setStyleSheet('QScrollArea {background:transparent;border:0;}');action_content=QWidget();self.action_row.setWidget(action_content);outer_controls=QHBoxLayout(action_content);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(6,2,6,2);controls.setSpacing(4);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
+        self.action_row=QScrollArea();self.action_row.setWidgetResizable(True);self.action_row.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded);self.action_row.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.action_row.setFixedHeight(36);self.action_row.setStyleSheet('QScrollArea {background:transparent;border:0;}');action_content=QWidget();self.action_row.setWidget(action_content);outer_controls=QHBoxLayout(action_content);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(4,1,4,1);controls.setSpacing(3);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
         self.star_buttons=[]
         for star in range(1,6):
             button=host.button('★'*star,lambda _,star=star:self.grade(star));button.setAccessibleName(f'设置 {star} 星');controls.addWidget(button);self.star_buttons.append(button)
-        self.clear_button=host.button('清除评级',lambda:self.grade(0));controls.addWidget(self.clear_button)
-        self.undo_button=host.button('撤销评级',self.undo);controls.addWidget(self.undo_button)
+        self.clear_button=host.button('清除',lambda:self.grade(0));controls.addWidget(self.clear_button)
+        self.undo_button=host.button('撤销',self.undo);controls.addWidget(self.undo_button)
         self.next=host.button('下一张',lambda:self.move(1));controls.addWidget(self.next);outer_controls.addWidget(self.dock);outer_controls.addStretch();layout.addWidget(self.action_row);self.action_row.setVisible(host.rating_actionbar_visible)
         self.dock.register([self.previous]+self.star_buttons+[self.clear_button,self.undo_button,self.next])
         self.scope.currentIndexChanged.connect(self.reload);self.filter.currentIndexChanged.connect(self.reload)
@@ -165,7 +167,10 @@ class RatingPage(QWidget):
                 if not key:continue
                 shortcut=QShortcut(QKeySequence(key),self);shortcut.setContext(Qt.ShortcutContext.WindowShortcut);shortcut.setAutoRepeat(repeat);shortcut.activated.connect(handlers[action]);self.shortcut_objects.append(shortcut)
         for button,action in [(self.previous,'previous'),(self.next,'next'),(self.clear_button,'clear'),(self.undo_button,'undo')]+[(b,f'star{i}') for i,b in enumerate(self.star_buttons,1)]:
-            button.variant='dock';button.setFixedHeight(32);button.set_shortcut(keys.first(chosen,action),' / '.join(keys.label(k) for k in chosen[action] if k) or '未设置快捷键')
+            # Grading is done from the keyboard: the dock stays slim, without key badges; keys are in the tooltip.
+            button.variant='dock';button.compact=True;button.setFixedHeight(26);button.setStyleSheet('padding:0 8px;min-height:0;font-size:12px;')
+            font=button.font();font.setPixelSize(12);button.setFont(font)
+            button.set_shortcut('',' / '.join(keys.label(k) for k in chosen[action] if k) or '未设置快捷键')
     def edit_keys(self):
         dialog=keys.ShortcutDialog(self.host,self.chosen,ACTIONS,'照片分级快捷键','分级与照片筛选使用独立快捷键。每项允许留空，仅用按钮操作。')
         def saved(chosen):keys.save(QSettings('PhotoSieve','PhotoSieve'),chosen,'rating_shortcuts/');self.apply_keys(chosen);self.host.sync_shortcut_mode()

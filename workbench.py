@@ -47,15 +47,14 @@ class Workbench:
         self.xmp_queue=AutoXmpQueue(self)
         self.auto_xmp=page.host.mode_settings('rating').value('auto_xmp',True,type=bool)
         self.button=self.host.button('选片工具',self.open);heading.insertWidget(heading.count()-1,self.button)
-        row=QHBoxLayout();row.setSpacing(8)
         self.label_filter=RoundedCombo();self.label_filter.setMinimumWidth(125);self.label_filter.addItem('全部颜色',None)
         for key,text in LABELS.items():self.label_filter.addItem(text,key)
         self.mode=RoundedCombo();self.mode.setMinimumWidth(125)
         for text,key in [('不分组','none'),('相似连拍分组','similar'),('按时间分段','time')]:self.mode.addItem(text,key)
         self.group=GroupCombo();self.group.setMinimumWidth(150);self.group.hide()
         self.mark=self.host.button('颜色标签 ▾',self.label_menu);self.compare=self.host.button('多图对比',self.open_compare)
-        for widget in (self.label_filter,self.mode,self.group,self.mark,self.compare):row.addWidget(widget)
-        row.addStretch();layout.insertLayout(2,row)
+        # In the page's single filter row, after its scope and star filters.
+        for offset,widget in enumerate((self.label_filter,self.mode,self.group,self.mark,self.compare)):page.options.insertWidget(page.options_slot+offset,widget)
         self.label_filter.currentIndexChanged.connect(page.reload);self.mode.currentIndexChanged.connect(self.mode_changed);self.group.currentIndexChanged.connect(page.reload)
         self.quality=QLabel();self.quality.setObjectName('caption');self.quality.setWordWrap(True)
         # The hint belongs to the selected photo, beside the existing face/metadata block.
