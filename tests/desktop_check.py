@@ -187,4 +187,10 @@ def run(screenshot=None):
         print('Native checks passed: animated zoom, arrows, held-key flow, failure rollback, persistent deletion, restore, kept strip, copy/move, drop, bounded cache.')
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--screenshot',type=Path);run(parser.parse_args().screenshot)
+    parser=argparse.ArgumentParser();parser.add_argument('--screenshot',type=Path)
+    try:run(parser.parse_args().screenshot)
+    except BaseException:
+        import os,traceback
+        # In GitHub Actions the failure is also an annotation, readable without downloading the job log.
+        if os.environ.get('GITHUB_ACTIONS'):print('::error title=desktop_check::'+traceback.format_exc().replace('%','%25').replace('\r','').replace('\n','%0A'),flush=True)
+        raise
