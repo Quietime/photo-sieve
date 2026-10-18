@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PIL import Image,ImageDraw
-from PySide6.QtCore import QRect, QSettings,QPoint,QPointF,Qt,QSize
+from PySide6.QtCore import QSettings,QPoint,QPointF,Qt,QSize
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -54,10 +54,9 @@ def run(output,raw_fixture=None):
                 window.faces.enabled=True;window.faces._synchronize();key=cache_key(window.queue[0]);window.faces._remember(key,result);window.faces._done.add(key)
                 window.face_changed(window.queue[0]['id'],result);application.processEvents()
                 panel=window.face_panel;check('face_and_metadata_share_right_header',panel.parentWidget() is window.face_container and window.details[1].parentWidget() is window.review_info)
-                # The face and camera card floats in the comparison photo's top edge; the photo keeps the full height.
-                card=QRect(window.review_info.mapTo(window,QPoint()),window.review_info.size());right=QRect(window.photos[1].mapTo(window,QPoint()),window.photos[1].size())
-                check('face_card_floats_inside_comparison_top',window.review_info.isVisible() and right.contains(card) and card.top()-right.top()<=12)
-                check('comparison_photo_keeps_full_height',window.photos[1].height()>=window.photos[0].height()-1)
+                role=window.photo_roles[1]
+                check('comparison_caption_is_below_face_and_above_photo',window.review_info.mapTo(window,QPoint()).y()+window.review_info.height()<=role.mapTo(window,QPoint()).y() and role.mapTo(window,QPoint()).y()+role.height()<=window.photos[1].mapTo(window,QPoint()).y())
+                check('header_sits_above_comparison',window.review_info.mapTo(window, QPoint()).y()+window.review_info.height()<=window.photos[1].mapTo(window,QPoint()).y())
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
                 before=panel.grab().toImage();pid=window.queue[0]['id']
                 QTest.mouseClick(panel,Qt.MouseButton.LeftButton);QTest.mouseDClick(panel,Qt.MouseButton.LeftButton);QTest.mouseClick(panel,Qt.MouseButton.RightButton)

@@ -48,7 +48,7 @@ from face_service import FaceService
 import theme
 from apple_ui import AppleButton, GlassDock, GlassPopover
 from theme import STYLE, animate
-from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage, ImportPage,DetailLabel,Overlay
+from widgets import PhotoView, Elided, Ghost, Toast, Segmented, ProgressLine, WelcomePage, ImportPage,DetailLabel
 
 PAGE = 1200         # rows per queue page; ids are indexed, so a page costs a few milliseconds
 REFILL = 800        # fetch the next page while this many photos remain
@@ -260,7 +260,7 @@ class Window(QMainWindow):
         theme.configure_accessibility(self.mode_settings('review'))
         self.uninstall_requested=False
         self.build(); self.window_frame=WindowFrame(self,self.window_chrome); self.update_actions()
-        self.face_panel=FacePanel(self.face_container);self.face_panel.set_max_height(54);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
+        self.face_panel=FacePanel(self.face_container);self.face_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter);self.faces=FaceService(self);self.faces.changed.connect(self.face_changed)
         from metadata_service import MetadataService
         self.metadata_service=MetadataService(self)
         from full_cache import FullCache
@@ -345,35 +345,14 @@ class Window(QMainWindow):
     def toggle_rating(self):
         if self.busy or self.pending_ops or self.job_running():return
         if getattr(self,'more_panel',None):self.more_panel.hide()
-        self.rating_active=not self.rating_active;self.apply_mode_preferences()
-        # The title row must never be wider than the window, even for a moment, or the window grows for good:
-        # entering grading, narrow its buttons first (the folder button keeps only its icon) and then show the
-        # grading tools; leaving, hide the tools first and then give the buttons their text back.
-        def label_buttons():
-            self.rating_button.setText('返回筛选' if self.rating_active else '照片分级')
-            self.open_button.setText('' if self.rating_active else '打开文件夹…');self.open_button.setToolTip('打开文件夹…');self.open_button.updateGeometry()
-        # Showing a widget lays the row out at once, so whatever leaves is hidden before its replacement shows.
-        leaving,arriving=(self.segments,self.rating_page.toolbar) if self.rating_active else (self.rating_page.toolbar,self.segments)
-        width=self.width()
-        if self.rating_active:
-            label_buttons();self.subtitle.hide()
-            # Measured unstyled, the selectors are wider for a moment; polish them before they are laid out.
-            for widget in (self.rating_page.toolbar,*self.rating_page.toolbar.findChildren(QWidget)):widget.ensurePolished()
-        # While grading the folder title is the first thing to give way to the grading filters.
-        self.title.setSizePolicy(QSizePolicy.Policy.Ignored if self.rating_active else QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred)
-        leaving.hide();arriving.show()
-        if not self.rating_active:self.subtitle.show()
-        if not self.rating_active:label_buttons()
+        self.rating_active=not self.rating_active;self.apply_mode_preferences();self.segments.setVisible(not self.rating_active)
+        self.rating_button.setText('返回照片筛选' if self.rating_active else '照片分级')
         if self.rating_active:
             self.generation+=1;self.fetching=False;self.reset_zoom();self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate()
         else:
             self.rating_page.deactivate();self.stack.setCurrentIndex(2 if not self.session_active else 1 if self.view=='deleted' else 4 if self.view=='keep' else 0)
             if self.session_active:self.load(anchor=max(0,self.cursor_id-1))
         self.sync_shortcut_mode();self.update_actions();self.place_overlays()
-        # A switch never leaves the window wider than it was when the narrower width still fits.
-        def keep_width():
-            if not self.isMaximized() and self.width()>width>=self.minimumSizeHint().width():self.resize(width,self.height())
-        QTimer.singleShot(0,keep_width)
 
     # ---- infrastructure -------------------------------------------------
     def submit(self, fn, ok=lambda _: None, fail=None, pool=None, priority=0):
@@ -403,65 +382,58 @@ class Window(QMainWindow):
     # ---- layout ---------------------------------------------------------
     def build(self):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
-        # One 40 px row holds the window title, the view switch or grading tools, and the window buttons:
-        # photos get the height a separate toolbar would take.
         self.window_chrome=TitleBar(self,'照片快筛',main=True); outer.addWidget(self.window_chrome)
-        self.window_chrome.setFixedHeight(30); self.window_chrome.label.hide()
-        left = QWidget(); titles = QHBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(8)
+        bar = QWidget(); bar.setObjectName('workspaceToolbar'); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(24, 16, 24, 16); top.setSpacing(16)
+        left = QWidget(); titles = QVBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(1)
         left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.title = Elided('heading', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('caption')
-        # Both shrink (and elide) before any control does; with room they show their whole text.
-        for label in (self.title, self.subtitle): label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred); label.setMinimumWidth(1)
-        titles.addWidget(self.title); titles.addWidget(self.subtitle, 1); self.window_chrome.insert(left, 1)
-        self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); self.segments.setFixedHeight(28); self.window_chrome.insert(self.segments)
-        right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred); self.chrome_tools = right
-        tools = QHBoxLayout(right); tools.setContentsMargins(8, 0, 4, 0); tools.setSpacing(6)
-        self.rating_button=self.button('照片分级',self.toggle_rating);self.rating_button.setToolTip('照片分级 / 返回照片筛选');tools.addWidget(self.rating_button)
+        self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
+        titles.addWidget(self.title); titles.addWidget(self.subtitle); top.addWidget(left, 1)
+        self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
+        right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
+        self.rating_button=self.button('照片分级',self.toggle_rating);tools.addWidget(self.rating_button)
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
         self.resume_button=self.button('继续上次进度',self.resume_last);tools.addWidget(self.resume_button)
         last=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root') or ''
         self.resume_button.setEnabled(bool(last));self.resume_button.setToolTip(str(last))
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
-        for control in (self.rating_button,self.open_button,self.resume_button,self.more_button): control.setFixedHeight(28)
+        for control in (self.open_button,self.resume_button,self.more_button): control.setFixedHeight(32)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
-        self.window_chrome.insert(right)
-        # The job progress line floats along the title row's lower edge instead of taking a row.
-        self.progress = ProgressLine()
-        self.progress_bar = Overlay(root, self.window_chrome, 'bottom', margin=0, passive=True, frame=False, fill=True, content=lambda: self.progress.active)
-        progress_row = QHBoxLayout(self.progress_bar); progress_row.setContentsMargins(0, 0, 0, 0); progress_row.addWidget(self.progress)
-        self.progress.changed = self.progress_bar.reposition   # shown only while a job runs
+        top.addWidget(right, 1); outer.addWidget(bar)
+        self.progress = ProgressLine(); outer.addWidget(self.progress)
         self.stack = PageStack(); outer.addWidget(self.stack, 1)
 
-        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(3, 2, 3, 2); column.setSpacing(2)
+        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
         self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
-        # The two photos fill the page. Their roles are tooltips, and file name, face and camera details and
-        # the action dock float over the photos instead of taking rows of their own.
-        pair = QHBoxLayout(); pair.setSpacing(3); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
+        pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
         for index in range(2):
-            photo = PhotoView(fit_height_factor=1.0)
-            photo.setToolTip('左图 · 当前筛选：保留 / 删除只操作此图' if index==0 else '右图 · 下一张，仅供对比')
+            pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
+            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
+            role.setToolTip('保留 / 删除只操作左图，右图仅用于比较')
+            role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22);self.photo_roles.append(role)
+            if index==0:pane.addWidget(role)
+            if index==1:
+                self.review_info=QWidget();self.review_info.setFixedHeight(190)
+                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(4,4,4,4);info_row.setSpacing(16)
+                self.face_container=QWidget();self.face_container.setFixedSize(160,182)
+                self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
+                info_row.addWidget(self.face_container)
+                self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setStyleSheet('font-size:14px;');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                info_row.addWidget(self.current_metadata,1);pane.addWidget(self.review_info)
+                pane.addWidget(role)
+            photo = PhotoView(fit_height_factor=1.0 if index == 0 else 0.6)
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
-            photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index))
-            pair.addWidget(photo, 2 if index == 0 else 1); self.photos.append(photo)
-        for index,photo in enumerate(self.photos):
-            role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比',review);role.hide();self.photo_roles.append(role)
-        # Left photo: name and folder in one line at its top.
-        self.caption_bar=Overlay(review,self.photos[0],'top',passive=True,content=lambda:bool(self.names[0].full or self.details[0].full));caption=QHBoxLayout(self.caption_bar);caption.setContentsMargins(10,3,10,3);caption.setSpacing(10)
-        name=Elided('name');detail=Elided('caption')
-        for label in (name,detail):label.setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred);label.setMinimumWidth(1);caption.addWidget(label)
-        # Right photo: the left photo's face and camera details in a card at its top.
-        self.review_info=Overlay(review,self.photos[1],'top',margin=6,min_size=(260,300))
-        info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(6,4,6,4);info_row.setSpacing(6)
-        self.face_container=QWidget();self.face_container.setFixedSize(48,54)
-        self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
-        info_row.addWidget(self.face_container)
-        self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter);self.current_metadata.setMinimumWidth(150);self.current_metadata.setStyleSheet('font-size:11px;')
-        info_row.addWidget(self.current_metadata,1)
-        right_name=Elided('name');right_name.hide()
-        self.names=[name,right_name];self.details=[detail,self.current_metadata]
+            photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
+            name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+            detail = self.current_metadata if index==1 else Elided('caption');detail.setObjectName('caption')
+            if index==0:
+                detail.setFixedHeight(40);detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop);pane.addWidget(name);pane.addWidget(detail)
+            else:name.hide()
+            pair.addLayout(pane, 2 if index == 0 else 1)
+            self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
-        self.action_row=Overlay(review,self.photos[0],'bottom',margin=10,frame=False); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 0, 0, 0)
+        self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 10, 0, 8); actions.addStretch()
         self.actionbar = GlassDock(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(4, 1, 4, 1); row.setSpacing(3)
         self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
         self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
@@ -470,19 +442,17 @@ class Window(QMainWindow):
         for control in (self.keep_button, self.delete_button, self.restore_button, self.next_button):
             control.compact=True;control.setStyleSheet('padding:0 8px;min-height:0;font-size:12px;');control.setFixedHeight(26);font=control.font();font.setPixelSize(12);control.setFont(font)
         self.actionbar.register((self.keep_button,self.delete_button,self.restore_button,self.next_button))
-        actions.addWidget(self.actionbar); self.action_row.setVisible(self.actionbar_visible)
+        actions.addWidget(self.actionbar); actions.addStretch(); column.addWidget(self.action_row); self.action_row.setVisible(self.actionbar_visible)
         self.strip = MixedFilmstrip(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
         self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(100)
         self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.strip.horizontalScrollBar().setFixedHeight(5)
         self.strip.enable_mixed_layout()
         self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.strip.itemClicked.connect(self.strip_select); column.addWidget(self.strip)
         self.strip.icon_for=lambda pid:QIcon(self.thumbnail(pid)) if self.thumbnail(pid) is not None else self.placeholder
         self.strip.horizontalScrollBar().valueChanged.connect(self.load_strip_thumbnails)
-        # The filmstrip explains itself in a tooltip; the label keeps the text for checks.
-        self.strip_note=QLabel('全部未筛选照片 · 拖动下方滚动条浏览',review);self.strip_note.hide()
-        self.stack.addWidget(review)
+        self.strip_note=QLabel('全部未筛选照片 · 拖动下方滚动条浏览');self.strip_note.setObjectName('caption');column.addWidget(self.strip_note)
+        column.addSpacing(8); self.stack.addWidget(review)
         placeholder = QPixmap(104, 68); placeholder.fill(QColor(theme.ELEVATED)); self.placeholder = QIcon(placeholder)
         # The grid sizes every cell from its first item, so its placeholder must be full size.
         tile = QPixmap(176, 118); tile.fill(QColor(theme.ELEVATED)); self.tile = QIcon(tile)
@@ -523,15 +493,11 @@ class Window(QMainWindow):
         self.stack.addWidget(kept)
 
         self.rating_page=RatingPage(self);self.stack.addWidget(self.rating_page)
-        # Grading tools take the view switch's place in the title row while grading.
-        chrome_row=self.window_chrome.layout();chrome_row.insertWidget(chrome_row.indexOf(self.chrome_tools),self.rating_page.toolbar);self.rating_page.toolbar.hide()
         self.album=AlbumView(self);self.stack.addWidget(self.album)
 
         self.toast = Toast(root)
         self.toast.positioner=self.place_overlays
-        # The resize grip sits in the window corner over the content, not in a row of its own.
-        self.size_grip = Overlay(root, self.stack, 'bottom-right', margin=0, frame=False); grip_row = QHBoxLayout(self.size_grip)
-        grip_row.setContentsMargins(0, 0, 2, 2); grip_row.addWidget(QSizeGrip(self))
+        grip_row=QHBoxLayout(); grip_row.setContentsMargins(0,0,2,2); grip_row.addStretch(); grip_row.addWidget(QSizeGrip(self)); outer.addLayout(grip_row)
 
     def mode_settings(self,mode=None):
         return ModeSettings(QSettings('PhotoSieve','PhotoSieve'),mode or ('rating' if self.rating_active else 'review'))
@@ -1067,7 +1033,7 @@ class Window(QMainWindow):
             if row>=0 and self.strip.currentRow()!=row:self.strip.setCurrentRow(row)
         if self.queue:self.strip.adapt_to_preview(self.thumbnail(self.queue[0]['id']))
         for row in self.strip.visible_rows():self.update_thumbnail(self.strip.item(row).data(ROLE))
-        self.strip_note.setText(f'未筛选 {self.strip.count():,} 张 · 拖动滚动条浏览全部照片 · '+{'file':'文件顺序','oldest':'文件日期：从旧到新','newest':'文件日期：从新到旧'}[self.sort_order]);self.strip.setToolTip(self.strip_note.text())
+        self.strip_note.setText(f'未筛选 {self.strip.count():,} 张 · 拖动滚动条浏览全部照片 · '+{'file':'文件顺序','oldest':'文件日期：从旧到新','newest':'文件日期：从新到旧'}[self.sort_order])
         self.load_strip_thumbnails()
 
     def load_strip_thumbnails(self,*_):
@@ -1122,9 +1088,7 @@ class Window(QMainWindow):
         opened=self.session_active and not self.importing and self.stack.currentIndex()!=2
         resume_available=not self.session_active and self.resume_button.isEnabled()
         self.resume_button.setVisible(resume_available);self.welcome_resume.setVisible(resume_available)
-        self.rating_button.setVisible(opened)
-        for widget,visible in sorted(((self.segments,opened and not self.rating_active),(self.rating_page.toolbar,opened and self.rating_active)),key=lambda pair:pair[1]):
-            if widget.isVisibleTo(self)!=visible:widget.setVisible(visible)   # hide before show, as in toggle_rating
+        self.rating_button.setVisible(opened);self.segments.setVisible(opened and not self.rating_active)
         self.rating_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running())
         if self.rating_active:self.rating_page.update_controls()
         if self.rating_active and self.rating_page.writing:

@@ -39,28 +39,11 @@ class RoundedCombo(QComboBox):
         self._popup = None
         self._popup_background = None
 
-    def make_compact(self):
-        """Toolbar size: 28 px tall and only as wide as its longest choice."""
-        self.compact = True; self.setMinimumHeight(28); self.setMinimumWidth(0)
-        self.currentIndexChanged.connect(lambda _: self.updateGeometry())
-        self.setStyleSheet(self.styleSheet().replace('min-height:38px', 'min-height:28px')); self.updateGeometry()
-        return self
-
     def sizeHint(self):
         width = max((self.fontMetrics().horizontalAdvance(self.itemText(i))
             + (24 if not self.itemIcon(i).isNull() else 0) for i in range(self.count())), default=90)
-        if getattr(self, 'compact', False):
-            # A toolbar selector is as wide as its current choice; the open list shows every option in full.
-            # paintEvent leaves 12 px before the text and 32 px for the arrow.
-            self.view().setMinimumWidth(width + 52)
-            current = self.fontMetrics().horizontalAdvance(self.currentText()) + (24 if not self.itemIcon(self.currentIndex()).isNull() else 0)
-            return QSize(current + 52, 28)
         base = super().sizeHint()
         return QSize(max(148, width + 44, base.width()), max(38, base.height()))
-
-    def minimumSizeHint(self):
-        # A toolbar selector always shows its whole current choice; the window title gives way instead.
-        return self.sizeHint() if getattr(self, 'compact', False) else super().minimumSizeHint()
 
     def paintEvent(self, event):
         painter = QPainter(self)

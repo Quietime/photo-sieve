@@ -75,10 +75,6 @@ class TitleBar(QWidget):
             self.max_button=self.add_button(row,'□','最大化 / 还原',self.toggle_max)
         self.add_button(row,'×','关闭',window.close)
 
-    def insert(self,widget,stretch=0):
-        """Put a toolbar widget in the title row, before the window buttons: one 40 px row instead of two."""
-        row=self.layout();row.insertWidget(row.indexOf(self.min_button),widget,stretch)
-
     def add_button(self,row,text,hint,fn):
         from apple_ui import AppleButton
         button=AppleButton('',symbol={'−':'minimize','□':'maximize','×':'close'}[text]); button.setFixedSize(40,30); button.setToolTip(hint)

@@ -192,8 +192,6 @@ def run(output):
                 audit.screenshot('01c_welcome_toast_layout',window)
                 welcome=window.stack.widget(2)
                 for control in welcome.findChildren(QAbstractButton)+welcome.findChildren(QLabel):
-                    # 继续上次进度 stays hidden until a folder was opened once; hidden widgets have no real geometry.
-                    if not control.isVisible():continue
                     position=control.mapTo(window.centralWidget(),QPoint(0,0))
                     rect=control.rect().translated(position)
                     audit.check('welcome_status_clear_of_'+control.text(),not rect.intersects(window.toast.geometry()))
@@ -290,11 +288,9 @@ def run(output):
                 audit.check('kept_category_is_a_thumbnail_gallery',window.stack.currentIndex()==4 and window.kept_grid.count()==1)
                 item=window.kept_grid.item(0)
                 QTest.mouseClick(window.kept_grid.viewport(),Qt.MouseButton.LeftButton,pos=window.kept_grid.visualItemRect(item).center())
-                # A kept photo opens in the read-only album and returns to the gallery from there.
-                audit.until(lambda:window.stack.currentWidget() is window.album and window.album.photo is not None)
+                audit.until(lambda:window.stack.currentIndex()==0 and window.delete_button.isEnabled())
                 audit.screenshot('05c_kept_photo_large_view',window)
-                audit.check('kept_photo_view_is_read_only',not window.delete_button.isEnabled())
-                audit.click(audit.button(window.album,'← 返回相册'))
+                audit.click(window.keep_back_button)
                 audit.until(lambda:window.stack.currentIndex()==4 and window.kept_grid.count()==1)
                 audit.screenshot('05d_kept_gallery_returned',window)
                 audit.check('kept_photo_opens_inside_app_and_returns_to_gallery',window.stack.currentIndex()==4)
@@ -397,7 +393,8 @@ def run(output):
                     application.processEvents()
                     fps=window.fps_label
                     rect=QRectF(fps.mapTo(window,QPoint(0,0)),fps.size())
-                    controls=[button for button in (window.open_button,window.more_button,*window.window_chrome.findChildren(QAbstractButton)) if button.isVisible()]
+                    controls=[window.open_button,window.more_button,
+                        *window.window_chrome.findChildren(QAbstractButton)]
                     audit.check(tag+'_no_button_overlap',all(not rect.intersects(
                         QRectF(button.mapTo(window,QPoint(0,0)),button.size())) for button in controls))
                     audit.check(tag+'_inside_title_bar',fps.parentWidget() is window.window_chrome
@@ -414,8 +411,7 @@ def run(output):
                 audit.click(audit.button(panel, '显示帧率'))
                 audit.check('fps_toggle_off_operates', window.fps_label is None)
                 audit.click(audit.button(panel, '减少动态效果'))
-                # Reduced transparency is a per-mode accessibility option again (see tests/test_mode_settings.py).
-                audit.check('transparency_option_present',any(button.text()=='减少透明效果' for button in panel.findChildren(QAbstractButton)))
+                audit.check('obsolete_transparency_option_removed',not any(button.text()=='减少透明效果' for button in panel.findChildren(QAbstractButton)))
                 audit.screenshot('15b_more_options_accessibility', panel)
                 panel.close()
 

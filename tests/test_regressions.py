@@ -273,35 +273,18 @@ class WindowRegressionTest(WindowCase):
         self.assertTrue(window.rating_active);self.assertIsNotNone(window.rating_page.records)
         self.assertIsNotNone(window.rating_page.tools.records)
 
-    def test_controls_take_at_most_a_tenth_of_the_window(self):
-        """Photos own the window: title row, toolbars, captions, cards and docks together cover at most 10%."""
-        from PySide6.QtCore import QPoint,QRect
-        from widgets import Overlay
-        from theme import STYLE
-        # Measured as users see it: with the stylesheet the APP installs at startup.
-        previous=application.styleSheet();application.setStyleSheet(STYLE);self.addCleanup(application.setStyleSheet,previous)
-        folder=self.base/'photos';folder.mkdir()
-        for i in range(8):Image.new('RGB',(1800,1200) if i%3 else (1200,1800),(60+i*20,90,140)).save(folder/f'{i}.jpg')
-        window=self.make_window();window.scan(str(folder))
-        end=time.monotonic()+30
-        while (window.importing or window.library.job['running'] or window.busy) and time.monotonic()<end:application.processEvents();time.sleep(.01)
-        def rect(widget):return QRect(widget.mapTo(window,QPoint(0,0)),widget.size())
-        def share(content):
-            area=sum(rect(c).width()*rect(c).height() for c in content)
-            for overlay in window.findChildren(Overlay):
-                if overlay.isVisible():
-                    for c in content:
-                        overlap=rect(overlay).intersected(rect(c));area-=max(0,overlap.width())*max(0,overlap.height())
-            return 1-area/(window.width()*window.height())
-        for mode in ('screening','grading'):
-            if mode=='grading':window.toggle_rating()
-            for width,height in ((1280,720),(1366,728),(1920,1040)):
-                window.resize(width,height);end=time.monotonic()+1.5
-                while time.monotonic()<end:application.processEvents();time.sleep(.01)
-                self.assertEqual((window.width(),window.height()),(width,height),'The window fits the screen')
-                content=([window.photos[0].viewport(),window.photos[1].viewport(),window.strip.viewport()] if mode=='screening'
-                         else [window.rating_page.grid.viewport(),window.rating_page.pane.viewport()])
-                with self.subTest(mode=mode,size=(width,height)):self.assertLessEqual(share(content),.10)
+    def test_window_fits_a_1366_by_768_laptop_screen(self):
+        """The hidden grading page (689 px) used to force every page to a 790 px tall window."""
+        window=self.make_window()
+        for index in range(window.stack.count()):
+            if window.stack.widget(index) is window.rating_page:continue
+            window.stack.setCurrentIndex(index);application.processEvents()
+            with self.subTest(page=type(window.stack.currentWidget()).__name__):
+                self.assertLessEqual(window.minimumSizeHint().height(),720)
+        window.stack.setCurrentWidget(window.rating_page);application.processEvents()
+        self.assertLessEqual(window.minimumSizeHint().height(),728)
+        window.resize(1366,1000);application.processEvents()
+        self.assertEqual(window.rating_page.aux.height(),180,'Tall windows keep the full face and camera row')
 
     def test_cache_budget_follows_the_launch_option(self):
         window=self.make_window(cache_mb=512)
