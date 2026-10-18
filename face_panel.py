@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QWidget
 
 class FacePanel(QWidget):
     def __init__(self,parent):
-        super().__init__(parent);self.result=None;self.picture=QPixmap();self.max_height=180
+        super().__init__(parent);self.result=None;self.picture=QPixmap()
         self.move(4,4);self.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.hide()
     def show_result(self,result):
         payload=result.get('imagebytes') if result else None
@@ -14,14 +14,8 @@ class FacePanel(QWidget):
         self.result=result;self.picture=QPixmap()
         if result and result.get('imagebytes'):self.picture.loadFromData(result['imagebytes'])
         if self.picture.isNull():self.hide();return
-        self.place();self.show();self.raise_();self.update()
-    def place(self):
-        if self.picture.isNull():return
-        self.setFixedSize(self.picture.size().scaled(QSize(160,self.max_height),Qt.AspectRatioMode.KeepAspectRatio))
-    def set_max_height(self,height):
-        """Fit the crop to a shorter information row on small screens."""
-        height=max(48,int(height))
-        if height!=self.max_height:self.max_height=height;self.place()
+        size=self.picture.size().scaled(QSize(160,180),Qt.AspectRatioMode.KeepAspectRatio)
+        self.setFixedSize(size);self.show();self.raise_();self.update()
     def paintEvent(self,event):
         if self.picture.isNull():return
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)

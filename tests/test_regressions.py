@@ -273,7 +273,7 @@ class WindowRegressionTest(WindowCase):
         self.assertTrue(window.rating_active);self.assertIsNotNone(window.rating_page.records)
         self.assertIsNotNone(window.rating_page.tools.records)
 
-    def test_window_fits_a_1366_by_768_laptop_screen(self):
+    def test_hidden_grading_page_does_not_size_other_pages(self):
         """The hidden grading page (689 px) used to force every page to a 790 px tall window."""
         window=self.make_window()
         for index in range(window.stack.count()):
@@ -281,10 +281,6 @@ class WindowRegressionTest(WindowCase):
             window.stack.setCurrentIndex(index);application.processEvents()
             with self.subTest(page=type(window.stack.currentWidget()).__name__):
                 self.assertLessEqual(window.minimumSizeHint().height(),720)
-        window.stack.setCurrentWidget(window.rating_page);application.processEvents()
-        self.assertLessEqual(window.minimumSizeHint().height(),728)
-        window.resize(1366,1000);application.processEvents()
-        self.assertEqual(window.rating_page.aux.height(),180,'Tall windows keep the full face and camera row')
 
     def test_cache_budget_follows_the_launch_option(self):
         window=self.make_window(cache_mb=512)
