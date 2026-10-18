@@ -93,8 +93,9 @@ def run(screenshot=None):
         QTest.mouseRelease(w.photos[0].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(250,240))
         assert w.photos[0].detail
         QTest.mouseClick(w.photos[0].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(200,200))
-        assert not w.photos[0].detail and not w.photos[0].full_resolution
-        until(lambda:not w.photos[0].zoom_animation and w.photos[0].pixmap is w.cache[first])
+        # Zoom ends at once; the sharp pixels stay (full_resolution) until the shrink animation hands back the preview.
+        assert not w.photos[0].detail
+        until(lambda:not w.photos[0].zoom_animation and w.photos[0].pixmap is w.cache[first] and not w.photos[0].full_resolution)
         # Right pane works in place too; Escape only resets zoom, not the app.
         QTest.mouseClick(w.photos[1].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(200,200))
         until(lambda:w.photos[1].full_resolution)
@@ -126,7 +127,10 @@ def run(screenshot=None):
         key(w,Qt.Key.Key_Z,Qt.KeyboardModifier.ControlModifier);until(lambda:lib.photo(second)['status']==0 and w.queue[0]['id']==second);settle(w);ready(w)
         key(w,Qt.Key.Key_Down);settle(w);w.switch('deleted');until(lambda:not w.fetching and len(w.deleted_rows)==1)
         assert w.deleted_rows[0]['id']==second and w.deleted_grid.count()==1
-        w.restore(photo_id=second);until(lambda:not w.deleted_rows and w.deleted_grid.count()==0);settle(w)
+        # The deleted album restores through its own selection and 批量恢复 button.
+        w.deleted_grid.item(0).setSelected(True);w.restore_selection()
+        until(lambda:not w.busy and not w.fetching and not w.deleted_rows and w.deleted_grid.count()==0);settle(w)
+        assert lib.photo(second)['present']==1
         w.switch('pending');ready(w)
         # Keep view available, but kept entries never enter the filmstrip.
         # Keys follow the user's settings: here P keeps, and the button shows it.
@@ -134,7 +138,9 @@ def run(screenshot=None):
         kept=w.queue[0]['id'];key(w,Qt.Key.Key_P);settle(w);assert lib.photo(kept)['status']==1,'A custom key keeps the photo'
         w.apply_shortcuts(keys.defaults());assert w.keep_button.text()=='保留' and w.keep_button.shortcut=='↑'
         w.switch('keep');until(lambda:w.kept_grid.count()>0);assert w.stack.currentIndex()==4
-        w.open_kept_item(w.kept_grid.item(0));ready(w);assert w.strip.count()==0
+        # A kept photo opens in the read-only album: no screening actions, and the filmstrip stays empty.
+        w.open_kept_item(w.kept_grid.item(0));until(lambda:w.stack.currentWidget() is w.album and w.album.photo)
+        assert w.strip.count()==0 and not w.delete_button.isEnabled()
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
         # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.

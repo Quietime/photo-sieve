@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence,QColor,QPen,QPainter
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle,QSizePolicy
 from photo_grid import PhotoGrid
 from apple_ui import GlassDock
 from widgets import PhotoView
@@ -93,6 +93,24 @@ class RatingGrid(PhotoGrid):
             self.scroll_motion=theme.animate(self,110,step,curve=theme.EASE,done=done,start=bar.value(),end=target)
         event.accept()
 
+class AuxRow(QWidget):
+    """Face crop and camera details under the grading preview: 180 px tall, down to 96 px on short screens
+    (a 1366 x 768 laptop), so the whole page still fits."""
+    def __init__(self):
+        super().__init__();self.setMinimumHeight(96);self.setMaximumHeight(180)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred)
+    def sizeHint(self):return QSize(super().sizeHint().width(),180)
+    # The wrapped camera text would otherwise size the row by its own height-for-width, not 180 px.
+    def hasHeightForWidth(self):return False
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        panel=self.findChild(FacePanel)
+        if panel:panel.set_max_height(self.height())
+
+class PreviewView(PhotoView):
+    """Grows into whatever height is left: its own size hint must not push the information row below 180 px."""
+    def sizeHint(self):return QSize(250,120)
+
 class RatingPage(QWidget):
     def __init__(self,host):
         super().__init__();self.host=host;self.library=None;self.records=None
@@ -127,10 +145,10 @@ class RatingPage(QWidget):
         gallery_layout.addWidget(self.grid,1);self.splitter.addWidget(gallery)
         preview=QWidget();preview.setMinimumWidth(250);column=QVBoxLayout(preview);column.setContentsMargins(12,0,0,0);column.setSpacing(6)
         role=QLabel('照片预览');role.setObjectName('caption');column.addWidget(role)
-        self.pane=PhotoView();column.addWidget(self.pane,1)
+        self.pane=PreviewView();column.addWidget(self.pane,1)
         self.stars=QLabel('☆☆☆☆☆');self.stars.setAlignment(Qt.AlignmentFlag.AlignCenter);self.stars.setStyleSheet('font-size:22px;letter-spacing:3px;color:'+theme.LABEL+';');column.addWidget(self.stars)
         self.name=QLabel('请选择照片文件夹');self.name.setAlignment(Qt.AlignmentFlag.AlignCenter);self.name.setObjectName('caption');self.name.setWordWrap(True);column.addWidget(self.name)
-        self.aux=QWidget();self.aux.setFixedHeight(180);aux_layout=QHBoxLayout(self.aux);aux_layout.setContentsMargins(0,0,0,0);aux_layout.setSpacing(16)
+        self.aux=AuxRow();aux_layout=QHBoxLayout(self.aux);aux_layout.setContentsMargins(0,0,0,0);aux_layout.setSpacing(16)
         self.face_panel=FacePanel(self.aux);aux_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter)
         self.camera_info=QLabel('请选择照片');self.camera_info.setObjectName('caption');self.camera_info.setStyleSheet('font-size:14px;');self.camera_info.setWordWrap(True);self.camera_info.setAlignment(Qt.AlignmentFlag.AlignCenter);aux_layout.addWidget(self.camera_info,1);column.addWidget(self.aux)
         self.panes=[self.pane];self.names=[self.name];self.splitter.addWidget(preview);self.splitter.setStretchFactor(0,1);self.splitter.setStretchFactor(1,1);self.splitter.setSizes([600,400]);layout.addWidget(self.splitter,1)

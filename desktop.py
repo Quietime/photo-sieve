@@ -144,6 +144,19 @@ class Decoders:
         if pool: pool.shutdown(wait=True, cancel_futures=True)
 
 
+class PageStack(QStackedWidget):
+    """Pages are sized one at a time: hidden pages (the grading page needs about 690 px) must not stop the
+    screening window from fitting a 1366 x 768 laptop screen."""
+    def __init__(self):
+        super().__init__(); self.currentChanged.connect(lambda _: self.updateGeometry())
+
+    def sizeHint(self):
+        page = self.currentWidget(); return page.sizeHint() if page else super().sizeHint()
+
+    def minimumSizeHint(self):
+        page = self.currentWidget(); return page.minimumSizeHint() if page else super().minimumSizeHint()
+
+
 class Result(QObject):
     ok = Signal(object)
     fail = Signal(str)
@@ -389,7 +402,7 @@ class Window(QMainWindow):
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
         top.addWidget(right, 1); outer.addWidget(bar)
         self.progress = ProgressLine(); outer.addWidget(self.progress)
-        self.stack = QStackedWidget(); outer.addWidget(self.stack, 1)
+        self.stack = PageStack(); outer.addWidget(self.stack, 1)
 
         review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
         self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
