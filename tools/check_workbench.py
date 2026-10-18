@@ -131,6 +131,13 @@ def run(output):
                 checks.append('trash_restore_rescan_preserve_labels_and_exclude_deleted_from_analysis_filters')
                 w.analysis.clear();assert records.summary()['features']==0 and records.annotations()[first]['label']==saved_labels[first]['label'];w.analysis.start(library,force=True);until(lambda:w.analysis.finished)
                 checks.append('clear_analysis_rebuilds_derived_data_but_keeps_annotations_and_stars')
+                # The stress loop measures writes on prepared photos. At 150% the
+                # smaller visible/preload horizon need not have read all 32 ratings;
+                # selecting an unseen photo and grading in the same event turn is
+                # correctly refused until either its metadata or preview is ready.
+                # Cold-photo input is covered separately by check_rating_latency.
+                for prepared in list(page.ids):
+                    page.read(prepared);until(lambda pid=prepared:pid in page.info)
                 # 500 mixed-photo rating inputs with a bounded pending horizon.
                 tools.auto_xmp=True;expected={};peak=0
                 for turn in range(500):
