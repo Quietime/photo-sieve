@@ -19,7 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download v4.3.0 --repo Quietime/photo-sieve --dir release --pattern PhotoSieve-Setup-Windows-x64.exe --pattern SHA256SUMS.txt
+          gh release download v5.0.0 --repo Quietime/photo-sieve --dir release --pattern PhotoSieve-Setup-Windows-x64.exe --pattern SHA256SUMS.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -c "from pathlib import Path;import hashlib;p=Path('release/PhotoSieve-Setup-Windows-x64.exe');expected=next(line.split()[0] for line in Path('release/SHA256SUMS.txt').read_text().splitlines() if line.endswith(p.name));assert hashlib.sha256(p.read_bytes()).hexdigest()==expected;print('Published installer SHA256 verified')"
       - name: Install at chosen path and verify runtime icon and workspace preservation

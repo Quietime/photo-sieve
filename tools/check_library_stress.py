@@ -82,7 +82,9 @@ class Stress:
         self.decoders = decoders; self.library.offload = decoders
         self.records = RatingRecords(self.library); self.work = WorkRecords(self.library); self.engine = Engine()
         self.failures = []; self.counts = {}; self.lock = threading.Lock(); self.op_lock = threading.Lock()
-        self.removed_by_hand = set()
+        self.removed_by_hand = set(); self.id_cache = {}
+        # A rescan refuses every other action while it runs; space jobs out by library size.
+        self.job_pause = (.2, .8) if photos <= 2000 else (2., 6.)
 
     def count(self, name, outcome='ok'):
         with self.lock: self.counts[name + ':' + outcome] = self.counts.get(name + ':' + outcome, 0) + 1
@@ -94,8 +96,12 @@ class Stress:
             time.sleep(.01)
 
     def ids(self, view='all'):
+        """Photo ids by view, re-read at most every 0.3 s: at 20,000 photos a query per action would dominate."""
+        now = time.monotonic(); cached = self.id_cache.get(view)
+        if cached and now - cached[0] < .3: return cached[1]
         with self.library.connect() as db:
-            return [row[0] for row in db.execute('SELECT id FROM photos WHERE ' + self.library.query(view))]
+            ids = [row[0] for row in db.execute('SELECT id FROM photos WHERE ' + self.library.query(view))]
+        self.id_cache[view] = (now, ids); return ids
 
     def guarded(self, name, action, expected=EXPECTED):
         try:
@@ -129,7 +135,7 @@ class Stress:
         """Library jobs: what rescans, batch restore and permanent deletion do while ops are queued."""
         rng = random.Random(self.rng.random())
         while time.monotonic() < stop:
-            time.sleep(rng.uniform(.2, .8))
+            time.sleep(rng.uniform(*self.job_pause))
             choice = rng.random(); deleted = self.ids('deleted')
             def start(kind, function):
                 try:
@@ -137,7 +143,7 @@ class Stress:
                     if self.library.job['message'] != '已完成': self.failures.append(f'{kind}: job ended {self.library.job["message"]}')
                 except LibraryError: self.count(kind, 'refused')
                 except Exception: self.failures.append(f'{kind}: {traceback.format_exc()}')
-            if choice < .45: start('rescan', lambda: self.library.scan(self.root))
+            if choice < .3: start('rescan', lambda: self.library.scan(self.root))
             elif choice < .75 and deleted: start('batch_restore', lambda: self.library.restore_deleted(rng.sample(deleted, min(len(deleted), rng.randint(1, 20)))))
             elif deleted: start('purge', lambda: self.library.purge_deleted(rng.sample(deleted, min(len(deleted), rng.randint(1, 10)))))
 
