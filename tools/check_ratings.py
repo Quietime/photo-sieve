@@ -62,7 +62,8 @@ def main():
                 until(lambda:all(pane.pixmap is not None for pane in page.panes));QTest.qWait(150);window.grab().save(str(output/'rating-all.png'))
                 assert len(page.panes)==1 and page.pane.photo['id']==page.ids[0] and page.grid.isVisible()
                 until(lambda:all(pid in page.thumbs for pid in page.grid.visible_ids()));window.grab().save(str(output/'rating-gallery.png'))
-                assert page.star_buttons[3].shortcut=='4'
+                # Star buttons name the rating they give; their key is in the tooltip, keeping the dock compact.
+                assert page.star_buttons[3].text()=='4 ★' and '4' in page.star_buttons[3].toolTip()
                 report['checks'].append('split_gallery_single_preview_and_visible_shortcut_badges')
                 page.undo();until(lambda:not page.writing and page.info[first]['stars']==0)
                 report['checks'].append('rating_undo_restores_original_system_value')

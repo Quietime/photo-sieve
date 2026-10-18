@@ -97,7 +97,8 @@ def run(screenshot=None):
         assert not w.photos[0].detail
         until(lambda:not w.photos[0].zoom_animation and w.photos[0].pixmap is w.cache[first] and not w.photos[0].full_resolution)
         # Right pane works in place too; Escape only resets zoom, not the app.
-        QTest.mouseClick(w.photos[1].viewport(),Qt.MouseButton.LeftButton,pos=QPoint(200,200))
+        # The comparison photo fills its pane, centred: click on the photo itself.
+        QTest.mouseClick(w.photos[1].viewport(),Qt.MouseButton.LeftButton,pos=w.photos[1].mapFromScene(w.photos[1].item.sceneBoundingRect().center()))
         until(lambda:w.photos[1].full_resolution)
         assert (w.photos[1].pixmap.width(),w.photos[1].pixmap.height())==(3200,1800)
         colour=w.photos[1].pixmap.toImage().pixelColor(1600,900);assert max(abs(colour.red()-3),abs(colour.green()-7),abs(colour.blue()-11))<=3,'The original keeps its colours'
@@ -140,7 +141,7 @@ def run(screenshot=None):
         w.switch('keep');until(lambda:w.kept_grid.count()>0);assert w.stack.currentIndex()==4
         # A kept photo opens in the read-only album: no screening actions, and the filmstrip stays empty.
         w.open_kept_item(w.kept_grid.item(0));until(lambda:w.stack.currentWidget() is w.album and w.album.photo)
-        assert w.strip.count()==0 and not w.delete_button.isEnabled()
+        assert w.strip.count()==0 and not w.action_row.isVisible()
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
         # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.

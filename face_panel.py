@@ -17,7 +17,7 @@ class FacePanel(QWidget):
         self.place();self.show();self.raise_();self.update()
     def place(self):
         if self.picture.isNull():return
-        self.setFixedSize(self.picture.size().scaled(QSize(160,self.max_height),Qt.AspectRatioMode.KeepAspectRatio))
+        self.setFixedSize(self.picture.size().scaled(QSize(round(self.max_height*8/9),self.max_height),Qt.AspectRatioMode.KeepAspectRatio))
     def set_max_height(self,height):
         """Fit the crop to a shorter information row on small screens."""
         height=max(48,int(height))

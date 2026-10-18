@@ -83,8 +83,10 @@ def run(output):
                     page.show_aux();until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 250' in page.camera_info.text())
                     current=page.pid();assert page.face_panel.isVisible() and page.face_panel.result['imagebytes']==crops[current],(page.face_panel.isVisible(),page.face_panel.result)
                     assert 'NIKON D800E' in page.camera_info.text() and '24.0-70.0 mm' in page.camera_info.text() and '2024-06-29' in page.camera_info.text()
-                    pane_bottom=page.pane.mapTo(page,page.pane.rect().bottomLeft()).y()
-                    assert page.aux.mapTo(page,page.aux.rect().topLeft()).y()>pane_bottom
+                    # The face and camera card floats in the preview's top-right corner instead of taking a row.
+                    from PySide6.QtCore import QRect
+                    pane=QRect(page.pane.mapTo(page,page.pane.rect().topLeft()),page.pane.size());card=QRect(page.aux.mapTo(page,page.aux.rect().topLeft()),page.aux.size())
+                    assert page.aux.isVisible() and pane.contains(card) and pane.right()-card.right()<=12,(pane,card)
                     page.select(1);until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 251' in page.camera_info.text())
                     assert page.face_panel.result['imagebytes']==crops[page.pid()]
                     page.select(0);until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==first and 'ISO 250' in page.camera_info.text())

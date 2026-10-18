@@ -27,8 +27,8 @@ class GroupCombo(RoundedCombo):
     def set_groups(self,groups):
         old=self.currentData();previous=self.choice_model;self.choice_model=GroupChoiceModel(groups,self);self.setModel(self.choice_model);self.setCurrentIndex(self.choice_model.positions.get(old,0))
         # QComboBox deletes its previous child model when setModel replaces it.
-    def sizeHint(self):return QSize(max(180,min(280,self.fontMetrics().horizontalAdvance(self.currentText())+44)),38)
-    def minimumSizeHint(self):return QSize(150,38)
+    def sizeHint(self):return QSize(max(150,min(220,self.fontMetrics().horizontalAdvance(self.currentText())+44)),28 if getattr(self,'compact',False) else 38)
+    def minimumSizeHint(self):return QSize(150,28 if getattr(self,'compact',False) else 38)
 
 class GroupModel(QAbstractTableModel):
     def __init__(self,groups):super().__init__();self.groups=groups
@@ -42,26 +42,27 @@ class GroupModel(QAbstractTableModel):
         if orientation==Qt.Orientation.Horizontal and role==Qt.ItemDataRole.DisplayRole:return ['分段','名称 / 起始时间','照片数'][section]
 
 class Workbench:
-    def __init__(self,page,layout,heading):
+    def __init__(self,page,toolbar):
         self.page=page;self.host=page.host;self.records=None;self.annotations={};self.groups=[];self.group_map={};self.syncing=set();self.xmp_errors={};self.dialog=None;self.last_summary=0;self.summary_pending=False;self.filter_dirty=False;self.last_interaction=time.monotonic()
         self.xmp_queue=AutoXmpQueue(self)
         self.auto_xmp=page.host.mode_settings('rating').value('auto_xmp',True,type=bool)
-        self.button=self.host.button('选片工具',self.open);heading.insertWidget(heading.count()-1,self.button)
-        row=QHBoxLayout();row.setSpacing(8)
-        self.label_filter=RoundedCombo();self.label_filter.setMinimumWidth(125);self.label_filter.addItem('全部颜色',None)
+        self.button=page.tool_button('选片工具',self.open)
+        self.label_filter=RoundedCombo().make_compact();self.label_filter.setToolTip('按颜色标签筛选');self.label_filter.addItem('全部颜色',None)
         for key,text in LABELS.items():self.label_filter.addItem(text,key)
-        self.mode=RoundedCombo();self.mode.setMinimumWidth(125)
+        self.mode=RoundedCombo().make_compact();self.mode.setToolTip('连拍分组或时间分段')
         for text,key in [('不分组','none'),('相似连拍分组','similar'),('按时间分段','time')]:self.mode.addItem(text,key)
-        self.group=GroupCombo();self.group.setMinimumWidth(150);self.group.hide()
-        self.mark=self.host.button('颜色标签 ▾',self.label_menu);self.compare=self.host.button('多图对比',self.open_compare)
-        for widget in (self.label_filter,self.mode,self.group,self.mark,self.compare):row.addWidget(widget)
-        row.addStretch();layout.insertLayout(2,row)
+        self.group=GroupCombo();self.group.make_compact();self.group.setMaximumWidth(220);self.group.hide()
+        self.mark=page.tool_button('颜色标签 ▾',self.label_menu);self.compare=page.tool_button('多图对比',self.open_compare)
+        # In the page's single toolbar row, after its scope and star filters.
+        # Colour labels are set with Alt+0~5 or in 选片工具, so the toolbar keeps only filters and two tools.
+        for offset,widget in enumerate((self.label_filter,self.mode,self.group,self.compare,self.button)):toolbar.insertWidget(page.tools_slot+offset,widget)
+        self.mark.setParent(page);self.mark.hide()
         self.label_filter.currentIndexChanged.connect(page.reload);self.mode.currentIndexChanged.connect(self.mode_changed);self.group.currentIndexChanged.connect(page.reload)
         self.quality=QLabel();self.quality.setObjectName('caption');self.quality.setWordWrap(True)
-        # The hint belongs to the selected photo, beside the existing face/metadata block.
-        page.aux.parentWidget().layout().addWidget(self.quality);self.quality.setAlignment(Qt.AlignmentFlag.AlignCenter);self.quality.setMaximumHeight(40)
-        self.progress=QLabel();self.progress.setObjectName('caption');self.progress.setToolTip('清晰预览、人脸和本地分析均在后台执行；缓存达到上限时会显示实际状态')
-        layout.insertWidget(layout.count()-1,self.progress)
+        # The hint belongs to the selected photo, in the face and camera card.
+        page.aux_layout.addWidget(self.quality);self.quality.setAlignment(Qt.AlignmentFlag.AlignCenter);self.quality.setMaximumHeight(40)
+        # Background progress has no row of its own: it is the 选片工具 tooltip and the dialog's overview.
+        self.progress=QLabel(page);self.progress.hide()
         self.timer=QTimer(page);self.timer.setInterval(1000);self.timer.timeout.connect(self.tick);self.timer.start()
     def attach(self,library):
         if self.records and self.records.library is library:return
@@ -150,7 +151,7 @@ class Workbench:
         token=(id(self.records),self.host.analysis.generation,analysis['done'])
         if time.monotonic()-self.last_interaction>1 and not (self.dialog and self.dialog.isVisible()) and analysis['finished'] and getattr(self,'last_analysis_done',None)!=token and self.mode.currentData()!='none' and not p.listing and not p.writing:
             self.last_analysis_done=token;self.refresh_filters()
-        self.progress.setVisible(bool(self.host.session_active));self.button.setEnabled(not self.host.closing and not self.host.busy)
+        self.button.setToolTip('选片工具 · '+self.progress.text()+'\n清晰预览、人脸和本地分析均在后台执行；缓存达到上限时会显示实际状态');self.button.setEnabled(not self.host.closing and not self.host.busy)
         for widget in (self.label_filter,self.mode,self.group):widget.setEnabled(not p.writing and not p.listing and not self.host.closing and not self.host.busy)
         self.mark.setEnabled(bool(p.pid()) and not p.listing and not self.host.closing);self.compare.setEnabled(bool(p.pid()) and not p.listing and not self.host.closing)
         if not self.summary_pending and self.records and time.monotonic()-self.last_summary>=2:

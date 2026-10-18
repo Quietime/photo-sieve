@@ -314,6 +314,65 @@ class Elided(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event); self.refresh()
 
+    def sizeHint(self):
+        # The whole text: a floating caption grows to show it, and only elides when the photo is narrower.
+        hint = super().sizeHint(); return QSize(self.fontMetrics().horizontalAdvance(self.full) + 4, hint.height())
+
+
+class Overlay(QWidget):
+    """A small panel floating over an anchor widget (a photo, a gallery), so captions and tools take no rows of
+    their own. It follows the anchor as it moves and resizes, and hides while the anchor is smaller than
+    min_size. passive panels let every mouse event through to the photo underneath."""
+    def __init__(self, parent, anchor, place='bottom', margin=8, passive=False, min_size=(0, 0), frame=True, content=None, fill=False):
+        super().__init__(parent); self.anchor = anchor; self.place = place; self.margin = margin; self.fill = fill
+        self.min_size = min_size; self.frame = frame; self.wanted = True; self.content = content
+        if passive: self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        for widget in {anchor, parent}: widget.installEventFilter(self)
+
+    def setVisible(self, visible):
+        # The caller's choice; reposition() may still hide a panel that does not fit its anchor.
+        self.wanted = bool(visible); self.reposition(); super().setVisible(self.wanted and self.fits())
+
+    def isHidden(self):
+        return not self.wanted
+
+    def fits(self):
+        # content, when given, says whether there is anything to show (an empty caption is no pill at all).
+        return (self.anchor.width() >= self.min_size[0] and self.anchor.height() >= self.min_size[1]
+                and (self.content is None or self.content()))
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Show, QEvent.Type.LayoutRequest):
+            self.reposition()
+        return False
+
+    def event(self, event):
+        if event.type() == QEvent.Type.LayoutRequest: QTimer.singleShot(0, self.reposition)
+        return super().event(event)
+
+    def reposition(self):
+        if not self.wanted: return
+        if not self.fits():
+            if QWidget.isVisible(self): QWidget.setVisible(self, False)
+            return
+        area = QRect(self.anchor.mapTo(self.parentWidget(), self.anchor.rect().topLeft()), self.anchor.size())
+        area = area.adjusted(self.margin, self.margin, -self.margin, -self.margin)
+        hint = self.sizeHint(); width = area.width() if self.fill else min(hint.width(), area.width())
+        width = max(self.minimumWidth(), min(self.maximumWidth(), width))
+        height = min(self.heightForWidth(width) if self.hasHeightForWidth() else hint.height(), area.height())
+        height = max(self.minimumHeight(), min(self.maximumHeight(), height))
+        x = {'left': area.left(), 'right': area.right() - width + 1}.get(self.place.split('-')[-1], area.center().x() - width // 2)
+        y = area.top() if self.place.startswith('top') else area.bottom() - height + 1
+        self.setGeometry(x, y, width, height)
+        if not QWidget.isVisible(self) and self.parentWidget().isVisible(): QWidget.setVisible(self, True)
+        self.raise_()
+
+    def paintEvent(self, event):
+        if not self.frame: return
+        painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        colour = QColor(theme.BG); colour.setAlpha(255 if theme.REDUCED_TRANSPARENCY else 205)
+        path = QPainterPath(); path.addRoundedRect(QRectF(self.rect()), 8, 8); painter.fillPath(path, colour)
+
 
 class Ghost(QWidget):
     """A snapshot drawn with painter opacity; far cheaper per frame than QGraphicsOpacityEffect."""
@@ -454,8 +513,11 @@ class ProgressLine(QWidget):
         super().__init__(); self.setFixedHeight(2); self.active = False; self.value = 0.0; self.target = 0.0; self.phase = 0.0
         self.animation = None; self.timer = QTimer(self); self.timer.setInterval(16); self.timer.timeout.connect(self.tick)
 
+    changed = None   # called when the line starts or stops, so a floating holder can show or hide it
+
     def set_progress(self, done, total, active=True):
-        self.active = active
+        started = active != self.active; self.active = active
+        if started and self.changed: self.changed()
         if not active: self.timer.stop(); self.value = 0.0; self.update(); return
         if not self.timer.isActive(): self.timer.start()
         self.target = done / total if total else -1.0

@@ -3,7 +3,8 @@ import ctypes
 import os
 from PySide6.QtCore import Qt, QObject, QEvent, QPoint, QRect, QRectF, QSize,QTimer
 from PySide6.QtGui import QRegion, QPainterPath
-from PySide6.QtWidgets import QWidget, QAbstractButton
+from PySide6.QtWidgets import QWidget, QAbstractButton, QComboBox, QAbstractSlider, QAbstractSpinBox, QLineEdit
+INTERACTIVE = (QAbstractButton, QComboBox, QAbstractSlider, QAbstractSpinBox, QLineEdit)
 
 def resize_geometry(rect, edges, delta, minimum, maximum):
     x,y,w,h=rect.x(),rect.y(),rect.width(),rect.height()
@@ -142,5 +143,8 @@ class WindowFrame(QObject):
         here=self.chrome.mapFrom(self.window,local)
         if self.chrome.rect().contains(here):
             child=self.chrome.childAt(here)
-            if not isinstance(child,QAbstractButton): return True,2  # HTCAPTION gives Windows its own drag/snap/double-click
+            # Toolbar controls live in this row too (combo boxes, sliders): any control under the cursor, or a
+            # control containing it, stays HTCLIENT so it can be clicked; labels and empty space drag the window.
+            while child is not None and child is not self.chrome and not isinstance(child,INTERACTIVE):child=child.parentWidget()
+            if child is None or child is self.chrome: return True,2  # HTCAPTION gives Windows its own drag/snap/double-click
         return True,1  # HTCLIENT: custom controls must never become the system's hidden caption
