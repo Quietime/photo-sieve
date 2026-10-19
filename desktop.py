@@ -273,6 +273,11 @@ class Window(QMainWindow):
         self.updates = UpdateController(self, check_on_start=check_updates); self.updates.report_previous()
         self.shortcuts = []; self.apply_shortcuts(keys.load(QSettings('PhotoSieve', 'PhotoSieve')))
         self.apply_mode_preferences()
+        from remote_control import RemoteControl
+        self.remote=RemoteControl(self)
+        if QSettings('PhotoSieve','PhotoSieve').value('remote/enabled',False,type=bool):
+            try:self.remote.start()
+            except OSError as error:crashlog.event('remote_not_started',error=str(error))
         self.timer = QTimer(self); self.timer.timeout.connect(self.poll); self.poll()
         self.maintenance_running=False; self.maintenance_timer=QTimer(self)
         self.maintenance_timer.timeout.connect(self.maintain_cache); self.maintenance_timer.start(30000)
@@ -557,12 +562,17 @@ class Window(QMainWindow):
         clear=menu.addAction('一键清理全部缓存');clear.setEnabled(not self.busy and not self.pending_ops and not self.rating_page.writing);clear.triggered.connect(self.clear_cache)
         gpu=QAction('GPU 合成（应用级）',menu);gpu.setToolTip('应用统一渲染设置，切换后重启生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
         gpu.setChecked(QSettings('PhotoSieve','PhotoSieve').value('gpu_compositing',False,type=bool));gpu.toggled.connect(self.set_gpu);menu.addAction(gpu)
+        remote=menu.addAction('手机遥控…');remote.setToolTip('用同一 Wi‑Fi 下的手机代替键盘筛选和分级');remote.triggered.connect(self.remote_dialog)
         menu.addAction('检查更新').triggered.connect(lambda:self.updates.check())
         automatic=QAction('自动检查更新',menu);automatic.setCheckable(True);automatic.setChecked(self.updates.auto_enabled())
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
         menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
+
+    def remote_dialog(self):
+        import remote_control
+        remote_control.open_dialog(self)
 
     def set_actionbar_visible(self,enabled,mode=None):
         mode=mode or ('rating' if self.rating_active else 'review');enabled=bool(enabled)
@@ -1672,6 +1682,7 @@ class Window(QMainWindow):
                 self.error('无法打开卸载向导：'+str(exc)); event.ignore(); return
         for timer in (self.updates.timer, self.timer, self.cursor_timer, self.state_timer, self.resize_timer, self.chrome_timer, self.maintenance_timer): timer.stop()
         self.full_cache.stop();self.full_cache.timer.stop();self.full_faces.stop();self.full_faces.timer.stop()
+        self.remote.stop(remember=False)   # the phone's next poll sees the remote as off; the setting stays as chosen
         self.analysis.shutdown()
         self.rating_page.shutdown()
         self.metadata_service.shutdown();self.faces.shutdown();self.faces.pool.waitForDone()

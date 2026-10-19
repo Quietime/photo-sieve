@@ -1,0 +1,9 @@
+{
+  "name": "照片快筛 · 手机遥控",
+  "short_name": "快筛遥控",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1E1F23",
+  "theme_color": "#1E1F23"
+}

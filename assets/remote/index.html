@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1E1F23">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="referrer" content="no-referrer">
+<title>照片快筛 · 手机遥控</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app" data-mode="screen" data-online="false">
+  <header class="bar">
+    <div class="brand">
+      <img class="art art-brand" src="art/pyramid.png" alt="" aria-hidden="true">
+      <div class="titles">
+        <div class="folder" id="folder">照片快筛</div>
+        <div class="status" id="status" aria-live="polite">正在连接电脑…</div>
+      </div>
+    </div>
+    <button class="undo" id="undo" data-action="undo" aria-label="撤销上一步">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12h-2"/></svg>
+    </button>
+    <nav class="modes" aria-label="工作模式">
+      <button class="mode" id="mode-screen" data-mode="screen" aria-pressed="true">筛选</button>
+      <button class="mode" id="mode-grade" data-mode="grade" aria-pressed="false">分级</button>
+    </nav>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="pull" id="pull" aria-hidden="true"><span class="pull-dot"></span><span id="pull-text">下拉刷新</span></div>
+    <div class="card" id="card" role="img" aria-label="当前照片">
+      <img class="photo" id="photo" alt="">
+      <div class="hint hint-up" id="hint-up">保留</div>
+      <div class="hint hint-down" id="hint-down">删除</div>
+      <div class="hint hint-left" id="hint-left">下一张</div>
+      <div class="hint hint-right" id="hint-right">恢复</div>
+    </div>
+    <div class="empty" id="empty" hidden>
+      <img class="art art-empty" id="empty-art" src="art/mascot.png" alt="" aria-hidden="true">
+      <p id="empty-text">全部筛选完毕</p>
+      <button class="soft" id="empty-action" hidden>回到未筛选</button>
+    </div>
+  </main>
+
+  <section class="info" aria-label="照片信息">
+    <div class="name" id="name"></div>
+    <div class="camera" id="camera"></div>
+  </section>
+
+  <section class="controls controls-screen" aria-label="筛选操作">
+    <button class="key" id="restore" data-action="restore" aria-label="恢复最近删除">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 3 9l5 5M3 9h11a6 6 0 0 1 0 12h-3"/></svg><span>恢复</span>
+    </button>
+    <button class="key key-delete" id="delete" data-action="delete" aria-label="删除">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg><span>删除</span>
+    </button>
+    <button class="key key-keep" id="keep" data-action="keep" aria-label="保留">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span>保留</span>
+    </button>
+    <button class="key" id="next" data-action="next" aria-label="下一张">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg><span>下一张</span>
+    </button>
+  </section>
+
+  <section class="controls controls-grade" aria-label="分级操作">
+    <div class="stars" id="stars" role="radiogroup" aria-label="星级">
+      <button class="star" data-star="1" role="radio" aria-checked="false" aria-label="1 星"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C13 8 16 11 23 12C16 13 13 16 12 23C11 16 8 13 1 12C8 11 11 8 12 1Z"/></svg></button>
+      <button class="star" data-star="2" role="radio" aria-checked="false" aria-label="2 星"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C13 8 16 11 23 12C16 13 13 16 12 23C11 16 8 13 1 12C8 11 11 8 12 1Z"/></svg></button>
+      <button class="star" data-star="3" role="radio" aria-checked="false" aria-label="3 星"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C13 8 16 11 23 12C16 13 13 16 12 23C11 16 8 13 1 12C8 11 11 8 12 1Z"/></svg></button>
+      <button class="star" data-star="4" role="radio" aria-checked="false" aria-label="4 星"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C13 8 16 11 23 12C16 13 13 16 12 23C11 16 8 13 1 12C8 11 11 8 12 1Z"/></svg></button>
+      <button class="star" data-star="5" role="radio" aria-checked="false" aria-label="5 星"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1C13 8 16 11 23 12C16 13 13 16 12 23C11 16 8 13 1 12C8 11 11 8 12 1Z"/></svg></button>
+    </div>
+    <div class="row">
+      <button class="key" id="previous" data-action="previous" aria-label="上一张">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12H5M11 6l-6 6 6 6"/></svg><span>上一张</span>
+      </button>
+      <button class="key" id="clear" data-action="clear" aria-label="清除星级">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg><span>清除</span>
+      </button>
+      <button class="key" id="label" aria-label="颜色标签" aria-haspopup="dialog">
+        <span class="swatch" id="label-swatch"></span><span id="label-text">标签</span>
+      </button>
+      <button class="key" id="grade-next" data-action="next" aria-label="下一张">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg><span>下一张</span>
+      </button>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="assertive"></div>
+
+  <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+  <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+    <div class="grabber" aria-hidden="true"></div>
+    <h2 id="sheet-title">颜色标签</h2>
+    <div class="labels" id="labels"></div>
+  </section>
+
+  <section class="pair" id="pair" hidden>
+    <img class="art art-pair" src="art/cat.png" alt="" aria-hidden="true">
+    <h1>照片快筛</h1>
+    <p>请在电脑上打开 <b>更多选项 → 手机遥控</b>，<br>再用手机相机扫描二维码。</p>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
