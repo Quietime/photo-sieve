@@ -83,8 +83,10 @@ def run(output):
                     page.show_aux();until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 250' in page.camera_info.text())
                     current=page.pid();assert page.face_panel.isVisible() and page.face_panel.result['imagebytes']==crops[current],(page.face_panel.isVisible(),page.face_panel.result)
                     assert 'NIKON D800E' in page.camera_info.text() and '24.0-70.0 mm' in page.camera_info.text() and '2024-06-29' in page.camera_info.text()
-                    pane_bottom=page.pane.mapTo(page,page.pane.rect().bottomLeft()).y()
-                    assert page.aux.mapTo(page,page.aux.rect().topLeft()).y()>pane_bottom
+                    # 5.0: the face crop sits beside the preview (it takes width, not height); camera info is on the info line below.
+                    pane_right=page.pane.mapTo(page,page.pane.rect().topRight()).x()
+                    assert page.aux.mapTo(page,page.aux.rect().topLeft()).x()>pane_right
+                    assert page.info_line.mapTo(page,QPoint()).y()>=page.pane.mapTo(page,page.pane.rect().bottomLeft()).y()
                     page.select(1);until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 251' in page.camera_info.text())
                     assert page.face_panel.result['imagebytes']==crops[page.pid()]
                     page.select(0);until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==first and 'ISO 250' in page.camera_info.text())
@@ -101,7 +103,7 @@ def run(output):
                 until(lambda:abs(page.splitter.sizes()[0]-before_sizes[0])>40)
                 until(lambda:not page.listing and not page.loading and not page.resize_timer.isActive())
                 after=page.splitter.sizes();assert after[0]<before_sizes[0] and after[1]>before_sizes[1],(before_sizes,after)
-                ratio=settings.value('rating_split_ratio',0,type=float);assert abs(ratio-after[0]/sum(after))<.01
+                ratio=settings.value('rating_split_ratio_v5',0,type=float);assert abs(ratio-after[0]/sum(after))<.01
                 window.toggle_rating();window.toggle_rating();until(lambda:not page.listing and not page.loading and page.pid()==first)
                 assert abs(page.splitter.sizes()[0]/sum(page.splitter.sizes())-ratio)<.02
                 window.grab().save(str(output/'grading-dragged-divider.png'))

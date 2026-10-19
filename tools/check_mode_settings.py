@@ -30,8 +30,12 @@ def run(output):
                     window.show_menu();application.processEvents();window.more_panel.grab().save(str(output/(name+'.png')))
                     return list(window.more_panel.action_controls)
                 def dock(actions):return next(a for a in actions if a.text()=='显示底部操作栏')
-                review=menu('review-settings');assert any(a.text()=='筛选快捷键…' for a in review);dock(review).setChecked(False);window.more_panel.hide()
+                review=menu('review-settings');assert any(a.text()=='筛选快捷键…' for a in review)
+                assert not dock(review).isChecked() and window.action_row.isHidden()   # the dock is opt-in since 5.0
+                dock(review).setChecked(True);dock(review).setChecked(False);window.more_panel.hide()
                 window.toggle_rating();until(lambda:window.rating_active and bool(window.rating_page.ids))
+                assert not window.rating_actionbar_visible and window.rating_page.action_row.isHidden()
+                rating=menu('rating-settings-default');dock(rating).setChecked(True);window.more_panel.hide()
                 assert window.rating_actionbar_visible and not window.rating_page.action_row.isHidden()
                 rating=menu('rating-settings');names=[a.text() for a in rating]
                 assert '分级快捷键…' in names and '人脸预览…' not in names and '预加载与缓存…' not in names

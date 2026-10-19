@@ -22,7 +22,7 @@ def run(output,raw_fixture=None):
             application.processEvents()
             if test():return
             QTest.qWait(10)
-        raise AssertionError('Review header did not update')
+        raise AssertionError('Review header did not update: queue='+str([p['name'] for p in window.queue[:3]])+' metadata='+repr(window.current_metadata.text()))
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir()
         settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat)
@@ -53,10 +53,9 @@ def run(output,raw_fixture=None):
                 from face_service import cache_key
                 window.faces.enabled=True;window.faces._synchronize();key=cache_key(window.queue[0]);window.faces._remember(key,result);window.faces._done.add(key)
                 window.face_changed(window.queue[0]['id'],result);application.processEvents()
-                panel=window.face_panel;check('face_and_metadata_share_right_header',panel.parentWidget() is window.face_container and window.details[1].parentWidget() is window.review_info)
-                role=window.photo_roles[1]
-                check('comparison_caption_is_below_face_and_above_photo',window.review_info.mapTo(window,QPoint()).y()+window.review_info.height()<=role.mapTo(window,QPoint()).y() and role.mapTo(window,QPoint()).y()+role.height()<=window.photos[1].mapTo(window,QPoint()).y())
-                check('header_sits_above_comparison',window.review_info.mapTo(window, QPoint()).y()+window.review_info.height()<=window.photos[1].mapTo(window,QPoint()).y())
+                panel=window.face_panel;check('face_sits_under_comparison_photo',panel.parentWidget() is window.face_container and window.review_info.mapTo(window,QPoint()).y()>=window.photos[1].mapTo(window,QPoint()).y()+window.photos[1].height())
+                check('metadata_is_on_the_info_line',window.details[1].parentWidget() is window.info_line and window.info_line.height()<=24)
+                check('no_caption_rows',all(role.isHidden() for role in window.photo_roles))
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
                 before=panel.grab().toImage();pid=window.queue[0]['id']
                 QTest.mouseClick(panel,Qt.MouseButton.LeftButton);QTest.mouseDClick(panel,Qt.MouseButton.LeftButton);QTest.mouseClick(panel,Qt.MouseButton.RightButton)

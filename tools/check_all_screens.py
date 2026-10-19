@@ -318,6 +318,9 @@ def run(output):
                 audit.check('settings_have_mode_and_global_categories',panel.windowTitle()=='照片筛选设置' and all(title in titles for title in ['照片管理','筛选界面与操作','筛选预加载','应用全局']))
                 names=[control.text() for control in panel.findChildren(QAbstractButton) if control.objectName()=='menuItem']
                 audit.check('settings_have_no_duplicate_controls',len(names)==len(set(names)))
+                audit.check('bottom_action_row_hidden_by_default',window.action_row.isHidden())
+                audit.click(audit.button(panel,'显示底部操作栏'))
+                audit.check('bottom_action_row_shown',not window.action_row.isHidden())
                 audit.click(audit.button(panel,'显示底部操作栏'))
                 audit.check('bottom_action_row_hidden',window.action_row.isHidden())
                 panel.hide();audit.segment(window,0)

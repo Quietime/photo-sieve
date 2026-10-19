@@ -319,7 +319,7 @@ class Elided(QLabel):
         if text != self.full: self.full = text; self.refresh()
 
     def refresh(self):
-        shown = self.fontMetrics().elidedText(self.full, self.mode, max(0, self.width()))
+        shown = self.fontMetrics().elidedText(self.full.replace('\n', ' · '), self.mode, max(0, self.width()))   # always one line
         super().setText(shown); self.setToolTip(self.full if shown != self.full else '')
 
     def resizeEvent(self, event):
