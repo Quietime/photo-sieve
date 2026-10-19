@@ -95,10 +95,11 @@ class Splash(QWidget):
         if local > 0:
             k = spring(local, .8, 9)
             painter.setOpacity(self.fade * min(1., local / .25))
-            font = QFont(['Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', 'serif']); font.setPixelSize(58); font.setWeight(QFont.Weight.Black)
+            serif, gothic = theme.title_fonts()
+            font = QFont([serif, 'Noto Serif SC', 'Songti SC', 'SimSun', 'serif']); font.setPixelSize(58); font.setWeight(QFont.Weight.Black)
             font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 6 + 26 * (1 - k)); painter.setFont(font); painter.setPen(QColor(SILVER))
             painter.drawText(QRectF(0, h * .40, w, 76), Qt.AlignmentFlag.AlignCenter, '照片快筛')
-            small = QFont(['Grenze Gotisch', 'Georgia', 'serif']); small.setPixelSize(22); small.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 3)
+            small = QFont([gothic, 'Georgia', 'serif']); small.setPixelSize(22); small.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 3)
             painter.setFont(small); painter.setPen(QColor(ICE)); painter.drawText(QRectF(0, h * .40 + 70, w, 30), Qt.AlignmentFlag.AlignCenter, 'Photo Sieve')
 
     def draw_pyramid(self, painter, width):

@@ -250,3 +250,21 @@ def animate(owner, duration, step, curve=SNAPPY, done=None, start=0.0, end=1.0):
         motion.apply(0.0)
         clock().add(motion, owner)
     return motion
+
+
+_TITLE_FONTS = None
+
+
+def title_fonts():
+    """(Chinese serif family, Latin blackletter family) for titles; bundled subsets of the two OFL fonts."""
+    global _TITLE_FONTS
+    if _TITLE_FONTS is None:
+        from pathlib import Path
+        from PySide6.QtGui import QFontDatabase
+        found = []
+        for name, fallback in (('NotoSerifSC-title.ttf', 'SimSun'), ('GrenzeGotisch-title.ttf', 'Georgia')):
+            ident = QFontDatabase.addApplicationFont(str(Path(__file__).resolve().parent / 'assets' / 'fonts' / name))
+            families = QFontDatabase.applicationFontFamilies(ident) if ident >= 0 else []
+            found.append(families[0] if families else fallback)
+        _TITLE_FONTS = tuple(found)
+    return _TITLE_FONTS

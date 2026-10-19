@@ -25,6 +25,10 @@ numpy 1.26.4: https://github.com/numpy/numpy/tree/v1.26.4
 PyInstaller: https://github.com/pyinstaller/pyinstaller
   Its bootloader license exception permits distribution of this frozen application.
 
+Title fonts (only the glyphs of 照片快筛 / Photo Sieve, subset by Google Fonts), SIL Open Font License 1.1:
+Noto Serif SC Black: https://github.com/notofonts/noto-cjk ; Grenze Gotisch SemiBold: https://github.com/Omnibus-Type/Grenze-Gotisch
+  License texts: assets/fonts/OFL-NotoSerifSC.txt, assets/fonts/OFL-GrenzeGotisch.txt
+
 Application rebuild instructions are included in source/README.md,
 source/build_windows.bat and source/photo-sieve.spec.
 The application does not restrict reverse engineering for debugging modifications
