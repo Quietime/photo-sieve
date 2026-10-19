@@ -12,6 +12,14 @@ import theme
 
 application=QApplication.instance() or QApplication([])
 
+def settle(*buttons):
+    for button in buttons:
+        for spring in (button.hover_spring,button.press_spring,button.pull_x,button.pull_y):
+            for _ in range(2000):
+                if not spring.running:break
+                spring.advance(spring.last+1/240)
+
+
 class ApplePrimitivesTest(unittest.TestCase):
     def setUp(self):
         self.preferences=(theme.REDUCED_MOTION,theme.REDUCED_TRANSPARENCY,theme.HIGH_CONTRAST)
@@ -43,18 +51,21 @@ class ApplePrimitivesTest(unittest.TestCase):
         self.assertEqual(first,second)
     def test_proximity_response_gradually_reaches_neighbors(self):
         self.dock.response_at(QPointF(self.keep.mapTo(self.dock,self.keep.rect().center())))
-        self.keep.motion.setCurrentTime(self.keep.motion.duration())
-        if self.delete.motion:self.delete.motion.setCurrentTime(self.delete.motion.duration())
+        settle(self.keep,self.delete)
         self.assertGreater(self.keep.hover,self.delete.hover);self.assertGreater(self.delete.hover,0.)
         self.assertFalse(theme.clock().timer.isActive())
     def test_press_compresses_then_spring_returns_without_idle_animation(self):
-        self.keep.compress();self.assertEqual(self.keep.press_amount,1.)
-        self.keep.release_spring();motion=self.keep.press_motion
-        self.assertIsNotNone(motion);motion.setCurrentTime(motion.duration())
-        self.assertEqual(self.keep.press_amount,0.);self.assertIsNone(self.keep.press_motion)
+        self.keep.compress();settle(self.keep);self.assertAlmostEqual(self.keep.press_amount,1.,places=2)
+        self.keep.release_spring();peak=0.
+        for _ in range(400):
+            self.keep.press_spring.advance(self.keep.press_spring.last+1/240);peak=min(peak,self.keep.press_amount)
+            if not self.keep.press_spring.running:break
+        self.assertLess(peak,-.01)                     # under-damped: it bounces past rest once
+        self.assertEqual(self.keep.press_amount,0.);self.assertFalse(self.keep.press_spring.running)
+        self.assertFalse(theme.clock().timer.isActive())
     def test_reduced_motion_has_no_magnification(self):
-        theme.REDUCED_MOTION=True;self.keep.set_response(1.)
-        self.assertEqual(self.keep.hover,0.);self.assertIsNone(self.keep.motion)
+        theme.REDUCED_MOTION=True;self.keep.set_response(1.);self.keep.compress()
+        self.assertEqual(self.keep.hover,0.);self.assertEqual(self.keep.press_amount,0.);self.assertFalse(self.keep.hover_spring.running)
     def test_segmented_control_only_switches_on_mouse_click(self):
         from widgets import Segmented
         from PySide6.QtCore import Qt,QPoint

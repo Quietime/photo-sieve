@@ -208,7 +208,8 @@ class SettingsPanel(QFrame):
         from PySide6.QtGui import QAction
         if isinstance(action,str): action=QAction(action,self)
         if action in self.action_controls:return action
-        control=QCheckBox(action.text()) if action.isCheckable() else QPushButton(action.text())
+        from apple_ui import MenuRow
+        control=QCheckBox(action.text()) if action.isCheckable() else MenuRow(action.text())
         control.setObjectName('menuItem'); control.setEnabled(action.isEnabled())
         control.setFixedHeight(30);control.setToolTip(action.toolTip())
         if action.isCheckable():

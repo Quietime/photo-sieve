@@ -6,9 +6,10 @@ never taken, and no browser, shader dependency or idle animation loop is needed.
 from __future__ import annotations
 import math
 from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QEvent
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QPixmap, QCursor
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QRadialGradient, QPixmap, QCursor
 from PySide6.QtWidgets import QFrame, QPushButton, QMenu
 import theme
+import physics
 
 
 def icon(painter, name, box, color):
@@ -40,11 +41,21 @@ def icon(painter, name, box, color):
 
 
 class AppleButton(QPushButton):
+    """Every button's feedback is physical: springs for hover lift, a magnetic pull toward the cursor,
+    a press that compresses and bounces back on release, and a soft light that follows the pointer."""
     def __init__(self, text='', parent=None, symbol='', variant='neutral'):
         super().__init__(text,parent);self.symbol=symbol;self.variant=variant;self.shortcut='';self.hint=''
-        self.hover=0.;self.motion=None;self.press_amount=0.;self.press_motion=None;self.proximity=False;self.setMouseTracking(True)
+        self.proximity=False;self.setMouseTracking(True);self.pointer=None
+        k=physics.Spring
+        self.hover_spring=k(self,300.,k.damping_for(300.,.75),changed=self.update)
+        self.press_spring=k(self,900.,k.damping_for(900.,.42),changed=self.update)   # under-damped: one small bounce
+        self.pull_x=k(self,240.,k.damping_for(240.,.7),changed=self.update);self.pull_y=k(self,240.,k.damping_for(240.,.7),changed=self.update)
         self.setCursor(Qt.CursorShape.PointingHandCursor);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.pressed.connect(self.compress);self.released.connect(self.release_spring)
+    @property
+    def hover(self):return self.hover_spring.value
+    @property
+    def press_amount(self):return self.press_spring.value
     def set_shortcut(self, primary, all_keys=''):
         self.shortcut=primary;self.hint=all_keys or primary
         self.setToolTip(self.text()+(' · '+self.hint if self.hint else ''))
@@ -57,32 +68,34 @@ class AppleButton(QPushButton):
         return QSize(width-(12 if getattr(self,'compact',False) else 0),26 if getattr(self,'compact',False) else 36)
     def set_response(self,value):
         value=0. if theme.REDUCED_MOTION else max(0.,min(1.,value))
-        if abs(value-self.hover)<.015:return
-        if self.motion:self.motion.stop()
-        start=self.hover
-        def step(t):self.hover=start+(value-start)*t;self.update()
-        def done():self.motion=None
-        self.motion=theme.animate(self,theme.MOTION_FAST,step,curve=theme.SPRING,done=done)
+        if theme.REDUCED_MOTION:self.hover_spring.snap(0.);return
+        self.hover_spring.set_target(value)
     def compress(self):
-        if self.press_motion:self.press_motion.stop();self.press_motion=None
-        self.press_amount=1.;self.update()
+        if theme.REDUCED_MOTION:return
+        self.press_spring.set_target(1.,kick=6.)
     def release_spring(self):
-        if self.press_motion:self.press_motion.stop()
-        if theme.REDUCED_MOTION:self.press_amount=0.;self.update();return
-        start=self.press_amount
-        def step(t):self.press_amount=start*(1-t);self.update()
-        def done():self.press_motion=None
-        self.press_motion=theme.animate(self,theme.MOTION_FAST,step,curve=theme.SPRING,done=done)
+        if theme.REDUCED_MOTION:self.press_spring.snap(0.);return
+        self.press_spring.set_target(0.,kick=-4.)    # released with a little upward speed: it overshoots, then settles
+    def mouseMoveEvent(self,event):
+        if not theme.REDUCED_MOTION and self.width() and self.height():
+            p=event.position();self.pointer=QPointF(p)
+            # Magnetic pull: the face drifts up to 3 px toward the cursor, more along the long side.
+            self.pull_x.set_target(max(-1.,min(1.,(p.x()-self.width()/2)/(self.width()/2)))*min(3.,self.width()/24))
+            self.pull_y.set_target(max(-1.,min(1.,(p.y()-self.height()/2)/(self.height()/2)))*1.5)
+            self.update()
+        super().mouseMoveEvent(event)
     def enterEvent(self,event):
         if not self.proximity:self.set_response(1.)
         super().enterEvent(event)
     def leaveEvent(self,event):
         if not self.proximity:self.set_response(0.)
+        self.pointer=None;self.pull_x.set_target(0.);self.pull_y.set_target(0.)
         super().leaveEvent(event)
     def paintEvent(self,event):
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        scale=1. if theme.REDUCED_MOTION else (1.+theme.HOVER_SCALE*self.hover)*(1-self.press_amount)+theme.PRESS_SCALE*self.press_amount
-        painter.translate(self.width()/2,self.height()/2-self.hover);painter.scale(scale,scale);painter.translate(-self.width()/2,-self.height()/2)
+        hover=max(0.,self.hover);press=self.press_amount
+        scale=1. if theme.REDUCED_MOTION else 1.+theme.HOVER_SCALE*hover-(1-theme.PRESS_SCALE)*press
+        painter.translate(self.width()/2+self.pull_x.value,self.height()/2-1.5*hover+self.pull_y.value);painter.scale(scale,scale);painter.translate(-self.width()/2,-self.height()/2)
         rect=QRectF(self.rect()).adjusted(2,2,-2,-2);path=QPainterPath();path.addRoundedRect(rect,rect.height()/2,rect.height()/2)
         if self.symbol=='delete' and self.variant=='dock' and self.isEnabled():fill=QColor(theme.RED)
         elif self.variant=='primary':fill=QColor(theme.BLUE if self.isEnabled() else '#244969')
@@ -91,6 +104,10 @@ class AppleButton(QPushButton):
         if theme.HIGH_CONTRAST:fill=QColor('#000000');painter.setPen(QPen(QColor('#FFFFFF'),1.5))
         else:painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fill);painter.drawPath(path)
+        if self.pointer is not None and hover>.01 and self.isEnabled() and not theme.HIGH_CONTRAST and not theme.REDUCED_TRANSPARENCY:
+            # A soft light where the pointer is, clipped to the button.
+            glow=QRadialGradient(self.pointer,max(24.,rect.height()*1.3));glow.setColorAt(0,QColor(255,255,255,round(34*hover)));glow.setColorAt(1,QColor(255,255,255,0))
+            painter.setBrush(glow);painter.drawPath(path)
         color=QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.LABEL)
         if not self.isEnabled():color=QColor(theme.TERTIARY)
         metrics=self.fontMetrics();text_width=metrics.horizontalAdvance(self.text())
@@ -111,6 +128,33 @@ class AppleButton(QPushButton):
             painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY));painter.drawText(badge,Qt.AlignmentFlag.AlignCenter,self.shortcut)
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.BLUE),2));painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
+
+
+class MenuRow(QPushButton):
+    """A settings-menu row with the same spring feel: the highlight eases in, the label leans 2 px
+    toward the pointer side, and a press dips and springs back."""
+    def __init__(self,text='',parent=None):
+        super().__init__(text,parent);self.setMouseTracking(True);self.setCursor(Qt.CursorShape.PointingHandCursor)
+        k=physics.Spring
+        self.hover_spring=k(self,320.,k.damping_for(320.,.8),changed=self.update)
+        self.press_spring=k(self,900.,k.damping_for(900.,.45),changed=self.update)
+        self.pressed.connect(lambda:None if theme.REDUCED_MOTION else self.press_spring.set_target(1.,kick=5.))
+        self.released.connect(lambda:self.press_spring.snap(0.) if theme.REDUCED_MOTION else self.press_spring.set_target(0.,kick=-3.))
+    def enterEvent(self,event):
+        self.hover_spring.snap(1.) if theme.REDUCED_MOTION else self.hover_spring.set_target(1.);super().enterEvent(event)
+    def leaveEvent(self,event):
+        self.hover_spring.snap(0.) if theme.REDUCED_MOTION else self.hover_spring.set_target(0.);super().leaveEvent(event)
+    def sizeHint(self):return QSize(self.fontMetrics().horizontalAdvance(self.text())+24,30)
+    def paintEvent(self,event):
+        painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        hover=max(0.,min(1.2,self.hover_spring.value)) if self.isEnabled() else 0.;press=self.press_spring.value
+        rect=QRectF(self.rect()).adjusted(1,1,-1,-1)
+        scale=1.-.02*press;painter.translate(rect.center());painter.scale(scale,scale);painter.translate(-rect.center())
+        painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor(255,255,255,round(16*min(1.,hover))));painter.drawRoundedRect(rect,8,8)
+        painter.setPen(QColor(theme.TERTIARY if not self.isEnabled() else theme.LABEL))
+        painter.drawText(rect.adjusted(8+2*hover,0,-8,0),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft,self.text())
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor(theme.BLUE),1.5));painter.drawRoundedRect(rect,8,8)
 
 
 class GlassSurface(QFrame):

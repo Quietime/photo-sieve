@@ -10,7 +10,9 @@ from version import APP_VERSION, UPDATE_REPOSITORY, UPDATE_ASSET
 ROOT=Path(__file__).resolve().parent
 # A public download: only the project's own source files, never whatever else sits in the build folder
 # (photos, RAWs, libraries, screenshots, notes). The list comes from git; anything else is refused.
-SOURCE_TYPES={'.py','.md','.txt','.bat','.sh','.spec','.iss','.yml','.yaml','.gitattributes','.gitignore',''}
+SOURCE_TYPES={'.py','.md','.txt','.bat','.sh','.spec','.iss','.yml','.yaml','.gitattributes','.gitignore','.cjs',''}
+# The phone remote's own page (assets/remote) is project source too; its artwork is not.
+REMOTE_PAGE={'index.html','app.js','style.css','manifest.webmanifest'}
 PRIVATE_TYPES={'.jpg','.jpeg','.png','.gif','.bmp','.tif','.tiff','.webp','.heic','.heif','.avif','.arw','.cr2','.cr3','.nef',
                '.nrw','.dng','.raf','.rw2','.orf','.pef','.srw','.sqlite3','.db','.log','.json','.ini','.zip','.pdf','.docx','.xlsx'}
 
@@ -24,6 +26,7 @@ def tracked():
 def public(name):
     path=PurePosixPath(name)
     if path.parts[-2:] in {('assets','photosieve.ico'),('assets','photosieve.png'),('assets','welcome-background.png'),('assets','face_detection_yunet_2023mar.onnx'),('assets','haarcascade_eye_tree_eyeglasses.xml')}: return True
+    if path.parts[-3:-1]==('assets','remote') and path.name in REMOTE_PAGE: return True
     return path.suffix.lower() not in PRIVATE_TYPES and (path.suffix.lower() in SOURCE_TYPES or path.name in {'LICENSE'})
 
 def sources():

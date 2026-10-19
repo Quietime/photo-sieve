@@ -568,6 +568,8 @@ class Window(QMainWindow):
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
+        opening=QAction('启动动画',menu);opening.setCheckable(True);opening.setChecked(QSettings('PhotoSieve','PhotoSieve').value('opening_animation',True,type=bool))
+        opening.toggled.connect(lambda enabled:QSettings('PhotoSieve','PhotoSieve').setValue('opening_animation',enabled));menu.addAction(opening)
         menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
 
     def remote_dialog(self):
@@ -1757,9 +1759,15 @@ def main():
                 if existing and Path(existing).resolve() != Path(args.folder).resolve():
                     directory = directory / 'libraries' / hashlib.sha256(str(Path(args.folder).resolve()).encode()).hexdigest()[:16]
             cache_mb = args.cache_mb or MAX_BYTES//1024**2
-            library = Library(directory, cache_mb); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory, cache_mb=cache_mb)
-            screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
-            window.move(screen.center()-window.rect().center());window.show()
+            def build():
+                library = Library(directory, cache_mb); window = Window(library, decoders=Decoders(), start_empty=True, prompt_on_close=True, data_root=default_directory, cache_mb=cache_mb)
+                screen = application.primaryScreen().availableGeometry(); window.resize(min(1480, screen.width() - 40), min(960, screen.height() - 60))
+                window.move(screen.center()-window.rect().center());window.show();return window
+            automated=bool(args.update_check_plan or args.runtime_check_output or args.update_restart_marker)
+            if automated:window=build()
+            else:
+                import splash
+                window=splash.play(application,settings,build)
             if args.update_restart_marker:
                 def confirm_restart():
                     temporary=args.update_restart_marker.with_suffix('.tmp')

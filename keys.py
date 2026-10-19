@@ -96,10 +96,11 @@ class ShortcutDialog(QDialog):
         content=QWidget();content.setLayout(grid);scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(content);scroll.setMinimumHeight(240);scroll.setMaximumHeight(420);layout.addWidget(scroll)
         self.problem = QLabel(); self.problem.setStyleSheet('color:#FF453A; font-size:12px;'); self.problem.setWordWrap(True); layout.addWidget(self.problem)
         buttons = QHBoxLayout()
-        reset = QPushButton('恢复默认'); reset.setObjectName('plain'); reset.clicked.connect(self.reset); buttons.addWidget(reset)
+        from apple_ui import AppleButton
+        reset = AppleButton('恢复默认'); reset.setObjectName('plain'); reset.setAutoDefault(False); reset.clicked.connect(self.reset); buttons.addWidget(reset)
         buttons.addStretch()
-        cancel = QPushButton('取消'); cancel.clicked.connect(self.reject); buttons.addWidget(cancel)
-        self.save_button = QPushButton('保存'); self.save_button.setObjectName('primary'); self.save_button.clicked.connect(self.accept_keys)
+        cancel = AppleButton('取消'); cancel.setAutoDefault(False); cancel.clicked.connect(self.reject); buttons.addWidget(cancel)
+        self.save_button = AppleButton('保存', variant='primary'); self.save_button.setObjectName('primary'); self.save_button.clicked.connect(self.accept_keys)
         buttons.addWidget(self.save_button); layout.addLayout(buttons)
         self.check()
 

@@ -58,6 +58,7 @@ class PublicPackageTest(unittest.TestCase):
         names = [path.relative_to(package_release.ROOT).as_posix() for path in package_release.sources()]
         self.assertIn('app.py', names); self.assertIn('使用说明.txt', names)
         self.assertIn('assets/haarcascade_eye_tree_eyeglasses.xml',names)
+        self.assertIn('assets/remote/app.js',names);self.assertFalse(package_release.public('assets/remote/art/cat.png'))
         self.assertFalse(package_release.public('assets/private-metadata.xml'))
         self.assertFalse(package_release.public('photos/private-settings.xml'))
         for private in ('photos/DSC0001.ARW', 'shots/screen.png', 'records/library.sqlite3', 'notes/settings.ini', 'export.zip'):
