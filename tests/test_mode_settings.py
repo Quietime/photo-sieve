@@ -35,29 +35,35 @@ class ModeSettingsTest(unittest.TestCase):
     def action(self,window,text):return next(a for a in window.more_panel.action_controls if a.text()==text)
     def menu_names(self,window):return [a.text() for a in window.more_panel.action_controls]
 
-    def test_legacy_hidden_dock_migrates_review_only_and_persists_independently(self):
-        self.settings.setValue('show_actionbar',False)
+    def test_new_install_hides_both_docks(self):
+        window=self.make_window()   # the button dock is opt-in since 5.0: the work is done from the keys or the phone
+        self.assertFalse(window.actionbar_visible);self.assertFalse(window.rating_actionbar_visible)
+        self.assertTrue(window.action_row.isHidden());self.assertTrue(window.rating_page.action_row.isHidden())
+
+    def test_legacy_visible_dock_migrates_review_only_and_persists_independently(self):
+        self.settings.setValue('show_actionbar',True)
         window=self.make_window()
-        self.assertFalse(window.actionbar_visible);self.assertTrue(window.rating_actionbar_visible)
-        self.assertTrue(window.action_row.isHidden());self.assertFalse(window.rating_page.action_row.isHidden())
-        window.toggle_rating();window.set_actionbar_visible(False)
-        self.assertFalse(self.settings.value('rating/show_actionbar',True,type=bool))
+        self.assertTrue(window.actionbar_visible);self.assertFalse(window.rating_actionbar_visible)
+        self.assertFalse(window.action_row.isHidden());self.assertTrue(window.rating_page.action_row.isHidden())
         window.toggle_rating();window.set_actionbar_visible(True)
-        self.assertTrue(self.settings.value('review/show_actionbar',False,type=bool))
-        self.assertFalse(self.settings.value('rating/show_actionbar',True,type=bool))
+        self.assertTrue(self.settings.value('rating/show_actionbar',False,type=bool))
+        window.toggle_rating();window.set_actionbar_visible(False)
+        self.assertFalse(self.settings.value('review/show_actionbar',True,type=bool))
+        self.assertTrue(self.settings.value('rating/show_actionbar',False,type=bool))
         second=self.make_window()
-        self.assertTrue(second.actionbar_visible);self.assertFalse(second.rating_actionbar_visible)
+        self.assertFalse(second.actionbar_visible);self.assertTrue(second.rating_actionbar_visible)
 
     def test_dock_menu_toggles_only_current_mode_and_restores_after_switch(self):
-        window=self.make_window();window.show_menu();self.action(window,'显示底部操作栏').setChecked(False);window.more_panel.hide()
-        self.assertTrue(window.action_row.isHidden());self.assertFalse(window.rating_page.action_row.isHidden())
-        window.toggle_rating();window.show_menu();self.assertTrue(self.action(window,'显示底部操作栏').isChecked())
-        self.action(window,'显示底部操作栏').setChecked(False);window.more_panel.hide()
-        window.toggle_rating();window.show_menu();self.assertFalse(self.action(window,'显示底部操作栏').isChecked())
-        self.action(window,'显示底部操作栏').setChecked(True)
+        window=self.make_window();window.show_menu();self.assertFalse(self.action(window,'显示底部操作栏').isChecked())
+        self.action(window,'显示底部操作栏').setChecked(True);window.more_panel.hide()
         self.assertFalse(window.action_row.isHidden());self.assertTrue(window.rating_page.action_row.isHidden())
+        window.toggle_rating();window.show_menu();self.assertFalse(self.action(window,'显示底部操作栏').isChecked())
+        self.action(window,'显示底部操作栏').setChecked(True);window.more_panel.hide()
+        window.toggle_rating();window.show_menu();self.assertTrue(self.action(window,'显示底部操作栏').isChecked())
+        self.action(window,'显示底部操作栏').setChecked(False)
+        self.assertTrue(window.action_row.isHidden());self.assertFalse(window.rating_page.action_row.isHidden())
         window.more_panel.hide();window.toggle_rating()
-        self.assertTrue(window.rating_page.action_row.isHidden())
+        self.assertFalse(window.rating_page.action_row.isHidden())
 
     def test_menus_have_separate_titles_and_actions_while_global_maintenance_is_explicit(self):
         window=self.make_window();window.show_menu()

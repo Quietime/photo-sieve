@@ -302,7 +302,18 @@ class Elided(QLabel):
     """Single-line label that keeps its full text and re-elides whenever it is resized."""
     def __init__(self, name='', mode=Qt.TextElideMode.ElideMiddle):
         super().__init__(); self.full = ''; self.mode = mode; self.setObjectName(name)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+
+    # It asks for its full text and may shrink to nothing. (An Ignored policy would also drop explicit
+    # minimum and fixed widths, letting neighbours in a row draw over it.)
+    def sizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance(self.full) + 4, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+    def text(self):
+        return self.full      # the full text; the elided form is only what is painted
 
     def set_text(self, text):
         if text != self.full: self.full = text; self.refresh()

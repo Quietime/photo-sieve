@@ -23,7 +23,7 @@ from PIL import Image
 sys.setswitchinterval(.001)
 
 from PySide6.QtCore import Qt, Signal, Slot, QEvent, QObject, QRunnable, QThread, QThreadPool, QTimer, QSize, QUrl, QLockFile, QSettings, QPoint, QRect, QDate
-from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction
+from PySide6.QtGui import QImage, QPainter, QPixmap, QIcon, QShortcut, QKeySequence, QDesktopServices, QColor, QAction, QFont
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QAbstractItemView, QStackedWidget, QDialog, QScrollArea,
     QFrame, QMenu, QSizePolicy, QSpinBox, QFormLayout, QCheckBox, QSizeGrip, QComboBox, QDateEdit)
@@ -220,10 +220,11 @@ class Window(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint); self.setWindowIcon(app_icon())
         settings=QSettings('PhotoSieve','PhotoSieve')
         self.rating_active=False
-        for name,default in [('show_actionbar',True),('show_fps',False),('reduced_motion',False),('reduced_transparency',False)]:
+        for name,default in [('show_actionbar',False),('show_fps',False),('reduced_motion',False),('reduced_transparency',False)]:
             if not settings.contains('review/'+name):settings.setValue('review/'+name,settings.value(name,default,type=bool))
-        self.actionbar_visible=settings.value('review/show_actionbar',True,type=bool)
-        self.rating_actionbar_visible=settings.value('rating/show_actionbar',True,type=bool)
+        # The work is done from the keyboard (or the phone); the button dock is opt-in since 5.0.
+        self.actionbar_visible=settings.value('review/show_actionbar',False,type=bool)
+        self.rating_actionbar_visible=settings.value('rating/show_actionbar',False,type=bool)
         self.preload_count=max(0,min(5000,settings.value('preload_count',0,type=int)))
         self.warm_count=50000  # compatibility only; disk caching now covers every non-deleted photo
         # --cache-mb lowers the shared disk budget (developer/testing use); 10 GB is both default and ceiling.
@@ -327,6 +328,8 @@ class Window(QMainWindow):
             button.setText(text); button.symbol=action; button.variant='dock'
             button.set_shortcut(keys.first(chosen, action), ' / '.join(keys.label(key) for key in chosen[action] if key))
         self.sync_shortcut_mode()
+        self.key_hint.setText('　'.join(f'{keys.first(chosen, action)} {text}' for action, text in
+                                        (('keep', '保留'), ('delete', '删除'), ('next', '下一张'), ('restore', '恢复'), ('zoom', '放大')) if keys.first(chosen, action)))
         hint = ('或按 ' + keys.first(chosen, 'restore') + ' ') if keys.first(chosen, 'restore') else ''
         self.deleted_note.setText('已删除相册 · 单击照片查看大图')
 
@@ -387,58 +390,72 @@ class Window(QMainWindow):
     # ---- layout ---------------------------------------------------------
     def build(self):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
-        self.window_chrome=TitleBar(self,'照片快筛',main=True); outer.addWidget(self.window_chrome)
-        bar = QWidget(); bar.setObjectName('workspaceToolbar'); bar.setFixedHeight(64); top = QHBoxLayout(bar); top.setContentsMargins(24, 16, 24, 16); top.setSpacing(16)
-        left = QWidget(); titles = QVBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(1)
-        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        # One 40 px bar holds the window controls and the whole toolbar; the photos get the rest.
+        self.window_chrome=TitleBar(self,'照片快筛',main=True); self.window_chrome.setFixedHeight(40); outer.addWidget(self.window_chrome)
+        chrome=self.window_chrome.layout(); chrome.setContentsMargins(10,0,4,0); chrome.setSpacing(8)
+        self.window_chrome.label.hide()
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
-        titles.addWidget(self.title); titles.addWidget(self.subtitle); top.addWidget(left, 1)
+        serif=QFont(self.title.font()); serif.setFamilies([theme.title_fonts()[0],'Noto Serif SC','Songti SC','SimSun']); self.title.setFont(serif)
+        self.title.setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred); self.title.setMinimumWidth(60); self.title.setMaximumWidth(360)
+        self.subtitle.setMinimumWidth(40); self.subtitle.setMaximumWidth(260)
+        bar = QWidget(); bar.setObjectName('workspaceToolbar'); top = QHBoxLayout(bar); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(8)
+        left = QWidget(); titles = QHBoxLayout(left); titles.setContentsMargins(0, 0, 0, 0); titles.setSpacing(8)
+        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        titles.addWidget(self.title); titles.addWidget(self.subtitle, 1); top.addWidget(left, 1)
         self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
         right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
-        tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(8); tools.addStretch()
+        tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(6); tools.addStretch()
         self.rating_button=self.button('照片分级',self.toggle_rating);tools.addWidget(self.rating_button)
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
         self.resume_button=self.button('继续上次进度',self.resume_last);tools.addWidget(self.resume_button)
         last=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root') or ''
         self.resume_button.setEnabled(bool(last));self.resume_button.setToolTip(str(last))
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
-        for control in (self.open_button,self.resume_button,self.more_button): control.setFixedHeight(32)
+        for control in (self.rating_button,self.open_button,self.resume_button,self.more_button): control.compact=True; control.setFixedHeight(28)
+        self.more_button.setFixedWidth(30)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
-        top.addWidget(right, 1); outer.addWidget(bar)
+        top.addWidget(right, 1)
+        divider=QFrame(); divider.setObjectName('divider'); divider.setFixedSize(1,18); tools.addWidget(divider)
+        chrome.insertWidget(chrome.indexOf(self.window_chrome.label)+1, bar, 1)
         self.progress = ProgressLine(); outer.addWidget(self.progress)
         self.stack = PageStack(); outer.addWidget(self.stack, 1)
 
-        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(24, 8, 24, 0); column.setSpacing(0)
+        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(6, 4, 6, 0); column.setSpacing(0)
         self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
-        pair = QHBoxLayout(); pair.setSpacing(16); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
+        pair = QHBoxLayout(); pair.setSpacing(6); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
         for index in range(2):
             pane = QVBoxLayout(); pane.setSpacing(4); pane.setContentsMargins(0, 0, 0, 0)
+            # Which photo the keys act on is told by position and the filmstrip marker, not by a caption row.
             role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
-            role.setToolTip('保留 / 删除只操作左图，右图仅用于比较')
-            role.setObjectName('caption'); role.setAlignment(Qt.AlignmentFlag.AlignCenter); role.setFixedHeight(22);self.photo_roles.append(role)
-            if index==0:pane.addWidget(role)
+            role.setObjectName('caption'); role.hide(); self.photo_roles.append(role)
+            photo = PhotoView(fit_height_factor=1.0)
+            photo.setToolTip('保留 / 删除只操作左边的大图' if index==0 else '下一张，仅供对比')
+            photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
+            photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 3)
             if index==1:
-                self.review_info=QWidget();self.review_info.setFixedHeight(190)
-                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(4,4,4,4);info_row.setSpacing(16)
+                # Under the comparison photo: the current photo's face crop.
+                self.review_info=QWidget()
+                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(0,0,0,0);info_row.setSpacing(0)
                 self.face_container=QWidget();self.face_container.setFixedSize(160,182)
                 self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
-                info_row.addWidget(self.face_container)
-                self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setStyleSheet('font-size:14px;');self.current_metadata.setWordWrap(True);self.current_metadata.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                info_row.addWidget(self.current_metadata,1);pane.addWidget(self.review_info)
-                pane.addWidget(role)
-            photo = PhotoView(fit_height_factor=1.0 if index == 0 else 0.6)
-            photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
-            photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 1)
-            name = Elided('name'); name.setFixedHeight(24); name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-            detail = self.current_metadata if index==1 else Elided('caption');detail.setObjectName('caption')
-            if index==0:
-                detail.setFixedHeight(40);detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop);pane.addWidget(name);pane.addWidget(detail)
-            else:name.hide()
+                info_row.addStretch();info_row.addWidget(self.face_container);info_row.addStretch();pane.addWidget(self.review_info,2)
+            name = Elided('name'); name.setFixedHeight(22)
+            detail = Elided('caption')
+            if index==1:
+                self.current_metadata=Elided('caption',Qt.TextElideMode.ElideRight);detail=self.current_metadata;name.hide()
             pair.addLayout(pane, 2 if index == 0 else 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
-        self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 10, 0, 8); actions.addStretch()
+        # One 24 px information line: current photo, where it lives, camera settings, and the keys.
+        self.info_line=QWidget(); self.info_line.setFixedHeight(24); info=QHBoxLayout(self.info_line); info.setContentsMargins(6,0,6,0); info.setSpacing(14)
+        self.names[0].setFixedHeight(24); self.details[0].setFixedHeight(24); self.current_metadata.setFixedHeight(24)
+        self.names[0].setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred); self.names[0].setMinimumWidth(180); self.names[0].setMaximumWidth(320)
+        self.details[0].setMaximumWidth(260)
+        info.addWidget(self.names[0]); info.addWidget(self.details[0]); info.addWidget(self.current_metadata,1)
+        self.key_hint=QLabel(); self.key_hint.setObjectName('hint'); info.addWidget(self.key_hint)
+        column.addWidget(self.info_line)
+        self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 2, 0, 4); actions.addStretch()
         self.actionbar = GlassDock(); self.actionbar.setObjectName('actionbar'); row = QHBoxLayout(self.actionbar); row.setContentsMargins(4, 1, 4, 1); row.setSpacing(3)
         self.keep_button = self.button('↑  保留', lambda: self.act('keep'), 'keep'); self.delete_button = self.button('↓  删除', lambda: self.act('delete'), 'delete')
         self.restore_button = self.button('←  恢复', lambda: self.restore(), 'plain'); self.next_button = self.button('→  下一张', self.next_photo, 'plain')
@@ -450,14 +467,15 @@ class Window(QMainWindow):
         actions.addWidget(self.actionbar); actions.addStretch(); column.addWidget(self.action_row); self.action_row.setVisible(self.actionbar_visible)
         self.strip = MixedFilmstrip(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setFlow(QListWidget.Flow.LeftToRight)
         self.strip.setWrapping(False); self.strip.setMovement(QListWidget.Movement.Static); self.strip.setUniformItemSizes(True)
-        self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(100)
+        self.strip.setIconSize(QSize(104, 68)); self.strip.setGridSize(QSize(116, 80)); self.strip.setFixedHeight(92)
         self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn); self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.strip.enable_mixed_layout()
         self.strip.setFocusPolicy(Qt.FocusPolicy.NoFocus); self.strip.itemClicked.connect(self.strip_select); column.addWidget(self.strip)
         self.strip.icon_for=lambda pid:QIcon(self.thumbnail(pid)) if self.thumbnail(pid) is not None else self.placeholder
         self.strip.horizontalScrollBar().valueChanged.connect(self.load_strip_thumbnails)
-        self.strip_note=QLabel('全部未筛选照片 · 拖动下方滚动条浏览');self.strip_note.setObjectName('caption');column.addWidget(self.strip_note)
-        column.addSpacing(8); self.stack.addWidget(review)
+        # The strip explains itself on hover instead of with a caption row.
+        self.strip_note=QLabel('全部未筛选照片 · 拖动下方滚动条浏览');self.strip_note.setObjectName('caption');self.strip_note.hide()
+        column.addSpacing(4); self.stack.addWidget(review)
         placeholder = QPixmap(104, 68); placeholder.fill(QColor(theme.ELEVATED)); self.placeholder = QIcon(placeholder)
         # The grid sizes every cell from its first item, so its placeholder must be full size.
         tile = QPixmap(176, 118); tile.fill(QColor(theme.ELEVATED)); self.tile = QIcon(tile)
@@ -792,11 +810,11 @@ class Window(QMainWindow):
         if job.get('running'):
             text = f"{job['kind']} · {job['done']:,}" + (f" / {job['total']:,}" if job.get('total') else '')
         elif root:
-            text = f"{counts.get('all', 0):,} 张照片 · {root}"
+            text = f"{counts.get('all', 0):,} 张"
         else:
             text = '原生桌面版 ' + APP_VERSION
         if self.date_start is not None and self.session_active:text+=' · 日期筛选已开启'
-        self.subtitle.set_text(text)
+        self.subtitle.set_text(text); self.subtitle.setToolTip(root); self.title.setToolTip(root)
 
     def refresh_chrome(self):
         """Counts and the delete toast follow every press, but while a key is held they repaint at most every 80 ms."""
@@ -1046,6 +1064,7 @@ class Window(QMainWindow):
         if self.queue:self.strip.adapt_to_preview(self.thumbnail(self.queue[0]['id']))
         for row in self.strip.visible_rows():self.update_thumbnail(self.strip.item(row).data(ROLE))
         self.strip_note.setText(f'未筛选 {self.strip.count():,} 张 · 拖动滚动条浏览全部照片 · '+{'file':'文件顺序','oldest':'文件日期：从旧到新','newest':'文件日期：从新到旧'}[self.sort_order])
+        self.strip.setToolTip(self.strip_note.text())
         self.load_strip_thumbnails()
 
     def load_strip_thumbnails(self,*_):

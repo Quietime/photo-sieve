@@ -16,6 +16,8 @@ SEPARATOR = '#4D5156'
 LABEL = '#F4F0E6'
 SECONDARY = '#C1BFB8'
 TERTIARY = '#918F88'
+ICE = '#A9C4E8'        # grading accent (stars, current thumbnail)
+LAVA = '#A8423C'       # screening accent
 BLUE = '#335E83'
 BLUE_HOVER = '#4C789B'
 BLUE_PRESSED = '#2A4E6D'
@@ -61,11 +63,14 @@ def configure_accessibility(settings):
 STYLE = f'''
 QWidget {{ background:{BG}; color:{LABEL}; font-family:{FONT}; font-size:14px; }}
 QWidget#windowChrome {{ background:#292a2e; }}
-QWidget#workspaceToolbar {{ background:#2c2d31; border-bottom:1px solid #3A3A3A; }}
+QWidget#workspaceToolbar {{ background:transparent; }}
+QWidget#windowChrome {{ border-bottom:1px solid #3B3E43; }}
 QWidget#windowChrome QWidget, QWidget#workspaceToolbar QWidget {{ background:transparent; }}
 QLabel {{ background:transparent; }}
-QLabel#title {{ font-size:17px; font-weight:600; }}
+QLabel#title {{ font-size:15px; font-weight:600; }}
+QLabel#hint {{ color:{TERTIARY}; font-size:11px; }}
 QLabel#subtitle, QLabel#caption {{ color:{SECONDARY}; font-size:12px; }}
+QLabel#subtitle {{ font-size:11px; }}
 QLabel#name {{ font-size:13px; font-weight:500; }}
 QLabel#hero {{ font-size:34px; font-weight:600; }}
 QLabel#lead {{ color:{SECONDARY}; font-size:17px; }}

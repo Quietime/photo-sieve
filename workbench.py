@@ -2,7 +2,7 @@
 import json,secrets,time
 from PySide6.QtCore import Qt,QTimer,QAbstractTableModel,QAbstractListModel,QModelIndex,QSize
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTabWidget,QWidget,QCheckBox,QSpinBox,QLineEdit,QTableView,QAbstractItemView,QMenu,QMessageBox,QScrollArea,QHeaderView,QComboBox
+from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTabWidget,QWidget,QCheckBox,QSpinBox,QLineEdit,QTableView,QAbstractItemView,QMenu,QMessageBox,QScrollArea,QHeaderView,QComboBox,QSizePolicy
 from rating_combo import RoundedCombo
 from widgets import CapsuleProgress
 from workflow_data import WorkRecords,LABELS,COLORS
@@ -60,7 +60,8 @@ class Workbench:
         # The hint belongs to the selected photo, beside the existing face/metadata block.
         page.aux.parentWidget().layout().addWidget(self.quality);self.quality.setAlignment(Qt.AlignmentFlag.AlignCenter);self.quality.setMaximumHeight(40)
         self.progress=QLabel();self.progress.setObjectName('caption');self.progress.setToolTip('清晰预览、人脸和本地分析均在后台执行；缓存达到上限时会显示实际状态')
-        layout.insertWidget(layout.count()-1,self.progress)
+        self.progress.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)   # one line of the info row; full text in the tooltip
+        layout.insertWidget(layout.count()-1,self.progress,1)
         self.timer=QTimer(page);self.timer.setInterval(1000);self.timer.timeout.connect(self.tick);self.timer.start()
     def attach(self,library):
         if self.records and self.records.library is library:return

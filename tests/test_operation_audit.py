@@ -137,6 +137,8 @@ class OperationAuditTest(unittest.TestCase):
         texts=[control.text() for control in panel.action_controls.values()]
         self.assertEqual(len(texts),len(set(texts)))
         action=next(a for a in panel.action_controls if a.text()=='显示底部操作栏')
+        self.assertFalse(action.isChecked());self.assertTrue(self.window.action_row.isHidden())   # opt-in since 5.0
+        action.setChecked(True);self.assertFalse(self.window.action_row.isHidden())
         action.setChecked(False)
         self.assertTrue(self.window.action_row.isHidden())
         self.assertFalse(self.settings.value('show_actionbar',True,type=bool))
