@@ -21,9 +21,16 @@ class WelcomePage(QWidget):
         super().__init__(); self.background=QPixmap(str(Path(__file__).parent/'assets'/'welcome-background.png'))
         # Separate drawing anchors keep circle, title and the two fine-print lines on one exact axis.
         self.parts=[QRectF(667,235,338,339),QRectF(641,781,391,30),QRectF(693,817,283,8),QRectF(636,829,400,8)]
+        import splash
+        self.art=splash.load_art()   # the optional decoration pack turns this page into the opening scene's last frame
     def paintEvent(self,event):
         painter=QPainter(self); painter.fillRect(self.rect(),QColor('#000000'))
-        if not self.background.isNull():
+        if self.art:
+            import splash
+            # Leave the bottom band for the buttons and the hint the page lays out below.
+            splash.paint_scene(painter,QRectF(0,0,self.width(),max(200,self.height()-120)),10.,self.art)
+            painter.fillRect(QRectF(0,max(200,self.height()-120),self.width(),self.height()),QColor('#1E2026'))
+        elif not self.background.isNull():
             scale=min(self.width()/self.background.width(),max(1,self.height()-100)/self.background.height())
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             for part in self.parts:

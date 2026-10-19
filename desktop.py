@@ -586,9 +586,18 @@ class Window(QMainWindow):
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
+        menu.addAction('导入装饰包…').triggered.connect(self.import_theme)
         opening=QAction('启动动画',menu);opening.setCheckable(True);opening.setChecked(QSettings('PhotoSieve','PhotoSieve').value('opening_animation',True,type=bool))
         opening.toggled.connect(lambda enabled:QSettings('PhotoSieve','PhotoSieve').setValue('opening_animation',enabled));menu.addAction(opening)
         menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
+
+    def import_theme(self):
+        import theme_pack
+        path,_=QFileDialog.getOpenFileName(self,'选择装饰包','','装饰包 (*.zip)')
+        if not path:return
+        try:count=theme_pack.install(path)
+        except Exception as error:self.error(f'装饰包无法导入：{error}');return
+        self.toast.show_message(f'装饰包已导入（{count} 个文件），重新启动后生效','info')
 
     def remote_dialog(self):
         import remote_control

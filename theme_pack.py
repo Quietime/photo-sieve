@@ -33,3 +33,41 @@ def find(relative):
 
 def available():
     return any((folder / 'manifest.json').is_file() for folder in folders())
+
+
+def install(archive):
+    """Unpack a decoration pack (.zip with manifest.json and PNG files) into the user's folder.
+    Only plain relative PNG/JSON members are taken; the previous pack is replaced. Returns the file count."""
+    import shutil, tempfile, zipfile
+    from pathlib import PurePosixPath
+    with zipfile.ZipFile(archive) as pack:
+        members = []
+        for info in pack.infolist():
+            if info.is_dir():
+                continue
+            name = PurePosixPath(info.filename)
+            parts = name.parts[1:] if name.parts and name.parts[0] == 'theme' else name.parts
+            if not parts or name.is_absolute() or '..' in parts or name.suffix.lower() not in ('.png', '.json') or info.file_size > 20 * 1024 ** 2:
+                continue
+            members.append((info, PurePosixPath(*parts)))
+        if not any(str(target) == 'manifest.json' for _, target in members):
+            raise ValueError('这不是照片快筛的装饰包（缺少 manifest.json）')
+        target_root = user_folder(); target_root.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix='theme-', dir=target_root.parent))
+        try:
+            for info, target in members:
+                path = staging / target; path.parent.mkdir(parents=True, exist_ok=True)
+                with pack.open(info) as source, open(path, 'wb') as out:
+                    shutil.copyfileobj(source, out)
+            if target_root.exists():
+                shutil.rmtree(target_root)
+            staging.rename(target_root)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True); raise
+    return len(members)
+
+
+def remove():
+    import shutil
+    if user_folder().exists():
+        shutil.rmtree(user_folder())
