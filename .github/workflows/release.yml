@@ -42,7 +42,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PHOTOSIEVE_FACE_SAMPLE: feature-fixtures/astronaut.png
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+        run: python tools/run_tests_ci.py
       - name: Verify workbench window interactions and 500 rating inputs
         if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui'
         timeout-minutes: 5
@@ -265,7 +265,7 @@ jobs:
         run: python tools/check_cache_settings.py cache-hidpi-ci
       - name: Test library and updater
         if: env.CHECK_SCOPE == 'full'
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+        run: python tools/run_tests_ci.py
       - name: Test native interface, held keys and decoder processes
         if: env.CHECK_SCOPE == 'full'
         env:
