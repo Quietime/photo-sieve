@@ -140,7 +140,7 @@ def run(screenshot=None):
         w.switch('keep');until(lambda:w.kept_grid.count()>0);assert w.stack.currentIndex()==4
         # A kept photo opens in the read-only album: no screening actions, and the filmstrip stays empty.
         w.open_kept_item(w.kept_grid.item(0));until(lambda:w.stack.currentWidget() is w.album and w.album.photo)
-        assert w.strip.count()==0 and not w.delete_button.isEnabled()
+        assert w.strip.count()==0 and not w.delete_button.isEnabled(),(w.strip.count(),w.delete_button.isEnabled())
         w.switch('pending');ready(w)
         # A failed file move puts the photo back in front and reports why.
         # Mid-burst the delete toast waits 80 ms; the error that arrives first must not be covered by it.

@@ -1133,7 +1133,7 @@ class Window(QMainWindow):
         if self.rating_active:self.rating_page.update_controls()
         if self.rating_active and self.rating_page.writing:
             self.open_button.setEnabled(False);return
-        running = self.job_running(); reviewing = self.view != 'deleted' and not (self.view=='keep' and self.stack.currentIndex()==4)
+        running = self.job_running(); reviewing = self.view == 'pending' and self.stack.currentIndex() == 0   # keys act only on the 未筛选 page (never on an album opened from 保留)
         allowed = bool(self.queue) and self.ready() and not self.busy and not running and reviewing
         for button, enabled in [(self.keep_button, allowed and self.queue[0]['status']!=1), (self.delete_button, allowed),
                                 (self.next_button, bool(self.queue) and not self.busy and reviewing),
