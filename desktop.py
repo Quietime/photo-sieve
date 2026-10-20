@@ -392,7 +392,7 @@ class Window(QMainWindow):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
         # One 40 px bar holds the window controls and the whole toolbar; the photos get the rest.
         self.window_chrome=TitleBar(self,'照片快筛',main=True); self.window_chrome.setFixedHeight(40); outer.addWidget(self.window_chrome)
-        chrome=self.window_chrome.layout(); chrome.setContentsMargins(10,0,4,0); chrome.setSpacing(8)
+        chrome=self.window_chrome.layout(); chrome.setContentsMargins(18,0,12,0); chrome.setSpacing(8)
         self.window_chrome.label.hide()
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
         serif=QFont(self.title.font()); serif.setFamilies([theme.title_fonts()[0],'Noto Serif SC','Songti SC','SimSun']); self.title.setFont(serif)
@@ -421,7 +421,7 @@ class Window(QMainWindow):
         self.progress = ProgressLine(); outer.addWidget(self.progress)
         self.stack = PageStack(); outer.addWidget(self.stack, 1)
 
-        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(6, 4, 6, 0); column.setSpacing(0)
+        review = QWidget(); column = QVBoxLayout(review); column.setContentsMargins(18, 10, 18, 10); column.setSpacing(0)
         self.keep_back_button=self.button('← 返回保留列表',self.back_to_kept);self.keep_back_button.hide();column.addWidget(self.keep_back_button,0,Qt.AlignmentFlag.AlignLeft)
         pair = QHBoxLayout(); pair.setSpacing(6); self.photos = []; self.names = []; self.details = [];self.photo_roles=[]
         for index in range(2):
@@ -436,23 +436,23 @@ class Window(QMainWindow):
             if index==1:
                 # Under the comparison photo: the current photo's face crop.
                 self.review_info=QWidget()
-                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(0,0,0,0);info_row.setSpacing(0)
+                info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(0,0,0,0);info_row.setSpacing(24)
                 self.face_container=QWidget();self.face_container.setFixedSize(160,182)
                 self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
-                info_row.addStretch();info_row.addWidget(self.face_container);info_row.addStretch();pane.addWidget(self.review_info,2)
+                info_row.addStretch(1);info_row.addWidget(self.face_container,0,Qt.AlignmentFlag.AlignVCenter);self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setMaximumWidth(360);info_row.addWidget(self.current_metadata,2);info_row.addStretch(1);pane.addWidget(self.review_info,2)
             name = Elided('name'); name.setFixedHeight(22)
             detail = Elided('caption')
             if index==1:
-                self.current_metadata=Elided('caption',Qt.TextElideMode.ElideRight);detail=self.current_metadata;name.hide()
+                detail=self.current_metadata;name.hide()
             pair.addLayout(pane, 2 if index == 0 else 1)
             self.photos.append(photo); self.names.append(name); self.details.append(detail)
         column.addLayout(pair, 1)
         # One 24 px information line: current photo, where it lives, camera settings, and the keys.
         self.info_line=QWidget(); self.info_line.setFixedHeight(24); info=QHBoxLayout(self.info_line); info.setContentsMargins(6,0,6,0); info.setSpacing(14)
-        self.names[0].setFixedHeight(24); self.details[0].setFixedHeight(24); self.current_metadata.setFixedHeight(24)
+        self.names[0].setFixedHeight(24); self.details[0].setFixedHeight(24); self.review_info.setMinimumHeight(184)
         self.names[0].setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred); self.names[0].setMinimumWidth(180); self.names[0].setMaximumWidth(320)
         self.details[0].setMaximumWidth(260)
-        info.addWidget(self.names[0]); info.addWidget(self.details[0]); info.addWidget(self.current_metadata,1)
+        info.addWidget(self.names[0]); info.addWidget(self.details[0]); info.addStretch(1)
         self.key_hint=QLabel(); self.key_hint.setObjectName('hint'); info.addWidget(self.key_hint)
         column.addWidget(self.info_line)
         self.action_row=QWidget(); actions = QHBoxLayout(self.action_row); actions.setContentsMargins(0, 2, 0, 4); actions.addStretch()
@@ -586,7 +586,8 @@ class Window(QMainWindow):
         automatic.toggled.connect(self.updates.set_automatic);menu.addAction(automatic)
         if self.updates.staged:menu.addAction('立即安装更新并重启').triggered.connect(lambda:self.updates.install())
         menu.addStatus(self.updates.status or '版本 '+APP_VERSION)
-        menu.addAction('导入装饰包…').triggered.connect(self.import_theme)
+        cloud=menu.addAction('从云端更新装饰包');cloud.setEnabled(not getattr(self,'theme_downloading',False));cloud.triggered.connect(self.update_theme)
+        menu.addAction('导入本地装饰包…').triggered.connect(self.import_theme)
         opening=QAction('启动动画',menu);opening.setCheckable(True);opening.setChecked(QSettings('PhotoSieve','PhotoSieve').value('opening_animation',True,type=bool))
         opening.toggled.connect(lambda enabled:QSettings('PhotoSieve','PhotoSieve').setValue('opening_animation',enabled));menu.addAction(opening)
         menu.addAction('打开日志文件夹').triggered.connect(self.open_logs)
@@ -597,7 +598,21 @@ class Window(QMainWindow):
         if not path:return
         try:count=theme_pack.install(path)
         except Exception as error:self.error(f'装饰包无法导入：{error}');return
-        self.toast.show_message(f'装饰包已导入（{count} 个文件），重新启动后生效','info')
+        self.apply_theme_pack()
+        self.toast.show_message(f'装饰包已导入（{count} 个文件）','info')
+
+    def apply_theme_pack(self):
+        import splash, widgets
+        widgets._EMPTY_ART.clear()
+        for welcome in self.findChildren(WelcomePage):welcome.art=splash.load_art();welcome.update()
+    def update_theme(self):
+        if getattr(self,'theme_downloading',False):return
+        import theme_pack
+        self.theme_downloading=True;self.toast.show_message('正在从云端获取装饰包…','info',3000)
+        def done(count):
+            self.theme_downloading=False;self.apply_theme_pack();self.toast.show_message(f'装饰包已自动导入（{count} 个文件）','info',3000)
+        def failed(message):self.theme_downloading=False;self.error(message)
+        self.submit(theme_pack.download_default,done,failed)
 
     def remote_dialog(self):
         import remote_control

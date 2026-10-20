@@ -27,6 +27,7 @@ def public(name):
     path=PurePosixPath(name)
     if path.parts[-2:] in {('assets','photosieve.ico'),('assets','photosieve.png'),('assets','welcome-background.png'),('assets','face_detection_yunet_2023mar.onnx'),('assets','haarcascade_eye_tree_eyeglasses.xml')}: return True
     if path.parts[-3:-1]==('assets','remote') and path.name in REMOTE_PAGE: return True
+    if (path.parts[-4:-2]==('assets','theme') and path.suffix.lower()=='.png') or path.parts[-3:]==('assets','theme','manifest.json'): return True
     if path.parts[-3:-1]==('assets','fonts') and path.suffix.lower() in {'.ttf','.txt'}: return True   # OFL title-glyph subsets
     return path.suffix.lower() not in PRIVATE_TYPES and (path.suffix.lower() in SOURCE_TYPES or path.name in {'LICENSE'})
 
@@ -39,6 +40,8 @@ def sources():
 
 def package(destination):
     destination=Path(destination);destination.parent.mkdir(parents=True,exist_ok=True)
+    from theme_pack import build_archive
+    build_archive(destination.parent)
     binary=ROOT/'dist'/'PhotoSieve'
     if not (binary/'PhotoSieve.exe').is_file():raise SystemExit('请先执行 Windows EXE 构建。')
     entries={p.relative_to(binary).as_posix():p for p in sorted(binary.rglob('*')) if p.is_file() and p.name!='installed-files.json'}

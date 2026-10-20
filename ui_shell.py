@@ -175,6 +175,17 @@ class QFileDialog:
         finally:
             dialog.deleteLater()
 
+    @staticmethod
+    def getOpenFileName(parent,title,start='',filter=''):
+        dialog=RoundedFileDialog(parent,title,start); dialog.setFileMode(QtFileDialog.FileMode.ExistingFile)
+        dialog.setLabelText(QtFileDialog.DialogLabel.FileName,'文件：')
+        if filter:dialog.setNameFilter(filter)
+        dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint); dialog.setWindowIcon(app_icon())
+        try:
+            return (dialog.selectedFiles()[0] if dialog.exec() else ''),filter
+        finally:
+            dialog.deleteLater()
+
 
 class SettingsPanel(QFrame):
     """An anchored child panel: no top-level window and no focus-loss auto-dismiss."""
@@ -263,14 +274,3 @@ class SettingsPanel(QFrame):
     def keyPressEvent(self,event):
         if event.key()==Qt.Key.Key_Escape: self.hide(); event.accept()
         else: super().keyPressEvent(event)
-
-    @staticmethod
-    def getOpenFileName(parent,title,start='',filter=''):
-        dialog=RoundedFileDialog(parent,title,start); dialog.setFileMode(QtFileDialog.FileMode.ExistingFile)
-        dialog.setLabelText(QtFileDialog.DialogLabel.FileName,'文件：')
-        if filter:dialog.setNameFilter(filter)
-        dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint); dialog.setWindowIcon(app_icon())
-        try:
-            return (dialog.selectedFiles()[0] if dialog.exec() else ''),filter
-        finally:
-            dialog.deleteLater()

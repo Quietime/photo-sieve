@@ -2,7 +2,7 @@
 from collections import OrderedDict
 from pathlib import Path
 import time
-from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal
+from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal,QEvent
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence,QColor,QPen,QPainter
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle,QSizePolicy
 from photo_grid import PhotoGrid
@@ -118,7 +118,7 @@ class RatingPage(QWidget):
         self.rating_pending={};self.rating_failures={};self.rating_confirmed={};self.rating_versions={};self.rating_serial=0;self.pending_count=0;self.undoing=False;self.warm_started=False
         self.info={};self.source_widths={};self.image_sizes={};self.thumb_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout=QVBoxLayout(self);layout.setContentsMargins(6,4,6,4);layout.setSpacing(4)
+        layout=QVBoxLayout(self);layout.setContentsMargins(18,10,18,10);layout.setSpacing(4)
         # No page title row: the top bar already says 照片分级. Its two buttons sit at the end of the one filter row.
         row=None
         # One row for every filter and tool, so the row uses the page's width instead of stacking on the left.
@@ -145,13 +145,15 @@ class RatingPage(QWidget):
         self.gallery_size.setToolTip('缩略图大小 · 鼠标在图库内按 Ctrl + 滚轮也可调整');self.gallery_size.valueChanged.connect(self.resize_gallery);self.grid.zoom_requested.connect(self.wheel_gallery_zoom)
         self.grid.setStyleSheet('QListView {background:transparent;border:0;outline:0;} QListView::item {background:'+theme.ELEVATED+';border:2px solid transparent;border-radius:6px;margin:4px;} QListView::item:selected {border:2px solid '+theme.BLUE_HOVER+';background:'+theme.ELEVATED+';}')
         gallery_layout.addWidget(self.grid,1);self.splitter.addWidget(gallery)
-        preview=QWidget();preview.setMinimumWidth(250);column=QHBoxLayout(preview);column.setContentsMargins(6,0,0,0);column.setSpacing(6)
+        preview=QWidget();preview.setMinimumWidth(250);column=QVBoxLayout(preview);column.setContentsMargins(10,0,0,0);column.setSpacing(10)
         self.pane=PhotoView();column.addWidget(self.pane,1)
-        # Beside the photo, not under it: the face crop and the quality hint take width, never height.
-        side=QWidget();side.setFixedWidth(168);side_layout=QVBoxLayout(side);side_layout.setContentsMargins(0,0,0,0);side_layout.setSpacing(4)
-        self.aux=QWidget();self.aux.setFixedHeight(184);aux_layout=QVBoxLayout(self.aux);aux_layout.setContentsMargins(0,0,0,0);aux_layout.setSpacing(0)
-        self.face_panel=FacePanel(self.aux);aux_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignCenter)
-        side_layout.addWidget(self.aux);side_layout.addStretch();column.addWidget(side)
+        self.aux=QWidget(preview);self.aux.setFixedHeight(184)
+        aux_layout=QHBoxLayout(self.aux);aux_layout.setContentsMargins(8,0,8,0);aux_layout.setSpacing(24)
+        aux_layout.addStretch(1)
+        self.face_panel=FacePanel(self.aux);aux_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignVCenter)
+        metadata=QWidget(self.aux);metadata.setMaximumWidth(380);self.quality_layout=QVBoxLayout(metadata);self.quality_layout.setContentsMargins(0,0,0,0);self.quality_layout.setSpacing(6)
+        self.camera_info=QLabel('请选择照片');self.camera_info.setObjectName('caption');self.camera_info.setWordWrap(True);self.camera_info.setAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+        self.quality_layout.addWidget(self.camera_info,1);aux_layout.addWidget(metadata,2);aux_layout.addStretch(1);column.addWidget(self.aux)
         self.panes=[self.pane];self.splitter.addWidget(preview);self.splitter.setStretchFactor(0,1);self.splitter.setStretchFactor(1,1);self.splitter.setSizes([600,400]);layout.addWidget(self.splitter,1)
         self.splitter.handle(1).setToolTip('左右拖动，调整图库和预览的宽度');self.splitter.splitterMoved.connect(self.split_moved)
         self.pane.clicked.connect(lambda photo,point:self.zoom(point,self.pane));self.pane.escape_requested.connect(self.unzoom);self.pane.next_requested.connect(lambda:self.move(1))
@@ -160,7 +162,7 @@ class RatingPage(QWidget):
         self.stars=QLabel('☆☆☆☆☆');self.stars.setFixedWidth(92);self.stars.setStyleSheet('font-size:15px;letter-spacing:1px;color:'+theme.ICE+';');info.addWidget(self.stars)
         self.name=InfoLabel('请选择照片文件夹');self.name.setObjectName('name');self.name.setFixedWidth(210);info.addWidget(self.name)
         self.names=[self.name]
-        self.camera_info=InfoLabel('请选择照片');self.camera_info.setObjectName('caption');info.addWidget(self.camera_info,2)
+        # Camera parameters belong beside the face crop, rather than the bottom status row.
         self.status=InfoLabel('尚未读取 Windows 系统评级');self.status.setObjectName('caption');info.addWidget(self.status,2)
         info.addWidget(self.note,1)
         self.key_hint=QLabel();self.key_hint.setObjectName('hint');info.addWidget(self.key_hint)
@@ -176,7 +178,7 @@ class RatingPage(QWidget):
         self.scope.currentIndexChanged.connect(self.reload);self.filter.currentIndexChanged.connect(self.reload)
         self.grid.itemClicked.connect(lambda item:self.select(item.row));self.grid.verticalScrollBar().valueChanged.connect(self.visible)
         self.grid.icon_for=lambda pid:self.thumbs.get(pid,host.tile)
-        self.resize_timer=QTimer(self);self.resize_timer.setSingleShot(True);self.resize_timer.timeout.connect(self.show_current);self.pane.resized.connect(lambda:self.resize_timer.start(150))
+        self.split_dragging=False;self.resize_timer=QTimer(self);self.resize_timer.setSingleShot(True);self.resize_timer.timeout.connect(self.finish_resize);self.pane.resized.connect(lambda:self.resize_timer.start(90));self.splitter.setOpaqueResize(True);self.splitter.handle(1).installEventFilter(self)
         from workbench import Workbench
         self.tools=Workbench(self,info,self.options)
         self.apply_keys(keys.load(QSettings('PhotoSieve','PhotoSieve'),ACTIONS,'rating_shortcuts/'))
@@ -285,12 +287,22 @@ class RatingPage(QWidget):
         if self.split_restored:return
         self.split_restored=True;total=max(1,self.splitter.width()-self.splitter.handleWidth())
         self.splitter.setSizes([round(total*self.split_ratio),round(total*(1-self.split_ratio))]);self.visible()
+    def eventFilter(self,watched,event):
+        if watched is self.splitter.handle(1):
+            if event.type()==QEvent.Type.MouseButtonPress:self.split_dragging=True;self.resize_timer.stop()
+            elif event.type()==QEvent.Type.MouseButtonRelease:
+                self.split_dragging=False;QTimer.singleShot(0,self.finish_resize)
+        return super().eventFilter(watched,event)
     def split_moved(self,*_):
-        left,right=self.splitter.sizes();total=left+right
+        # Resize existing pixels continuously; defer disk reads and settings writes until the drag ends.
+        if self.pane.pixmap and not self.pane.detail:self.pane.fit();self.pane.viewport().update()
+        self.resize_timer.start(90)
+    def finish_resize(self):
+        if self.split_dragging:return
+        self.resize_timer.stop();left,right=self.splitter.sizes();total=left+right
         if total:
             self.split_ratio=left/total;QSettings('PhotoSieve','PhotoSieve').setValue('rating_split_ratio_v5',self.split_ratio)
-        if self.pane.pixmap and not self.pane.detail:self.pane.fit();self.pane.viewport().update()
-        self.visible();self.resize_timer.start(150)
+        self.visible();self.show_current()
     def wheel_gallery_zoom(self,steps,point):
         self.gallery_zoom_point=point
         self.gallery_size.setValue(self.gallery_size.value()+steps*20)
@@ -331,7 +343,7 @@ class RatingPage(QWidget):
                 if self.names[offset].text()!=text:self.names[offset].setText(text)
                 if changed:self.show_aux()
     def visible(self,*_):
-        if not self.active or not self.records or self.host.closing:return
+        if not self.active or not self.records or self.host.closing or self.split_dragging:return
         for pid in self.grid.visible_ids():self.preview(pid);self.read(pid)
         for pid in self.ids[self.index:self.index+min(64,max(16,self.cache_plan()[1]))]:self.read(pid)
     def preview_size(self):

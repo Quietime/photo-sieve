@@ -54,7 +54,7 @@ def run(output,raw_fixture=None):
                 window.faces.enabled=True;window.faces._synchronize();key=cache_key(window.queue[0]);window.faces._remember(key,result);window.faces._done.add(key)
                 window.face_changed(window.queue[0]['id'],result);application.processEvents()
                 panel=window.face_panel;check('face_sits_under_comparison_photo',panel.parentWidget() is window.face_container and window.review_info.mapTo(window,QPoint()).y()>=window.photos[1].mapTo(window,QPoint()).y()+window.photos[1].height())
-                check('metadata_is_on_the_info_line',window.details[1].parentWidget() is window.info_line and window.info_line.height()<=24)
+                check('metadata_is_to_the_right_of_the_face',window.details[1].parentWidget() is window.review_info and window.details[1].mapTo(window,QPoint()).x()>window.face_container.mapTo(window,QPoint()).x()+window.face_container.width())
                 check('no_caption_rows',all(role.isHidden() for role in window.photo_roles))
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
                 before=panel.grab().toImage();pid=window.queue[0]['id']

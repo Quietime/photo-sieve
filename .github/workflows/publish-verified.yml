@@ -65,5 +65,5 @@ jobs:
           else
             gh release create "$tag" --draft --target "$TESTED_COMMIT" --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
           fi
-          gh release upload "$tag" verified-build/release/PhotoSieve-Windows-x64.zip verified-build/release/PhotoSieve-Setup-Windows-x64.exe verified-build/release/update.json verified-build/release/SHA256SUMS.txt --clobber
+          gh release upload "$tag" verified-build/release/PhotoSieve-Windows-x64.zip verified-build/release/PhotoSieve-Setup-Windows-x64.exe verified-build/release/update.json verified-build/release/SHA256SUMS.txt verified-build/release/PhotoSieve-Theme-Mars.zip verified-build/release/theme.json --clobber
           gh release edit "$tag" --draft=false --latest --target "$TESTED_COMMIT"

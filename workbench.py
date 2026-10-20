@@ -58,7 +58,7 @@ class Workbench:
         self.label_filter.currentIndexChanged.connect(page.reload);self.mode.currentIndexChanged.connect(self.mode_changed);self.group.currentIndexChanged.connect(page.reload)
         self.quality=QLabel();self.quality.setObjectName('caption');self.quality.setWordWrap(True)
         # The hint belongs to the selected photo, beside the existing face/metadata block.
-        page.aux.parentWidget().layout().addWidget(self.quality);self.quality.setAlignment(Qt.AlignmentFlag.AlignCenter);self.quality.setMaximumHeight(40)
+        page.quality_layout.addWidget(self.quality);self.quality.setAlignment(Qt.AlignmentFlag.AlignCenter);self.quality.setMaximumHeight(40)
         self.progress=QLabel();self.progress.setObjectName('caption');self.progress.setToolTip('清晰预览、人脸和本地分析均在后台执行；缓存达到上限时会显示实际状态')
         self.progress.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)   # one line of the info row; full text in the tooltip
         layout.insertWidget(layout.count()-1,self.progress,1)

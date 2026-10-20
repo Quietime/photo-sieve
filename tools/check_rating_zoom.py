@@ -98,7 +98,11 @@ def run(output):
                 checks.append('gallery_size_limits_are_enforced')
                 before=p.pane.content_rect().width();original=p.pane.pixmap
                 handle=p.splitter.handle(1);point=handle.rect().center()
-                QTest.mousePress(handle,Qt.MouseButton.LeftButton,pos=point);QTest.mouseMove(handle,point-QPoint(100,0),40);QTest.mouseRelease(handle,Qt.MouseButton.LeftButton,pos=point-QPoint(100,0))
+                QTest.mousePress(handle,Qt.MouseButton.LeftButton,pos=point);assert p.split_dragging
+                with patch.object(p,'preview',wraps=p.preview) as reads:
+                    QTest.mouseMove(handle,point-QPoint(100,0),40);app.processEvents()
+                    assert not reads.called,'Dragging must resize existing pixels without queuing reads'
+                QTest.mouseRelease(handle,Qt.MouseButton.LeftButton,pos=point-QPoint(100,0));assert not p.split_dragging
                 app.processEvents()
                 assert p.pane.content_rect().width()>before+40
                 assert abs(p.pane.content_rect().width()-p.pane.viewport().width())<8

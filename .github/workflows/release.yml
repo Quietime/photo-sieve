@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [workbench_ui, workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
+        options: [layout, workbench_ui, workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:workbench-ui]') && 'workbench_ui') || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:layout]') && 'layout') || (contains(github.event.head_commit.message, '[checks:workbench-ui]') && 'workbench_ui') || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,8 +35,13 @@ jobs:
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos
-        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui' || env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
+        if: env.CHECK_SCOPE == 'workbench' || env.CHECK_SCOPE == 'workbench_ui' || env.CHECK_SCOPE == 'features' || env.CHECK_SCOPE == 'responsiveness' || env.CHECK_SCOPE == 'cache_ui' || (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout') || env.CHECK_SCOPE == 'cache_all' || env.CHECK_SCOPE == 'cache_all_final'
         run: python tools/prepare_feature_fixtures.py
+      - name: Verify embedded and cloud theme imports
+        if: env.CHECK_SCOPE == 'layout'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest tests.test_theme_pack -v
       - name: Verify workbench unit and existing library regressions
         if: env.CHECK_SCOPE == 'workbench'
         env:
@@ -138,12 +143,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_rating_zoom.py rating-zoom-hidpi-ci
       - name: Verify only grading thumbnail zoom and splitter preview fitting
-        if: env.CHECK_SCOPE == 'rating_zoom'
+        if: (env.CHECK_SCOPE == 'rating_zoom' || env.CHECK_SCOPE == 'layout')
         env:
           QT_QPA_PLATFORM: windows
         run: python tools/check_rating_zoom.py rating-zoom-ci
       - name: Verify grading zoom at 150 percent scaling
-        if: env.CHECK_SCOPE == 'rating_zoom'
+        if: (env.CHECK_SCOPE == 'rating_zoom' || env.CHECK_SCOPE == 'layout')
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
@@ -212,7 +217,7 @@ jobs:
           QT_SCALE_FACTOR: '1.5'
         run: python tools/check_zoom_motion.py zoom-hidpi-ci
       - name: Verify only changed review header
-        if: env.CHECK_SCOPE == 'review_ui'
+        if: (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout')
         env:
           QT_QPA_PLATFORM: windows
         run: |
@@ -224,7 +229,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_deleted_album.py deleted-album-ci
       - name: Verify changed review header at 150 percent scaling
-        if: env.CHECK_SCOPE == 'review_ui'
+        if: (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout')
         env:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
@@ -442,7 +447,7 @@ jobs:
           $p.Refresh()
           if ($p.ExitCode -ne 0 -or !(Get-Content rating-latency-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged rating response check failed' }
       - name: Verify grading zoom in packaged EXE
-        if: env.CHECK_SCOPE == 'rating_zoom' || env.CHECK_SCOPE == 'rating_latency'
+        if: (env.CHECK_SCOPE == 'rating_zoom' || env.CHECK_SCOPE == 'layout') || env.CHECK_SCOPE == 'rating_latency'
         timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: windows
@@ -483,7 +488,7 @@ jobs:
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--zoom-motion-self-test', 'zoom-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content zoom-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged zoom motion failed' }
       - name: Verify changed review header in packaged EXE
-        if: env.CHECK_SCOPE == 'review_ui'
+        if: (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout')
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
@@ -570,7 +575,7 @@ jobs:
           $hash = (Get-FileHash release/PhotoSieve-Setup-Windows-x64.exe -Algorithm SHA256).Hash.ToLower()
           Add-Content release/SHA256SUMS.txt "$hash  PhotoSieve-Setup-Windows-x64.exe"
       - name: Verify installation at a chosen path and workspace preservation
-        if: env.CHECK_SCOPE == 'full'
+        if: env.CHECK_SCOPE == 'full' || env.CHECK_SCOPE == 'layout'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python tools/check_installer.py
@@ -624,5 +629,5 @@ jobs:
             Write-Output "Version $tag already published. Bump APP_VERSION to release the next update."
             exit 0
           }
-          gh release create $tag release/PhotoSieve-Windows-x64.zip release/PhotoSieve-Setup-Windows-x64.exe release/update.json release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
+          gh release create $tag release/PhotoSieve-Windows-x64.zip release/PhotoSieve-Setup-Windows-x64.exe release/update.json release/SHA256SUMS.txt release/PhotoSieve-Theme-Mars.zip release/theme.json --target $env:GITHUB_SHA --title "照片快筛 $version" --notes-file RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }

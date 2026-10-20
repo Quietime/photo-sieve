@@ -46,3 +46,32 @@ class ThemePackTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class CloudThemeTest(unittest.TestCase):
+    def test_bundle_has_actual_mars_art_and_packaging_allows_only_theme_paths(self):
+        import package_release
+        self.assertTrue((theme_pack.BUNDLED/'manifest.json').is_file())
+        self.assertTrue((theme_pack.BUNDLED/'splash/mascot.png').is_file())
+        self.assertTrue(package_release.public('assets/theme/splash/mascot.png'))
+        self.assertTrue(package_release.public('PhotoSieve/source/assets/theme/manifest.json'))
+        self.assertFalse(package_release.public('private-photo.png'))
+    def test_cloud_download_verifies_and_installs_without_a_file_picker(self):
+        import hashlib,io,json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);bundle=root/'bundle';bundle.mkdir();(bundle/'manifest.json').write_text('{}');(bundle/'splash').mkdir();(bundle/'splash/mascot.png').write_bytes(b'image')
+            with patch.object(theme_pack,'BUNDLED',bundle):meta=theme_pack.build_archive(root/'release')
+            data=(root/'release'/theme_pack.CLOUD_ASSET).read_bytes();self.assertEqual(hashlib.sha256(data).hexdigest(),meta['sha256'])
+            release={'assets':[{'name':'theme.json','url':'manifest'}, {'name':theme_pack.CLOUD_ASSET,'url':'archive','size':len(data)}]}
+            with patch.dict(os.environ,PHOTOSIEVE_THEME=str(root/'user')),patch('updater.read_json',return_value=release),patch('updater.open_api',side_effect=[io.BytesIO(json.dumps(meta).encode()),io.BytesIO(data)]):
+                self.assertEqual(theme_pack.download_default(),2);self.assertEqual(theme_pack.find('splash/mascot.png').read_bytes(),b'image')
+    def test_failed_cloud_hash_preserves_current_theme(self):
+        import io,json
+        with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,PHOTOSIEVE_THEME=tmp):
+            target=Path(tmp)/'manifest.json';target.write_text('old')
+            meta={'asset':theme_pack.CLOUD_ASSET,'size':3,'sha256':'0'*64};release={'assets':[{'name':'theme.json','url':'manifest'},{'name':theme_pack.CLOUD_ASSET,'url':'archive','size':3}]}
+            with patch('updater.read_json',return_value=release),patch('updater.open_api',side_effect=[io.BytesIO(json.dumps(meta).encode()),io.BytesIO(b'bad')]):
+                with self.assertRaisesRegex(ValueError,'校验失败'):theme_pack.download_default()
+            self.assertEqual(target.read_text(),'old')
+    def test_file_picker_entry_is_on_the_file_dialog_class(self):
+        from ui_shell import QFileDialog
+        self.assertTrue(callable(QFileDialog.getOpenFileName))
