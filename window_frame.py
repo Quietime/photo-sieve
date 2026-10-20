@@ -114,6 +114,14 @@ class WindowFrame(QObject):
         handles=tuple(self.native_icons)
         self.window.destroyed.connect(lambda: [api.DestroyIcon(icon) for icon in handles])
 
+    def interactive(self,child):
+        """Whether a point of the title bar belongs to a control. The bar also holds the toolbar (tabs,
+        buttons), so only labels and empty space may act as the system caption."""
+        while child is not None and child is not self.chrome:
+            if isinstance(child,QAbstractButton) or child.focusPolicy()!=Qt.FocusPolicy.NoFocus or getattr(child,'title_bar_control',False):return True
+            child=child.parentWidget()
+        return False
+
     def native_event(self,message):
         if not self.native: return None
         from ctypes import wintypes as W
@@ -141,6 +149,5 @@ class WindowFrame(QObject):
             if hit: return True,hit
         here=self.chrome.mapFrom(self.window,local)
         if self.chrome.rect().contains(here):
-            child=self.chrome.childAt(here)
-            if not isinstance(child,QAbstractButton): return True,2  # HTCAPTION gives Windows its own drag/snap/double-click
+            if not self.interactive(self.chrome.childAt(here)): return True,2  # HTCAPTION gives Windows its own drag/snap/double-click
         return True,1  # HTCLIENT: custom controls must never become the system's hidden caption

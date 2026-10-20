@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as temporary:
         tests=[(2,height//2,10),(width-2,height//2,11),(width//2,2,12),(width//2,height-2,15),
                (2,2,13),(width-2,2,14),(2,height-2,16),(width-2,height-2,17)]
         for x,y,expected in tests: assert hit(x,y)==expected,(x,y,hit(x,y),expected)
-        caption=window.window_chrome.label.mapTo(window,window.window_chrome.label.rect().center())
+        caption=window.title.mapTo(window,window.title.rect().center())   # the folder title sits in the merged title bar
         assert hit(caption.x(),caption.y())==2,'Caption participates in the OS move/snap loop'
         for button in window.window_chrome.findChildren(__import__('PySide6.QtWidgets',fromlist=['QPushButton']).QPushButton):
             p=button.mapTo(window,button.rect().center()); assert hit(p.x(),p.y())==1,'Custom controls remain clickable client content'

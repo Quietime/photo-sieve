@@ -2,7 +2,7 @@
 from bisect import bisect_right
 from itertools import accumulate
 from PySide6.QtCore import QAbstractListModel,QModelIndex,Qt,Signal,QSize,QTimer,QPoint,QRect
-from PySide6.QtGui import QIcon,QColor,QPen
+from PySide6.QtGui import QIcon,QColor,QPen,QPainter,QPolygon
 from PySide6.QtWidgets import QListView,QStyledItemDelegate,QStyleOptionViewItem,QStyle,QApplication,QAbstractItemView
 import theme
 
@@ -36,7 +36,12 @@ class MixedDelegate(QStyledItemDelegate):
         icon=index.data(Qt.ItemDataRole.DecorationRole)
         painter.save()
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.setPen(QPen(QColor(theme.LABEL),2));painter.setBrush(QColor(theme.ELEVATED));painter.drawRoundedRect(option.rect.adjusted(1,1,-1,-1),8,8)
+            # The photo the keys act on: a lava ring and a small inverted triangle above it.
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(theme.LAVA),2));painter.setBrush(QColor(theme.ELEVATED));painter.drawRoundedRect(option.rect.adjusted(1,1,-1,-1),8,8)
+            cx=option.rect.center().x();top=option.rect.top()
+            painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor(theme.LABEL))
+            painter.drawPolygon(QPolygon([QPoint(cx-5,top-1),QPoint(cx+5,top-1),QPoint(cx,top+5)]))
         elif option.state & QStyle.StateFlag.State_MouseOver:
             painter.setPen(Qt.PenStyle.NoPen);painter.setBrush(QColor(theme.ELEVATED));painter.drawRoundedRect(option.rect.adjusted(1,1,-1,-1),8,8)
         painter.restore()

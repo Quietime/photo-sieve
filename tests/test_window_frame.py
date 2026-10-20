@@ -13,7 +13,9 @@ class WindowFrameTest(unittest.TestCase):
         from widgets import WelcomePage
         from PySide6.QtGui import QImage
         from PIL import Image
-        page=WelcomePage();page.resize(1672,1041)
+        from unittest.mock import patch
+        with patch('theme_pack.find',return_value=None):page=WelcomePage()   # the plain page, without a decoration pack
+        page.resize(1672,1041)
         image=page.grab().toImage().convertToFormat(QImage.Format.Format_RGBA8888)
         pixels=Image.frombytes('RGBA',(image.width(),image.height()),bytes(image.bits())).convert('L')
         centers=[]

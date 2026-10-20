@@ -140,7 +140,14 @@ class PhotoView(QGraphicsView):
             self.text = self.scene().addSimpleText(error or message or ('正在读取…' if photo else ''))
             font = QFont(self.font()); font.setPixelSize(15); self.text.setFont(font)
             self.text.setBrush(QColor(theme.ERROR_TEXT if error else theme.SECONDARY))
-            self.scene().setSceneRect(self.text.boundingRect()); self.centerOn(self.text)
+            rect = self.text.boundingRect()
+            art = empty_art() if message and not photo and not error else None
+            if art is not None:
+                # With the decoration pack, an empty pane shows the mascot above its message.
+                mascot = self.scene().addPixmap(art); mascot.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+                mascot.setPos(rect.center().x() - art.width() / 2, rect.top() - art.height() - 12)
+                rect = rect.united(mascot.sceneBoundingRect())
+            self.scene().setSceneRect(rect); self.centerOn(rect.center())
 
     def fit_scale(self):
         rect = self.sceneRect(); view = self.viewport().size()
@@ -305,6 +312,18 @@ class PhotoView(QGraphicsView):
         super().keyPressEvent(event)
 
 
+_EMPTY_ART = []
+
+
+def empty_art():
+    """The decoration pack's mascot at 120 px high, or None without a pack (looked up once)."""
+    if not _EMPTY_ART:
+        import theme_pack
+        path = theme_pack.find('splash/mascot.png'); pixmap = QPixmap(str(path)) if path else QPixmap()
+        _EMPTY_ART.append(None if pixmap.isNull() else pixmap.scaledToHeight(120, Qt.TransformationMode.SmoothTransformation))
+    return _EMPTY_ART[0]
+
+
 class Elided(QLabel):
     """Single-line label that keeps its full text and re-elides whenever it is resized."""
     def __init__(self, name='', mode=Qt.TextElideMode.ElideMiddle):
@@ -408,6 +427,7 @@ class Toast(QWidget):
 
 
 class Segmented(GlassSurface):
+    title_bar_control = True   # clicks select a view, never drag the window
     """iOS-style segmented control with a sliding selection thumb and live counts."""
     changed = Signal(str)
 
@@ -451,7 +471,7 @@ class Segmented(GlassSurface):
     def paintEvent(self, event):
         painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setPen(Qt.PenStyle.NoPen)
         painter.end();super().paintEvent(event);painter.begin(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing);painter.setPen(Qt.PenStyle.NoPen)
-        width = self.segment_width(); painter.setBrush(QColor(theme.ELEVATED2 if not theme.HIGH_CONTRAST else '#FFFFFF'))
+        width = self.segment_width(); painter.setBrush(QColor(theme.LAVA if not theme.HIGH_CONTRAST else '#FFFFFF'))   # screening's lava accent
         painter.drawRoundedRect(QRectF(2 + self.position * width, 2, width, self.height() - 4), 14, 14)
         metrics = self.fontMetrics()
         for i in range(len(self.items)):
