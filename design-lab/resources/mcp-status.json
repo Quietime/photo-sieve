@@ -1,0 +1,26 @@
+[
+  {
+    "name": "lottiefiles",
+    "enabled": true,
+    "url": "https://mcp.lottiefiles.com/mcp",
+    "auth_status": "not_logged_in"
+  },
+  {
+    "name": "mobbin",
+    "enabled": true,
+    "url": "https://api.mobbin.com/mcp",
+    "auth_status": "not_logged_in"
+  },
+  {
+    "name": "regards",
+    "enabled": true,
+    "url": "https://mcp.regards.design/mcp",
+    "auth_status": "not_logged_in"
+  },
+  {
+    "name": "spline",
+    "enabled": true,
+    "url": "https://mcp.spline.design/mcp",
+    "auth_status": "not_logged_in"
+  }
+]

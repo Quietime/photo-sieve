@@ -1,0 +1,12 @@
+[mcp_servers.regards]
+url = "https://mcp.regards.design/mcp"
+
+[mcp_servers.mobbin]
+url = "https://api.mobbin.com/mcp"
+
+[mcp_servers.spline]
+url = "https://mcp.spline.design/mcp"
+
+[mcp_servers.lottiefiles]
+url = "https://mcp.lottiefiles.com/mcp"
+

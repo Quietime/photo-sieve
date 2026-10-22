@@ -1,0 +1,32 @@
+[
+  {
+    "role": "current tertiary text",
+    "foreground": "#918F88",
+    "background": "#303236",
+    "ratio": 3.97
+  },
+  {
+    "role": "primary proposed",
+    "foreground": "#F4F0E6",
+    "background": "#303236",
+    "ratio": 11.29
+  },
+  {
+    "role": "secondary proposed",
+    "foreground": "#C1BFB8",
+    "background": "#303236",
+    "ratio": 6.98
+  },
+  {
+    "role": "selected control",
+    "foreground": "#F4F0E6",
+    "background": "#335E83",
+    "ratio": 6.01
+  },
+  {
+    "role": "delete control",
+    "foreground": "#F4F0E6",
+    "background": "#95504C",
+    "ratio": 5.23
+  }
+]

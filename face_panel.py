@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QWidget
 
 class FacePanel(QWidget):
     def __init__(self,parent):
-        super().__init__(parent);self.result=None;self.picture=QPixmap()
+        super().__init__(parent);self.result=None;self.picture=QPixmap();self.preview_limit=QSize(160,180)
         self.move(4,4);self.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.hide()
     def show_result(self,result):
         payload=result.get('imagebytes') if result else None
@@ -14,8 +14,11 @@ class FacePanel(QWidget):
         self.result=result;self.picture=QPixmap()
         if result and result.get('imagebytes'):self.picture.loadFromData(result['imagebytes'])
         if self.picture.isNull():self.hide();return
-        size=self.picture.size().scaled(QSize(160,180),Qt.AspectRatioMode.KeepAspectRatio)
+        size=self.picture.size().scaled(self.preview_limit,Qt.AspectRatioMode.KeepAspectRatio)
         self.setFixedSize(size);self.show();self.raise_();self.update()
+    def set_preview_limit(self,width,height):
+        self.preview_limit=QSize(width,height)
+        if not self.picture.isNull():self.setFixedSize(self.picture.size().scaled(self.preview_limit,Qt.AspectRatioMode.KeepAspectRatio))
     def paintEvent(self,event):
         if self.picture.isNull():return
         painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)

@@ -187,6 +187,23 @@ class QFileDialog:
             dialog.deleteLater()
 
 
+class SettingsToggle(QCheckBox):
+    """Native checkbox semantics with a readable label and a trailing switch."""
+    def __init__(self,text):
+        super().__init__(text);self.setCursor(Qt.CursorShape.PointingHandCursor)
+    def hitButton(self,point):return self.rect().contains(point)
+    def paintEvent(self,event):
+        painter=QPainter(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(self.font());painter.setPen(QColor(theme.LABEL if self.isEnabled() else theme.SECONDARY))
+        area=QRectF(self.rect()).adjusted(8,0,-60,0)
+        painter.drawText(area,Qt.AlignmentFlag.AlignVCenter,self.fontMetrics().elidedText(self.text(),Qt.TextElideMode.ElideRight,int(area.width())))
+        track=QRectF(self.width()-44,self.height()/2-9,32,18)
+        painter.setPen(QPen(QColor(theme.ICE if self.isChecked() else theme.SECONDARY),1));painter.setBrush(QColor(theme.BLUE if self.isChecked() else theme.SEPARATOR));painter.drawRoundedRect(track,9,9)
+        painter.setBrush(QColor(theme.LABEL));painter.setPen(Qt.PenStyle.NoPen);painter.drawEllipse(QRectF(track.x()+(16 if self.isChecked() else 2),track.y()+2,14,14))
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(theme.ICE),1));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),6,6)
+
+
 class SettingsPanel(QFrame):
     """An anchored child panel: no top-level window and no focus-loss auto-dismiss."""
     def __init__(self,window,anchor):
@@ -200,57 +217,99 @@ class SettingsPanel(QFrame):
             #morePanel QPushButton#menuItem:disabled { color:#636366; }
             #morePanel QCheckBox { padding:4px 8px; spacing:7px; }
             #morePanel QLabel#sectionTitle { color:#F5F5F7; font-size:14px; font-weight:600; padding:0 4px 4px; }
-            #morePanel QFrame#settingsGroup { background:#303236; border:1px solid #38383A; border-radius:12px; }
+            #morePanel QFrame#settingsGroup { background:#303236; border:0; border-radius:8px; }
             #morePanel QLabel#sectionDescription { color:#98989D; font-size:12px; padding:0 12px 6px; }
             #morePanel QLabel#panelStatus { color:#98989D; font-size:12px; padding:6px 12px; }
         """.replace('#1C1C1E',theme.ELEVATED).replace('#38383A',theme.SEPARATOR)
             .replace('#2C2C2E',theme.ELEVATED2).replace('#636366',theme.TERTIARY)
             .replace('#98989D',theme.SECONDARY).replace('#F5F5F7',theme.LABEL))
-        outer=QVBoxLayout(self); outer.setContentsMargins(12,12,12,12); outer.setSpacing(8)
+        outer=QVBoxLayout(self); outer.setContentsMargins(24,20,24,24); outer.setSpacing(16)
         header=QHBoxLayout(); title=QLabel('更多选项'); header.addWidget(title); header.addStretch()
         from apple_ui import AppleButton
         close=AppleButton('',symbol='close'); close.setFixedSize(28,28); close.setAccessibleName('关闭更多选项'); close.clicked.connect(self.hide); header.addWidget(close); outer.addLayout(header)
-        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        from PySide6.QtWidgets import QGridLayout
-        content=self.content=QWidget();self.groups=QGridLayout(content);self.groups.setContentsMargins(0,0,0,0);self.groups.setSpacing(10);self.group_count=0;self.column=None
-        self.scroll.setWidget(content); outer.addWidget(self.scroll); self.hide()
+        from PySide6.QtWidgets import QStackedWidget
+        body=QHBoxLayout();body.setSpacing(24)
+        navigation=QWidget();navigation.setFixedWidth(172);self.navigation=QVBoxLayout(navigation);self.navigation.setContentsMargins(0,0,0,0);self.navigation.setSpacing(8);self.navigation.addStretch()
+        self.stack=QStackedWidget();body.addWidget(navigation);body.addWidget(self.stack,1);outer.addLayout(body,1)
+        self.pages={};self.category_buttons={};self.group_count=0;self.column=None;self.application_section=False
+        self.mode_category='照片分级' if getattr(window,'rating_active',False) else '照片筛选'
+        self.hide()
+
+    def category(self,name):
+        if name not in self.pages:
+            scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);scroll.setStyleSheet('QScrollArea {border:0;}')
+            content=QWidget();groups=QVBoxLayout(content);groups.setContentsMargins(0,0,8,0);groups.setSpacing(16);groups.addStretch()
+            scroll.setWidget(content);self.stack.addWidget(scroll)
+            button=QPushButton(name);button.setCheckable(True);button.setMinimumHeight(36)
+            button.setStyleSheet('QPushButton {background:transparent;text-align:left;border-radius:8px;padding:8px 12px;} QPushButton:checked {background:'+theme.ELEVATED+';} QPushButton:hover {background:'+theme.SEPARATOR+';}')
+            order=[self.mode_category,'缓存与性能','外观与装饰包','更新与日志']
+            position=sum(1 for key in self.category_buttons if order.index(key)<order.index(name));self.navigation.insertWidget(position,button)
+            button.clicked.connect(lambda _,name=name:self.select_category(name))
+            self.pages[name]=(scroll,content,groups);self.category_buttons[name]=button
+            if len(self.pages)==1:self.select_category(name)
+        return self.pages[name]
+
+    def select_category(self,name):
+        scroll,content,groups=self.pages[name];self.stack.setCurrentWidget(scroll)
+        for key,button in self.category_buttons.items():button.setChecked(key==name)
+        self.scroll=scroll;self.content=content;self.groups=groups
+
+    def section(self,category,title,description=''):
+        scroll,content,groups=self.category(category)
+        group=QFrame();group.setObjectName('settingsGroup');column=QVBoxLayout(group);column.setContentsMargins(16,16,16,16);column.setSpacing(6)
+        groups.insertWidget(groups.count()-1,group)
+        label=QLabel(title);label.setObjectName('sectionTitle');column.addWidget(label)
+        if description:
+            description_label=QLabel(description);description_label.setObjectName('sectionDescription');description_label.setWordWrap(True);column.addWidget(description_label)
+        return column
+
+    def application_column(self,text):
+        if any(word in text for word in ('缓存','GPU')):category='缓存与性能'
+        elif any(word in text for word in ('装饰包','启动动画')):category='外观与装饰包'
+        else:category='更新与日志'
+        if category not in self.application_columns:self.application_columns[category]=self.section(category,category,'这些设置适用于整个应用')
+        return self.application_columns[category]
 
     def addAction(self,action):
         from PySide6.QtGui import QAction
         if isinstance(action,str): action=QAction(action,self)
         if action in self.action_controls:return action
         from apple_ui import MenuRow
-        control=QCheckBox(action.text()) if action.isCheckable() else MenuRow(action.text())
+        control=SettingsToggle(action.text()) if action.isCheckable() else MenuRow(action.text())
         control.setObjectName('menuItem'); control.setEnabled(action.isEnabled())
-        control.setFixedHeight(30);control.setToolTip(action.toolTip())
+        control.setFixedHeight(34);control.setToolTip(action.toolTip())
         if action.isCheckable():
             control.setChecked(action.isChecked()); control.toggled.connect(action.setChecked)
         else:
             def clicked(): self.hide(); action.trigger()
             control.clicked.connect(clicked)
         self.action_controls[action]=control
-        self.column.addWidget(control)
-        action.changed.connect(lambda:control.setEnabled(action.isEnabled())); return action
+        column=self.application_column(action.text()) if self.application_section else self.column
+        column.addWidget(control)
+        def synchronize():
+            control.setEnabled(action.isEnabled())
+            if action.isCheckable():
+                previous=control.blockSignals(True);control.setChecked(action.isChecked());control.blockSignals(previous)
+        action.changed.connect(synchronize);return action
 
     def addSection(self,title,description=''):
-        group=QFrame();group.setObjectName('settingsGroup');self.column=QVBoxLayout(group);self.column.setContentsMargins(10,12,10,10);self.column.setSpacing(4)
-        self.groups.addWidget(group,self.group_count//2,self.group_count%2,Qt.AlignmentFlag.AlignTop);self.group_count+=1
-        label=QLabel(title);label.setObjectName('sectionTitle');self.column.addWidget(label)
-        label.setToolTip(description)
+        self.group_count+=1
+        if title=='应用全局':
+            self.application_section=True;self.application_columns={}
+            self.column=self.section('缓存与性能',title,description)
+            self.application_columns['缓存与性能']=self.column
+        else:
+            self.application_section=False;self.column=self.section(self.mode_category,title,description)
 
     def addStatus(self,text):
-        label=QLabel(text); label.setObjectName('panelStatus'); label.setWordWrap(True); self.column.addWidget(label)
+        label=QLabel(text); label.setObjectName('panelStatus'); label.setWordWrap(True); (self.application_column('检查更新') if self.application_section else self.column).addWidget(label)
 
     def addSeparator(self):
         line=QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet('background:'+theme.SEPARATOR+'; min-height:1px; max-height:1px;'); self.column.addWidget(line)
 
     def place(self):
-        parent=self.parentWidget(); width=min(600,max(160,parent.width()-24))
-        anchor=self.anchor.mapTo(parent,QPoint(self.anchor.width(),self.anchor.height()+8))
-        below=max(120,parent.height()-anchor.y()-12)
-        self.resize(width,min(self.content.sizeHint().height()+76,below))
-        self.move(max(12,min(anchor.x()-width,parent.width()-width-12)),max(12,min(anchor.y(),parent.height()-self.height()-12)))
-        self.raise_()
+        parent=self.parentWidget();width=min(920,max(280,parent.width()-48));height=min(680,max(240,parent.height()-48))
+        self.resize(width,height);self.move(max(12,(parent.width()-width)//2),max(12,(parent.height()-height)//2));self.raise_()
 
     def exec(self,position=None): self.place(); self.show(); self.raise_(); self.setFocus()
     def showEvent(self,event):

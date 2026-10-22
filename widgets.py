@@ -154,7 +154,13 @@ class PhotoView(QGraphicsView):
         if rect.width() <= 0 or rect.height() <= 0: return 1.0
         scale = min(view.width() / rect.width(), view.height() * self.fit_height_factor / rect.height())
         # A preview decoded for this pane size draws as a plain blit, without per-frame resampling.
-        return (1.0 if 1.0 <= scale < 1.04 else scale) * self.fit_factor
+        scale=(1.0 if 1.0 <= scale < 1.04 else scale) * self.fit_factor
+        reference=getattr(self,'comparison_reference',None)
+        if reference is not None and reference.pixmap:
+            original=reference.sceneRect()
+            limit=.6*max(original.width(),original.height())*reference.fit_scale()
+            scale=min(scale,limit/max(rect.width(),rect.height()))
+        return scale
 
     def fit(self):
         scale = self.fit_scale(); self.setTransform(QTransform.fromScale(scale, scale)); self.centerOn(self.sceneRect().center())
@@ -471,7 +477,7 @@ class Segmented(GlassSurface):
     def paintEvent(self, event):
         painter = QPainter(self); painter.setRenderHint(QPainter.RenderHint.Antialiasing); painter.setPen(Qt.PenStyle.NoPen)
         painter.end();super().paintEvent(event);painter.begin(self);painter.setRenderHint(QPainter.RenderHint.Antialiasing);painter.setPen(Qt.PenStyle.NoPen)
-        width = self.segment_width(); painter.setBrush(QColor(theme.LAVA if not theme.HIGH_CONTRAST else '#FFFFFF'))   # screening's lava accent
+        width = self.segment_width(); painter.setBrush(QColor(theme.BLUE if not theme.HIGH_CONTRAST else '#FFFFFF'))   # screening's lava accent
         painter.drawRoundedRect(QRectF(2 + self.position * width, 2, width, self.height() - 4), 14, 14)
         metrics = self.fontMetrics()
         for i in range(len(self.items)):

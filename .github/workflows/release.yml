@@ -216,6 +216,21 @@ jobs:
           QT_QPA_PLATFORM: windows
           QT_SCALE_FACTOR: '1.5'
         run: python tools/check_zoom_motion.py zoom-hidpi-ci
+      - name: Verify changed native grading layout and glass controls
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          python -m unittest tests.test_apple_ui tests.test_glass_material tests.test_ratings tests.test_embedded_rating -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_ratings.py rating-latency-related-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify changed grading gallery at 150 percent scaling
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_SCALE_FACTOR: '1.5'
+        run: python tools/check_ratings.py rating-latency-hidpi-ci
       - name: Verify only changed review header
         if: (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout')
         env:
@@ -500,6 +515,14 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content mode-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged independent settings failed' }
           $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-frozen-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0 -or !(Get-Content deleted-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged deleted album failed' }
+      - name: Verify native grading in packaged UI release
+        if: env.CHECK_SCOPE == 'review_ui'
+        env:
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--rating-self-test', 'frozen-ratings-ci.json' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged rating check failed' }
       - name: Verify cache settings in packaged EXE
         if: env.CHECK_SCOPE == 'cache_ui'
         env:

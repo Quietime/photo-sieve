@@ -1,0 +1,25 @@
+{
+  "name": "photosieve-motion-lab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated Web motion tools; not included in the Python/Qt application runtime.",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "morphicons": "2.0.0",
+    "lottie-web": "5.13.0",
+    "gsap": "3.15.0",
+    "@theatre/core": "0.7.2",
+    "@theatre/studio": "0.7.2",
+    "postprocessing": "6.39.5",
+    "three": "0.186.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.0",
+    "playwright": "^1.56.0"
+  }
+}

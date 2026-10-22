@@ -35,6 +35,26 @@ class ModeSettingsTest(unittest.TestCase):
     def action(self,window,text):return next(a for a in window.more_panel.action_controls if a.text()==text)
     def menu_names(self,window):return [a.text() for a in window.more_panel.action_controls]
 
+    def test_advanced_filters_keep_their_state_when_collapsed(self):
+        window=self.make_window();window.toggle_rating();page=window.rating_page
+        self.assertTrue(page.advanced.isHidden())
+        page.more_filters.click();application.processEvents();self.assertTrue(page.advanced.isVisible())
+        page.tools.label_filter.setCurrentIndex(2)
+        page.more_filters.click();self.assertTrue(page.advanced.isHidden())
+        page.more_filters.click();self.assertEqual(page.tools.label_filter.currentIndex(),2)
+        self.assertLessEqual(page.scope.geometry().right(),page.filter.geometry().left())
+
+    def test_settings_categories_preserve_actions_and_synchronize_checks(self):
+        window=self.make_window();window.show_menu();panel=window.more_panel
+        self.assertEqual(set(panel.pages),{'照片筛选','缓存与性能','外观与装饰包','更新与日志'})
+        action=self.action(window,'显示底部操作栏');action.setChecked(True)
+        self.assertTrue(panel.action_controls[action].isChecked())
+        panel.select_category('更新与日志');application.processEvents()
+        self.assertTrue(panel.action_controls[self.action(window,'检查更新')].isVisible())
+        self.assertFalse(panel.action_controls[action].isVisible())
+        self.assertEqual(panel.scroll.verticalScrollBar().maximum(),0)
+        self.assertTrue(window.centralWidget().rect().contains(panel.geometry()))
+
     def test_new_install_hides_both_docks(self):
         window=self.make_window()   # the button dock is opt-in since 5.0: the work is done from the keys or the phone
         self.assertFalse(window.actionbar_visible);self.assertFalse(window.rating_actionbar_visible)

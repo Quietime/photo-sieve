@@ -1,0 +1,23 @@
+[
+  {
+    "name": "mobbin",
+    "configured": true,
+    "oauth_detected": true,
+    "exit": -2,
+    "notes": "Authorization still requires a fresh interactive login; no expired login URL is stored."
+  },
+  {
+    "name": "spline",
+    "configured": true,
+    "oauth_detected": true,
+    "exit": -2,
+    "notes": "Authorization still requires a fresh interactive login; no expired login URL is stored."
+  },
+  {
+    "name": "lottiefiles",
+    "configured": true,
+    "oauth_detected": true,
+    "exit": -2,
+    "notes": "Authorization still requires a fresh interactive login; no expired login URL is stored."
+  }
+]

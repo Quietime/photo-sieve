@@ -354,7 +354,8 @@ class Window(QMainWindow):
         if self.busy or self.pending_ops or self.job_running():return
         if getattr(self,'more_panel',None):self.more_panel.hide()
         self.rating_active=not self.rating_active;self.apply_mode_preferences();self.segments.setVisible(not self.rating_active)
-        self.rating_button.setText('返回照片筛选' if self.rating_active else '照片分级')
+        self.rating_button.variant='primary' if self.rating_active else 'neutral';self.review_mode_button.variant='neutral' if self.rating_active else 'primary'
+        self.rating_button.update();self.review_mode_button.update()
         if self.rating_active:
             self.generation+=1;self.fetching=False;self.reset_zoom();self.stack.setCurrentWidget(self.rating_page);self.rating_page.activate()
         else:
@@ -392,7 +393,7 @@ class Window(QMainWindow):
         root = QWidget(); self.setCentralWidget(root); outer = QVBoxLayout(root); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
         # One 40 px bar holds the window controls and the whole toolbar; the photos get the rest.
         self.window_chrome=TitleBar(self,'照片快筛',main=True); self.window_chrome.setFixedHeight(40); outer.addWidget(self.window_chrome)
-        chrome=self.window_chrome.layout(); chrome.setContentsMargins(18,0,12,0); chrome.setSpacing(8)
+        chrome=self.window_chrome.layout(); chrome.setContentsMargins(24,0,16,0); chrome.setSpacing(8)
         self.window_chrome.label.hide()
         self.title = Elided('title', Qt.TextElideMode.ElideRight); self.title.set_text('照片快筛'); self.subtitle = Elided('subtitle')
         serif=QFont(self.title.font()); serif.setFamilies([theme.title_fonts()[0],'Noto Serif SC','Songti SC','SimSun']); self.title.setFont(serif)
@@ -405,13 +406,14 @@ class Window(QMainWindow):
         self.segments = Segmented(self.VIEWS); self.segments.changed.connect(self.switch); self.segments.set_counts({}); top.addWidget(self.segments)
         right = QWidget(); right.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         tools = QHBoxLayout(right); tools.setContentsMargins(0, 0, 0, 0); tools.setSpacing(6); tools.addStretch()
-        self.rating_button=self.button('照片分级',self.toggle_rating);tools.addWidget(self.rating_button)
+        self.review_mode_button=self.button('照片筛选',lambda:self.toggle_rating() if self.rating_active else None);self.review_mode_button.variant='primary';tools.addWidget(self.review_mode_button)
+        self.rating_button=self.button('照片分级',lambda:self.toggle_rating() if not self.rating_active else None);tools.addWidget(self.rating_button)
         self.open_button = self.button('打开文件夹…', self.choose_source); self.open_button.symbol='folder'; tools.addWidget(self.open_button)
         self.resume_button=self.button('继续上次进度',self.resume_last);tools.addWidget(self.resume_button)
         last=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root') or ''
         self.resume_button.setEnabled(bool(last));self.resume_button.setToolTip(str(last))
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
-        for control in (self.rating_button,self.open_button,self.resume_button,self.more_button): control.compact=True; control.setFixedHeight(28)
+        for control in (self.review_mode_button,self.rating_button,self.open_button,self.resume_button,self.more_button): control.compact=True; control.setFixedHeight(28)
         self.more_button.setFixedWidth(30)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
@@ -430,6 +432,8 @@ class Window(QMainWindow):
             role=QLabel('左图 · 当前筛选（保留 / 删除操作此图）' if index==0 else '右图 · 仅供对比')
             role.setObjectName('caption'); role.hide(); self.photo_roles.append(role)
             photo = PhotoView(fit_height_factor=1.0)
+            if index==1:
+                photo.comparison_reference=self.photos[0];pane.addWidget(role);role.show()
             photo.setToolTip('保留 / 删除只操作左边的大图' if index==0 else '下一张，仅供对比')
             photo.clicked.connect(self.focus); photo.next_requested.connect(self.next_photo); photo.escape_requested.connect(self.reset_zoom)
             photo.resized.connect(lambda: self.resize_timer.start(160)); photo.zoom_changed.connect(lambda index=index: self.zoom_caption(index)); pane.addWidget(photo, 3)
@@ -760,6 +764,9 @@ class Window(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event); self.place_overlays()
+        if hasattr(self,'face_panel'):
+            height=128 if self.height()<850 else 160
+            self.face_panel.set_preview_limit(144,height-4);self.face_container.setFixedSize(144,height);self.review_info.setMinimumHeight(height)
         panel=getattr(self,'more_panel',None)
         if panel and panel.isVisible(): panel.place()
 
@@ -1143,7 +1150,7 @@ class Window(QMainWindow):
         opened=self.session_active and not self.importing and self.stack.currentIndex()!=2
         resume_available=not self.session_active and self.resume_button.isEnabled()
         self.resume_button.setVisible(resume_available);self.welcome_resume.setVisible(resume_available)
-        self.rating_button.setVisible(opened);self.segments.setVisible(opened and not self.rating_active)
+        self.review_mode_button.setVisible(opened);self.review_mode_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running());self.rating_button.setVisible(opened);self.segments.setVisible(opened and not self.rating_active)
         self.rating_button.setEnabled(not self.busy and not self.pending_ops and not self.job_running())
         if self.rating_active:self.rating_page.update_controls()
         if self.rating_active and self.rating_page.writing:

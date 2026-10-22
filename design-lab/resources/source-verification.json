@@ -1,0 +1,57 @@
+[
+  {
+    "name": "scrolltide",
+    "url": "https://www.scrolltide.co/",
+    "status": 200,
+    "title": "Scrolltide — Cinematic website prompts &amp; templates",
+    "final_url": "https://www.scrolltide.co/"
+  },
+  {
+    "name": "mobbin",
+    "url": "https://mobbin.com/",
+    "status": 200,
+    "title": "Mobbin — UI &amp; UX design inspiration for mobile &amp; web apps",
+    "final_url": "https://mobbin.com/"
+  },
+  {
+    "name": "fontshare",
+    "url": "https://www.fontshare.com/",
+    "status": 200,
+    "title": "",
+    "final_url": "https://www.fontshare.com/"
+  },
+  {
+    "name": "coolors",
+    "url": "https://coolors.co/",
+    "status": 403,
+    "note": "HTTP response; login or site-side restrictions may apply. Not counted as installed."
+  },
+  {
+    "name": "spline.design",
+    "url": "https://docs.spline.design/generate/spline-mcp-server",
+    "status": 200,
+    "title": "Spline MCP Server | Spline Documentation",
+    "final_url": "https://docs.spline.design/generate/spline-mcp-server"
+  },
+  {
+    "name": "lottiefiles",
+    "url": "https://docs.lottiefiles.com/en/platform/mcp/connect",
+    "status": 200,
+    "title": "Connect Your Client",
+    "final_url": "https://docs.lottiefiles.com/en/platform/mcp/connect"
+  },
+  {
+    "name": "threejs-journey",
+    "url": "https://threejs-journey.com/",
+    "status": 200,
+    "title": "Three.js Journey — Learn WebGL with Three.js",
+    "final_url": "https://threejs-journey.com/"
+  },
+  {
+    "name": "3dicons",
+    "url": "https://3dicons.co/",
+    "status": 200,
+    "title": "3dicons - Open Source &amp; Free Premium 3D Icon Library",
+    "final_url": "https://3dicons.co/"
+  }
+]

@@ -55,7 +55,7 @@ def run(output,raw_fixture=None):
                 window.face_changed(window.queue[0]['id'],result);application.processEvents()
                 panel=window.face_panel;check('face_sits_under_comparison_photo',panel.parentWidget() is window.face_container and window.review_info.mapTo(window,QPoint()).y()>=window.photos[1].mapTo(window,QPoint()).y()+window.photos[1].height())
                 check('metadata_is_to_the_right_of_the_face',window.details[1].parentWidget() is window.review_info and window.details[1].mapTo(window,QPoint()).x()>window.face_container.mapTo(window,QPoint()).x()+window.face_container.width())
-                check('no_caption_rows',all(role.isHidden() for role in window.photo_roles))
+                check('comparison_label_is_above_photo',window.photo_roles[0].isHidden() and window.photo_roles[1].isVisible() and window.photo_roles[1].geometry().bottom()<window.photos[1].geometry().top())
                 check('face_has_no_title_or_tooltip',panel.toolTip()=='' and not panel.findChildren(type(window.details[1])))
                 before=panel.grab().toImage();pid=window.queue[0]['id']
                 QTest.mouseClick(panel,Qt.MouseButton.LeftButton);QTest.mouseDClick(panel,Qt.MouseButton.LeftButton);QTest.mouseClick(panel,Qt.MouseButton.RightButton)

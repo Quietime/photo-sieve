@@ -1,0 +1,103 @@
+[
+  {
+    "name": "frontend-design",
+    "source": "https://github.com/anthropics/skills",
+    "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+    "source_path": "skills/frontend-design",
+    "installed_path": "/home/agent/.agents/skills/frontend-design",
+    "verified": true,
+    "skill_sha256": "d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3",
+    "files": 2
+  },
+  {
+    "name": "web-design-guidelines",
+    "source": "https://github.com/vercel-labs/agent-skills",
+    "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+    "source_path": "skills/web-design-guidelines",
+    "installed_path": "/home/agent/.agents/skills/web-design-guidelines",
+    "verified": true,
+    "skill_sha256": "f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+    "files": 1
+  },
+  {
+    "name": "design-taste-frontend",
+    "source": "https://github.com/Leonxlnx/taste-skill",
+    "commit": "6010f91a9935f1c167dfc500fb1a475681892e6b",
+    "source_path": "skills/taste-skill",
+    "installed_path": "/home/agent/.agents/skills/design-taste-frontend",
+    "verified": true,
+    "skill_sha256": "d955dae4ba8ab2d994f4bb06b4bf412a1d9875433a8597939c391f4bae91dd7a",
+    "files": 38
+  },
+  {
+    "name": "motion-prompt",
+    "source": "https://github.com/showheyohtaki/motion-prompt",
+    "commit": "36f5bdacb1e012eb00caf30741d2e2223ee514b4",
+    "source_path": "skills/motion-prompt",
+    "installed_path": "/home/agent/.agents/skills/motion-prompt",
+    "verified": true,
+    "resources": "Complete pinned upstream API catalog included at /home/agent/.local/share/photosieve-design-tools/motion-prompt/api/v1",
+    "skill_sha256": "c3c65bba3fe658625b8444456bdfe5d2f4df649bf2a68627c610f4b60517b5dc",
+    "files": 3
+  },
+  {
+    "name": "regards-art-direction",
+    "source": "https://github.com/filipwojda/regards-skill",
+    "commit": "61b565be93ef436330967e4d06fcf08f55090210",
+    "source_path": "skills/regards-art-direction",
+    "installed_path": "/home/agent/.agents/skills/regards-art-direction",
+    "verified": true,
+    "skill_sha256": "76edbecdd09d246e86f697755896007e093d3d03d734b6342d653193e3d8cb52",
+    "files": 30
+  },
+  {
+    "name": "anti-ui-slop",
+    "source": "https://github.com/discountry/ritmex-skills",
+    "commit": "0be6ec6931d77dab108e11ca5c4cef3409598488",
+    "source_path": "skills/anti-ui-slop",
+    "installed_path": "/home/agent/.agents/skills/anti-ui-slop",
+    "verified": true,
+    "skill_sha256": "2c9a34a0283b8b813fde05ca37f3a9d5839be1936f9b39b60b5e5810b54c2ce9",
+    "files": 1
+  },
+  {
+    "name": "high-end-visual-design",
+    "source": "https://github.com/Leonxlnx/taste-skill-classics",
+    "commit": "5e08c9383dc4ad7fc0df70e1ac8cfa09ec356305",
+    "source_path": "skills/soft-skill",
+    "installed_path": "/home/agent/.agents/skills/high-end-visual-design",
+    "verified": true,
+    "skill_sha256": "b981812482285acffba3a8d4d762c2af3d3e7b88350cb6816fdbd583e825e973",
+    "files": 2
+  },
+  {
+    "name": "redesign-existing-projects",
+    "source": "https://github.com/elayadesign/redesign-skill",
+    "commit": "64627f6ebe7a7a2f17c0affe4fe5838e2d46a876",
+    "source_path": "skills/redesign-existing-projects",
+    "installed_path": "/home/agent/.agents/skills/redesign-existing-projects",
+    "verified": true,
+    "skill_sha256": "8ed4b9f5301edec67e87138322fe627fe0b1172aca4d73db8c23ed3ff1379b0d",
+    "files": 1
+  },
+  {
+    "name": "ui-ux-pro-max",
+    "source": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+    "installer": "ui-ux-pro-max-cli@2.15.0 (official bundled Codex template)",
+    "installed_path": "/home/agent/.agents/skills/ui-ux-pro-max",
+    "verified": true,
+    "skill_sha256": "8b827fe03b349aeea99a7d6cf4ccd892e6065b672859fdb11e13a1919453eddc",
+    "files": 71,
+    "upstream_audit_commit": "076a2b3a31394ad788afaa71f55d0bf789e7b3ec"
+  },
+  {
+    "name": "collage-design",
+    "source": "https://github.com/polgarp/collage-design",
+    "commit": "442f67171ae442de18e0ea3ae5a9767a380bc83c",
+    "installed_path": "/home/agent/.agents/skills/collage-design",
+    "skill_sha256": "76b555a857a3359a0c5ea45b04d5a7c78a6b0de69f57306177e37aff79e6ab36",
+    "installer": "OpenAI skill-installer; git sparse-root fallback supplemented from identical pinned full clone",
+    "verified_files": 27,
+    "verified": true
+  }
+]

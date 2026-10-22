@@ -54,7 +54,9 @@ def main():
                 window.toggle_rating();until(lambda:page.pid() is not None and page.star_buttons[0].isEnabled() and page.pane.pixmap is not None)
                 assert all(not key.isEnabled() for key in window.shortcuts);assert window.stack.currentIndex()==5
                 page.auto.setChecked(False);first=page.pid();path=Path(lib.photo(first)['path']);pixels=hashlib.sha256(Image.open(path).tobytes()).hexdigest()
-                window.activateWindow();window.more_button.setFocus();app.processEvents();QTest.qWait(150);QTest.keyClick(window.more_button,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
+                window.activateWindow();window.more_button.setFocus();app.processEvents();QTest.qWait(150);QTest.mouseClick(page.stars.buttons[3],Qt.MouseButton.LeftButton);until(lambda:not page.writing and page.info[first]['stars']==4)
+                report['checks'].append('clickable_preview_star_writes_selected_photo')
+                QTest.keyClick(window.more_button,Qt.Key.Key_4);until(lambda:not page.writing and page.info[first]['stars']==4)
                 if os.name=='nt':assert page.engine.run(path)['stars']==4
                 assert hashlib.sha256(Image.open(path).tobytes()).hexdigest()==pixels
                 assert lib.photo(first)['status']==1

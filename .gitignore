@@ -33,3 +33,12 @@ feature-fixtures/
 arw-rating*-ci/
 review-*-ci/
 deletion-*-ci/
+
+# Isolated Web design tools and local skill discovery
+node_modules/
+design-lab/dist/
+.agents/skills/
+.taste-skill/
+
+# Generated review captures
+design-lab/proposal/evidence/inspection/

@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "versions": {
+    "ImageMagick": "Version: ImageMagick 7.1.1-43 Q16 x86_64 22550 https://imagemagick.org",
+    "Inkscape": "Inkscape 1.4 (e7c3feb100, 2024-10-09)",
+    "librsvg": "rsvg-convert version 2.60.0",
+    "fontconfig": "fontconfig version 2.15.0",
+    "Python": "Python 3.12.14",
+    "Pillow": "12.3.0",
+    "NumPy": "2.3.5"
+  },
+  "render_smoke": "8x8 SVG to PNG in temporary directory; removed after verification"
+}

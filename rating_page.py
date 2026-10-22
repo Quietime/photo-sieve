@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 from PySide6.QtCore import Qt,QSettings,QThreadPool,QTimer,QSize,QPoint,QRect,Signal,QEvent
 from PySide6.QtGui import QIcon,QPixmap,QShortcut,QKeySequence,QColor,QPen,QPainter
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle,QSizePolicy
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QComboBox,QCheckBox,QSplitter,QScrollArea,QSlider,QStyledItemDelegate,QStyle,QSizePolicy,QPushButton
 from photo_grid import PhotoGrid
 from apple_ui import GlassDock
 from widgets import PhotoView
@@ -29,7 +29,7 @@ class RatingDelegate(QStyledItemDelegate):
         return picture,QRect(rect.x()+8,picture.bottom()+3,rect.width()-16,line),QRect(rect.x()+8,picture.bottom()+3+line,rect.width()-16,line)
     def paint(self,painter,option,index):
         painter.save();painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor(theme.ELEVATED));painter.setPen(QPen(QColor(theme.BLUE_HOVER),2) if option.state & QStyle.StateFlag.State_Selected else Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.ELEVATED) if option.state & QStyle.StateFlag.State_Selected else Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor(theme.BLUE_HOVER),2) if option.state & QStyle.StateFlag.State_Selected else Qt.PenStyle.NoPen)
         painter.drawRoundedRect(option.rect.adjusted(2,2,-2,-2),6,6)
         picture,name,stars=self.regions(option.rect)
         icon=index.data(Qt.ItemDataRole.DecorationRole)
@@ -66,7 +66,7 @@ class RatingGrid(PhotoGrid):
         self.stop_scroll();super().resizeEvent(event)
     def set_tile_size(self,value):
         self.stop_scroll();self.tile_width=value
-        self.tile_height=max(118,round(value*.56)+self.fontMetrics().height()*2+16)
+        self.tile_height=max(118,round(value*.52)+self.fontMetrics().height()*2+12)
         self.setGridSize(QSize(value,self.tile_height))
         self.setIconSize(QSize(value-16,self.tile_height-self.fontMetrics().height()*2-13))
     def wheelEvent(self,event):
@@ -110,6 +110,21 @@ class InfoLabel(QLabel):
     def resizeEvent(self,event):super().resizeEvent(event);self.refresh()
 
 
+class RatingStars(QWidget):
+    rated=Signal(int)
+    def __init__(self):
+        super().__init__();self.value='☆☆☆☆☆';self.buttons=[]
+        row=QHBoxLayout(self);row.setContentsMargins(0,0,0,0);row.setSpacing(0)
+        for n in range(1,6):
+            button=QPushButton('☆');button.setCursor(Qt.CursorShape.PointingHandCursor);button.setFixedSize(28,30);button.setAccessibleName(f'设置 {n} 星')
+            button.setStyleSheet('QPushButton {background:transparent;border:0;border-radius:4px;padding:0;font-size:20px;color:'+theme.ICE+';} QPushButton:hover {background:'+theme.SEPARATOR+';} QPushButton:focus {border:1px solid '+theme.ICE+';}')
+            button.clicked.connect(lambda _,n=n:self.rated.emit(n));row.addWidget(button);self.buttons.append(button)
+    def setText(self,text):
+        self.value=text
+        for button,glyph in zip(self.buttons,text):button.setText(glyph)
+    def text(self):return self.value
+
+
 class RatingPage(QWidget):
     def __init__(self,host):
         super().__init__();self.host=host;self.library=None;self.records=None
@@ -118,40 +133,45 @@ class RatingPage(QWidget):
         self.rating_pending={};self.rating_failures={};self.rating_confirmed={};self.rating_versions={};self.rating_serial=0;self.pending_count=0;self.undoing=False;self.warm_started=False
         self.info={};self.source_widths={};self.image_sizes={};self.thumb_sizes={};self.fingerprints={};self.thumb_photos={};self.preview_errors=set();self.reading=set();self.thumbs=OrderedDict();self.images=OrderedDict();self.loading=set();self.scanning=False;self.remaining=[];self.shortcut_objects=[]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout=QVBoxLayout(self);layout.setContentsMargins(18,10,18,10);layout.setSpacing(4)
+        layout=QVBoxLayout(self);layout.setContentsMargins(24,12,24,12);layout.setSpacing(8)
         # No page title row: the top bar already says 照片分级. Its two buttons sit at the end of the one filter row.
         row=None
         # One row for every filter and tool, so the row uses the page's width instead of stacking on the left.
-        options=QHBoxLayout();options.setSpacing(6);self.options=options;self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
+        options=QHBoxLayout();options.setSpacing(12);self.options=options;self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
         self.filter=RoundedCombo();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
         self.options_slot=options.count()   # the workbench puts colour, grouping and its two buttons here
         options.addStretch()
         self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));options.addWidget(self.auto)
         self.auto.toggled.connect(lambda value:QSettings('PhotoSieve','PhotoSieve').setValue('rating_auto_next',value))
-        self.read_button=host.button('读取全部照片评级',self.toggle_read);options.addWidget(self.read_button);layout.addLayout(options)
+        self.more_filters=host.button('更多筛选',lambda:None);self.more_filters.setCheckable(True)
+        self.more_filters.setAccessibleName('展开颜色、分组和评级读取选项');options.addWidget(self.more_filters)
+        layout.addLayout(options)
+        self.advanced=QWidget();self.advanced_options=QHBoxLayout(self.advanced);self.advanced_options.setContentsMargins(0,0,0,0);self.advanced_options.setSpacing(12)
+        self.read_button=host.button('读取全部照片评级',self.toggle_read);self.advanced_options.addStretch();self.advanced_options.addWidget(self.read_button)
+        self.advanced.hide();self.more_filters.toggled.connect(self.advanced.setVisible);layout.addWidget(self.advanced)
         self.note=InfoLabel('星级写入照片文件。ARW 支持标准原图星级；Windows 是否能显示会单独提示。保留与删除标记独立。');self.note.setObjectName('caption');self.note.setObjectName('hint')
         self.splitter=QSplitter(Qt.Orientation.Horizontal);self.splitter.setObjectName('ratingSplit');self.splitter.setChildrenCollapsible(False);self.splitter.setHandleWidth(9)
         self.splitter.setStyleSheet('QSplitter#ratingSplit::handle:horizontal {background:'+theme.SEPARATOR+';margin:0 3px;} QSplitter#ratingSplit::handle:horizontal:hover {background:'+theme.BLUE_HOVER+';}')
-        self.split_ratio=max(.05,min(.95,QSettings('PhotoSieve','PhotoSieve').value('rating_split_ratio_v5',.3,type=float)));self.split_restored=False
-        gallery=QWidget();gallery.setMinimumWidth(230);gallery_layout=QVBoxLayout(gallery);gallery_layout.setContentsMargins(0,0,8,0);gallery_layout.setSpacing(2)
-        gallery_heading=QHBoxLayout();gallery_heading.setSpacing(4);gallery_heading.addStretch()
+        self.split_ratio=max(.05,min(.95,QSettings('PhotoSieve','PhotoSieve').value('rating_split_ratio_v5',.55,type=float)));self.split_restored=False
+        gallery=QWidget();gallery.setMinimumWidth(230);gallery_layout=QVBoxLayout(gallery);gallery_layout.setContentsMargins(0,0,12,0);gallery_layout.setSpacing(8)
+        gallery_heading=QHBoxLayout();gallery_heading.setSpacing(8);gallery_heading.addWidget(QLabel('图库'));gallery_heading.addStretch()
         self.gallery_smaller=host.button('−',lambda:self.gallery_size.setValue(self.gallery_size.value()-20));self.gallery_smaller.setFixedSize(24,24);self.gallery_smaller.setToolTip('缩小缩略图');gallery_heading.addWidget(self.gallery_smaller)
         self.gallery_size=QSlider(Qt.Orientation.Horizontal);self.gallery_size.setRange(120,360);self.gallery_size.setSingleStep(20);self.gallery_size.setPageStep(40);self.gallery_size.setMinimumWidth(70);self.gallery_size.setMaximumWidth(150);self.gallery_size.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.gallery_size.setAccessibleName('图库缩略图大小')
-        self.gallery_size.setValue(max(120,min(360,QSettings('PhotoSieve','PhotoSieve').value('rating_gallery_size',160,type=int))));gallery_heading.addWidget(self.gallery_size)
+        self.gallery_size.setValue(max(120,min(360,QSettings('PhotoSieve','PhotoSieve').value('rating_gallery_size',144,type=int))));gallery_heading.addWidget(self.gallery_size)
         self.gallery_larger=host.button('+',lambda:self.gallery_size.setValue(self.gallery_size.value()+20));self.gallery_larger.setFixedSize(24,24);self.gallery_larger.setToolTip('放大缩略图');gallery_heading.addWidget(self.gallery_larger);gallery_layout.addLayout(gallery_heading)
         self.gallery_smaller.setEnabled(self.gallery_size.value()>120);self.gallery_larger.setEnabled(self.gallery_size.value()<360)
         self.gallery_size.setStyleSheet('QSlider::groove:horizontal {height:4px;background:'+theme.SEPARATOR+';border-radius:2px;} QSlider::sub-page:horizontal {background:'+theme.BLUE_HOVER+';border-radius:2px;} QSlider::handle:horizontal {width:12px;margin:-4px 0;background:'+theme.LABEL+';border-radius:6px;}')
         self.grid=RatingGrid();self.grid.set_tile_size(self.gallery_size.value());self.grid.setWordWrap(False)
         self.gallery_size.setToolTip('缩略图大小 · 鼠标在图库内按 Ctrl + 滚轮也可调整');self.gallery_size.valueChanged.connect(self.resize_gallery);self.grid.zoom_requested.connect(self.wheel_gallery_zoom)
-        self.grid.setStyleSheet('QListView {background:transparent;border:0;outline:0;} QListView::item {background:'+theme.ELEVATED+';border:2px solid transparent;border-radius:6px;margin:4px;} QListView::item:selected {border:2px solid '+theme.BLUE_HOVER+';background:'+theme.ELEVATED+';}')
+        self.grid.setStyleSheet('QListView {background:transparent;border:0;outline:0;} QListView::item {background:transparent;border:2px solid transparent;border-radius:6px;margin:4px;} QListView::item:selected {border:2px solid '+theme.BLUE_HOVER+';background:'+theme.ELEVATED+';}')
         gallery_layout.addWidget(self.grid,1);self.splitter.addWidget(gallery)
-        preview=QWidget();preview.setMinimumWidth(250);column=QVBoxLayout(preview);column.setContentsMargins(10,0,0,0);column.setSpacing(10)
+        preview=QWidget();preview.setMinimumWidth(250);column=QVBoxLayout(preview);column.setContentsMargins(12,0,0,0);column.setSpacing(12)
         self.pane=PhotoView();column.addWidget(self.pane,1)
-        self.aux=QWidget(preview);self.aux.setFixedHeight(184)
+        self.aux=QWidget(preview);self.aux.setFixedHeight(160)
         aux_layout=QHBoxLayout(self.aux);aux_layout.setContentsMargins(8,0,8,0);aux_layout.setSpacing(24)
         aux_layout.addStretch(1)
         self.face_panel=FacePanel(self.aux);aux_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignVCenter)
-        metadata=QWidget(self.aux);metadata.setMaximumWidth(380);self.quality_layout=QVBoxLayout(metadata);self.quality_layout.setContentsMargins(0,0,0,0);self.quality_layout.setSpacing(6)
+        metadata=QWidget(self.aux);metadata.setMaximumWidth(380);self.quality_layout=QVBoxLayout(metadata);self.quality_layout.setContentsMargins(0,0,0,0);self.quality_layout.setSpacing(4)
         self.camera_info=QLabel('请选择照片');self.camera_info.setObjectName('caption');self.camera_info.setWordWrap(True);self.camera_info.setAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.quality_layout.addWidget(self.camera_info,1);aux_layout.addWidget(metadata,2);aux_layout.addStretch(1);column.addWidget(self.aux)
         self.panes=[self.pane];self.splitter.addWidget(preview);self.splitter.setStretchFactor(0,1);self.splitter.setStretchFactor(1,1);self.splitter.setSizes([600,400]);layout.addWidget(self.splitter,1)
@@ -159,7 +179,9 @@ class RatingPage(QWidget):
         self.pane.clicked.connect(lambda photo,point:self.zoom(point,self.pane));self.pane.escape_requested.connect(self.unzoom);self.pane.next_requested.connect(lambda:self.move(1))
         # One 24 px information line: stars, name, camera settings, rating state and keys.
         self.info_line=QWidget();self.info_line.setFixedHeight(24);info=QHBoxLayout(self.info_line);info.setContentsMargins(4,0,4,0);info.setSpacing(12)
-        self.stars=QLabel('☆☆☆☆☆');self.stars.setFixedWidth(92);self.stars.setStyleSheet('font-size:15px;letter-spacing:1px;color:'+theme.ICE+';');info.addWidget(self.stars)
+        self.stars=RatingStars();self.stars.rated.connect(self.grade)
+        rating_controls=QWidget();rating_controls_row=QHBoxLayout(rating_controls);rating_controls_row.setContentsMargins(0,0,0,0);rating_controls_row.setSpacing(12);rating_controls_row.addStretch();rating_controls_row.addWidget(self.stars)
+        self.preview_clear=host.button('清除评级',lambda:self.grade(0));rating_controls_row.addWidget(self.preview_clear);rating_controls_row.addStretch();column.insertWidget(1,rating_controls)
         self.name=InfoLabel('请选择照片文件夹');self.name.setObjectName('name');self.name.setFixedWidth(210);info.addWidget(self.name)
         self.names=[self.name]
         # Camera parameters belong beside the face crop, rather than the bottom status row.
@@ -182,6 +204,12 @@ class RatingPage(QWidget):
         from workbench import Workbench
         self.tools=Workbench(self,info,self.options)
         self.apply_keys(keys.load(QSettings('PhotoSieve','PhotoSieve'),ACTIONS,'rating_shortcuts/'))
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if hasattr(self,'aux'):
+            height=128 if self.height()<760 else 160
+            self.aux.setFixedHeight(height);self.face_panel.set_preview_limit(144,height-4)
+
     def apply_keys(self,chosen):
         self.chosen=chosen
         for shortcut in self.shortcut_objects:shortcut.setEnabled(False);shortcut.deleteLater()
@@ -459,7 +487,7 @@ class RatingPage(QWidget):
         self.stars.setText('★'*info['stars']+'☆'*(5-info['stars']) if info and info['state']=='ready' else '☆☆☆☆☆')
         self.stars.setToolTip(self.star_text(info))
         writable=self.can_grade();allowed=writable and not self.undoing and self.pending_count<256 and not self.listing and not self.host.closing and not self.host.busy and not self.host.job_running()
-        for button in self.star_buttons+[self.clear_button]:button.setEnabled(allowed)
+        for button in self.star_buttons+[self.clear_button,self.preview_clear,self.stars]:button.setEnabled(allowed)
         self.previous.setEnabled(bool(self.ids) and self.index>0 and not self.undoing and not self.host.closing);self.next.setEnabled(bool(self.ids) and self.index+1<len(self.ids) and not self.undoing and not self.host.closing)
         self.scope.setEnabled(not self.writing);self.filter.setEnabled(not self.writing);self.read_button.setEnabled(bool(self.records) and not self.writing)
         undo=False

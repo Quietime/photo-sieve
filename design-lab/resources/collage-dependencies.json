@@ -1,0 +1,9 @@
+{
+  "package": "librsvg2-bin",
+  "version": "2.60.0+dfsg-1",
+  "source": "https://deb.debian.org/debian/pool/main/libr/librsvg/librsvg2-bin_2.60.0+dfsg-1_amd64.deb",
+  "sha256": "f34154cb30c8a96dfa9e8e33ecc4320278495b48d3b36ecbdf6d3a1d06e2e900",
+  "installed_path": "/home/agent/.local/share/photosieve-design-tools/librsvg",
+  "command": "/home/agent/.local/bin/rsvg-convert",
+  "note": "User-local binary using installed librsvg 2.60.0. No root or system package changes."
+}

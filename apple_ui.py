@@ -1,15 +1,16 @@
 """Native Apple-style primitives: content-tinted glass, semantic controls and proximity feedback.
 
-Only tiny cached thumbnails feed the material. Photographs are never blurred, window screenshots are
-never taken, and no browser, shader dependency or idle animation loop is needed.
+Only a cached synthetic reflection feeds the progressive glass material. Photographs are never
+blurred, window screenshots are never taken, and no idle animation loop is needed.
 """
 from __future__ import annotations
 import math
 from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QEvent
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QRadialGradient, QPixmap, QCursor
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QRadialGradient, QPixmap, QCursor, QImage
 from PySide6.QtWidgets import QFrame, QPushButton, QMenu
 import theme
 import physics
+from glass_material import material_bytes
 
 
 def icon(painter, name, box, color):
@@ -45,13 +46,18 @@ class AppleButton(QPushButton):
     a press that compresses and bounces back on release, and a soft light that follows the pointer."""
     def __init__(self, text='', parent=None, symbol='', variant='neutral'):
         super().__init__(text,parent);self.symbol=symbol;self.variant=variant;self.shortcut='';self.hint=''
-        self.proximity=False;self.setMouseTracking(True);self.pointer=None
+        self.proximity=False;self.setMouseTracking(True);self.pointer=None;self.keyboard_focus=False
         k=physics.Spring
         self.hover_spring=k(self,300.,k.damping_for(300.,.75),changed=self.update)
         self.press_spring=k(self,900.,k.damping_for(900.,.42),changed=self.update)   # under-damped: one small bounce
         self.pull_x=k(self,240.,k.damping_for(240.,.7),changed=self.update);self.pull_y=k(self,240.,k.damping_for(240.,.7),changed=self.update)
         self.setCursor(Qt.CursorShape.PointingHandCursor);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.pressed.connect(self.compress);self.released.connect(self.release_spring)
+    def focusInEvent(self,event):
+        self.keyboard_focus=event.reason() in (Qt.FocusReason.TabFocusReason,Qt.FocusReason.BacktabFocusReason,Qt.FocusReason.ShortcutFocusReason)
+        super().focusInEvent(event)
+    def keyPressEvent(self,event):
+        self.keyboard_focus=True;self.update();super().keyPressEvent(event)
     @property
     def hover(self):return self.hover_spring.value
     @property
@@ -126,7 +132,7 @@ class AppleButton(QPushButton):
             badge=QRectF(x,self.height()/2-badge_height/2,badge_width,badge_height)
             painter.setBrush(QColor(255,255,255,18));painter.setPen(QPen(QColor(255,255,255,75 if theme.HIGH_CONTRAST else 32),1));painter.drawRoundedRect(badge,5,5)
             painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY));painter.drawText(badge,Qt.AlignmentFlag.AlignCenter,self.shortcut)
-        if self.hasFocus():
+        if self.hasFocus() and (self.keyboard_focus or theme.HIGH_CONTRAST):
             painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.BLUE),2));painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
 
 
@@ -161,6 +167,7 @@ class GlassSurface(QFrame):
     """A restrained navy glass surface with stable colour and a soft specular rim."""
     def __init__(self,parent=None):
         super().__init__(parent);self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
+        self._material_key=None;self._material_pixmap=None
     def set_sources(self,pixmaps):
         # Keep the navy tint stable rather than mixing the current photograph into it.
         return
@@ -173,8 +180,20 @@ class GlassSurface(QFrame):
         painter.fillPath(path,base)
         if theme.HIGH_CONTRAST:
             painter.setPen(QPen(QColor('#FFFFFF'),1.5));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawPath(path);return
-        # Two small gradients provide depth without photo tinting, blur or
-        # continually animated shaders. Their colour remains a muted navy.
+        if not theme.REDUCED_TRANSPARENCY:
+            # Blur only this synthetic UI reflection, never children, labels or photos.
+            # Broad reflections need no per-pixel or per-DPI rebuild during resizing.
+            # The rim and every control are still drawn at native display resolution.
+            key=(384,64)
+            if key!=self._material_key:
+                data=material_bytes(*key)
+                image=QImage(data,*key,key[0]*4,QImage.Format.Format_RGBA8888).copy()
+                self._material_pixmap=QPixmap.fromImage(image);self._material_key=key
+            painter.save();painter.setClipPath(path)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(rect,self._material_pixmap,QRectF(self._material_pixmap.rect()))
+            painter.restore()
+        # Stable contrast underneath the crisp controls; no continuously animated shader.
         light=QLinearGradient(rect.topLeft(),rect.bottomLeft())
         light.setColorAt(0,QColor(255,255,255,27));light.setColorAt(.48,QColor(255,255,255,3));light.setColorAt(1,QColor(0,0,0,15))
         painter.fillPath(path,light)

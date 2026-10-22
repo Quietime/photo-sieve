@@ -25,6 +25,18 @@ class WheelZoomTest(unittest.TestCase):
         self.wheel()
         self.assertEqual(self.view.transform().m11(), before)
         self.assertEqual(self.view.mapToScene(QPoint(240,190)), point)
+    def test_mixed_orientation_reference_never_outsizes_current_photo(self):
+        comparison=PhotoView();comparison.comparison_reference=self.view;comparison.resize(500,450);comparison.show()
+        try:
+            for left_size,right_size in [((600,900),(900,600)),((900,600),(600,900))]:
+                for size in [(800,600),(600,400)]:
+                    self.view.resize(*size);application.processEvents()
+                    left=QPixmap(*left_size);left.fill(QColor('blue'));right=QPixmap(*right_size);right.fill(QColor('red'))
+                    self.view.show_photo({'id':1},left);comparison.show_photo({'id':2},right)
+                    a=self.view.sceneRect();b=comparison.sceneRect()
+                    self.assertLessEqual(max(b.width(),b.height())*comparison.fit_scale(),.6*max(a.width(),a.height())*self.view.fit_scale()+.01)
+        finally:comparison.close();comparison.deleteLater()
+
     def test_comparison_is_smaller_after_resize_and_zoom_reset(self):
         comparison = PhotoView(fit_factor=.6); comparison.show()
         try:

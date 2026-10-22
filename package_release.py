@@ -34,7 +34,7 @@ def public(name):
 def sources():
     for p in sorted(tracked()):
         relative=p.relative_to(ROOT).as_posix()
-        if relative.startswith('third_party_licenses/') or not p.is_file():continue
+        if relative.startswith(('third_party_licenses/','design-lab/','.agents/')) or not p.is_file():continue
         if not public(relative):raise SystemExit('拒绝打包非源码文件：'+relative)
         yield p
 

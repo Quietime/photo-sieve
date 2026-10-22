@@ -15,7 +15,7 @@ ELEVATED3 = '#4C789B'
 SEPARATOR = '#4D5156'
 LABEL = '#F4F0E6'
 SECONDARY = '#C1BFB8'
-TERTIARY = '#918F88'
+TERTIARY = '#ACAAA3'
 ICE = '#A9C4E8'        # grading accent (stars, current thumbnail)
 LAVA = '#A8423C'       # screening accent
 BLUE = '#335E83'
@@ -68,9 +68,9 @@ QWidget#windowChrome {{ border-bottom:1px solid #3B3E43; }}
 QWidget#windowChrome QWidget, QWidget#workspaceToolbar QWidget {{ background:transparent; }}
 QLabel {{ background:transparent; }}
 QLabel#title {{ font-size:15px; font-weight:600; }}
-QLabel#hint {{ color:{TERTIARY}; font-size:11px; }}
-QLabel#subtitle, QLabel#caption {{ color:{SECONDARY}; font-size:12px; }}
-QLabel#subtitle {{ font-size:11px; }}
+QLabel#hint {{ color:{TERTIARY}; font-size:12px; }}
+QLabel#subtitle, QLabel#caption {{ color:{SECONDARY}; font-size:13px; }}
+QLabel#subtitle {{ font-size:12px; }}
 QLabel#name {{ font-size:13px; font-weight:500; }}
 QLabel#hero {{ font-size:34px; font-weight:600; }}
 QLabel#lead {{ color:{SECONDARY}; font-size:17px; }}
@@ -97,7 +97,7 @@ QFrame#actionbar QWidget {{ background:transparent; }}
 QFrame#divider {{ background:{SEPARATOR}; }}
 QFrame#sheet {{ background:{ELEVATED}; border-radius:18px; }}
 QGraphicsView {{ background:{BG}; border:0; }}
-QListWidget {{ background:transparent; border:0; outline:0; color:{SECONDARY}; font-size:12px; }}
+QListWidget {{ background:transparent; border:0; outline:0; color:{SECONDARY}; font-size:13px; }}
 QListWidget::item {{ border-radius:8px; padding:2px; border:2px solid transparent; }}
 QListWidget::item:hover {{ background:{ELEVATED}; }}
 QListWidget::item:selected {{ background:{ELEVATED2}; border:2px solid {LABEL}; color:{LABEL}; }}
