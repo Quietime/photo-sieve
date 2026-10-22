@@ -5,6 +5,15 @@ import sys
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()   # decoder processes of the packaged app branch off here
+    # A windowed PyInstaller error dialog would wait forever on an unattended CI runner.
+    # Test-only failures must retain their traceback and exit rather than open that dialog.
+    if any(argument.endswith('-self-test') for argument in sys.argv[1:]):
+        def self_test_error(kind,value,trace):
+            import os,traceback
+            from pathlib import Path
+            try:Path('self-test-error.log').write_text(''.join(traceback.format_exception(kind,value,trace)),encoding='utf-8')
+            finally:os._exit(1)
+        sys.excepthook=self_test_error
     if len(sys.argv)==3 and sys.argv[1]=='--workbench-self-test':
         from tools.check_workbench import run
         run(sys.argv[2]);sys.exit(0)

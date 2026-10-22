@@ -15,7 +15,9 @@ def run(output,raw_fixture=None):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     application=QApplication.instance() or QApplication([]);application.setStyleSheet(STYLE)
     checks=[]
-    def check(name,result):assert result,name;checks.append(name)
+    def check(name,result):
+        assert result,name;checks.append(name)
+        (output/'progress.json').write_text(json.dumps({'checks':checks},ensure_ascii=False),encoding='utf8')
     def until(test):
         deadline=time.monotonic()+20
         while time.monotonic()<deadline:

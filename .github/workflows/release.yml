@@ -504,17 +504,31 @@ jobs:
           if ($p.ExitCode -ne 0 -or !(Get-Content zoom-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged zoom motion failed' }
       - name: Verify changed review header in packaged EXE
         if: (env.CHECK_SCOPE == 'review_ui' || env.CHECK_SCOPE == 'layout')
+        timeout-minutes: 7
         env:
           QT_QPA_PLATFORM: windows
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--review-ui-self-test', 'review-frozen-ci', 'feature-fixtures/sony.ARW' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw 'Packaged review header checks failed' }
+          function Invoke-UiSelfTest([string[]]$TestArguments) {
+            Remove-Item self-test-error.log -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList $TestArguments -PassThru
+            if (!$p.WaitForExit(120000)) {
+              taskkill /PID $p.Id /T /F
+              Get-Content review-frozen-ci/progress.json -ErrorAction SilentlyContinue
+              throw 'Packaged UI self-test timed out'
+            }
+            $p.Refresh()
+            if ($p.ExitCode -ne 0) {
+              Get-Content self-test-error.log -ErrorAction SilentlyContinue
+              throw 'Packaged UI self-test failed'
+            }
+          }
+          Invoke-UiSelfTest -TestArguments @('--review-ui-self-test','review-frozen-ci','feature-fixtures/sony.ARW')
           if (!(Get-Content review-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Review header verification failed' }
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--mode-settings-self-test', 'mode-frozen-ci' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Get-Content mode-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged independent settings failed' }
-          $p = Start-Process -FilePath dist/PhotoSieve/PhotoSieve.exe -ArgumentList '--deleted-album-self-test', 'deleted-frozen-ci' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or !(Get-Content deleted-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged deleted album failed' }
+          Invoke-UiSelfTest -TestArguments @('--mode-settings-self-test','mode-frozen-ci')
+          if (!(Get-Content mode-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged independent settings failed' }
+          Invoke-UiSelfTest -TestArguments @('--deleted-album-self-test','deleted-frozen-ci')
+          if (!(Get-Content deleted-frozen-ci/report.json -Raw | ConvertFrom-Json).ok) { throw 'Packaged deleted album failed' }
       - name: Verify native grading in packaged UI release
         if: env.CHECK_SCOPE == 'review_ui'
         env:
@@ -613,6 +627,18 @@ jobs:
           if (!(Get-Content frozen-diagnostics-ci.json -Raw | ConvertFrom-Json).ok) { throw 'Diagnostics did not pass' }
           python tools/check_frozen_update.py
           if ($LASTEXITCODE -ne 0) { throw 'Frozen updater integration failed' }
+      - name: Retain packaged UI failure diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-packaged-UI-diagnostics
+          path: |
+            self-test-error.log
+            review-frozen-ci/**
+            mode-frozen-ci/**
+            deleted-frozen-ci/**
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: PhotoSieve-Windows-x64
