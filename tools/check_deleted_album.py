@@ -20,7 +20,7 @@ def run(output):
             application.processEvents()
             if test():return
             QTest.qWait(5)
-        raise AssertionError('Deleted album did not finish')
+        raise AssertionError('Deleted album did not finish: '+repr({'errors':errors if 'errors' in locals() else [],'state':window.library.state()['counts'] if 'window' in locals() else 'unavailable'}))
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir();settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat)
         settings.setValue('face_preview',False);settings.setValue('warm_count',0)
@@ -65,6 +65,7 @@ def run(output):
                 until(lambda:not window.importing and not window.busy and not window.fetching and library.state()['counts']['deleted']==1 and grid.count()==1)
                 window.grab().save(str(output/'external-disk-delete-after-rescan.png'))
                 checks.append('rescan_removes_manually_deleted_disk_file_from_gallery')
+                until(lambda:window.counts.get('deleted')==1 and not window.pending_ops and not window.job_running() and window.select_all_deleted.isEnabled())
                 window.select_all_deleted.click();assert window.all_deleted_selected and len(grid.selectedItems())==1
                 window.select_all_deleted.click();assert not grid.selectedItems();checks.append('select_all_and_clear_selection_operate')
                 window.select_all_deleted.click();assert window.all_deleted_selected and '全部' in window.purge_selected.text()

@@ -186,7 +186,7 @@ class RatingPage(QWidget):
         self.names=[self.name]
         # Camera parameters belong beside the face crop, rather than the bottom status row.
         self.status=InfoLabel('尚未读取 Windows 系统评级');self.status.setObjectName('caption');info.addWidget(self.status,2)
-        info.addWidget(self.note,1)
+        info.addWidget(self.note,1);self.note.hide();self.status.setToolTip(self.note.text())
         self.key_hint=QLabel();self.key_hint.setObjectName('hint');info.addWidget(self.key_hint)
         layout.addWidget(self.info_line)
         self.action_row=QScrollArea();self.action_row.setWidgetResizable(True);self.action_row.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded);self.action_row.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.action_row.setFixedHeight(36);self.action_row.setStyleSheet('QScrollArea {background:transparent;border:0;}');action_content=QWidget();self.action_row.setWidget(action_content);outer_controls=QHBoxLayout(action_content);outer_controls.setContentsMargins(0,0,0,0);outer_controls.addStretch();self.dock=GlassDock();controls=QHBoxLayout(self.dock);controls.setContentsMargins(4,1,4,1);controls.setSpacing(3);self.previous=host.button('上一张',lambda:self.move(-1));controls.addWidget(self.previous)
