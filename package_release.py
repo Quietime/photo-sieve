@@ -26,7 +26,7 @@ def tracked():
 def public(name):
     path=PurePosixPath(name)
     if path.parts[-2:] in {('assets','photosieve.ico'),('assets','photosieve.png'),('assets','welcome-background.png'),('assets','face_detection_yunet_2023mar.onnx'),('assets','haarcascade_eye_tree_eyeglasses.xml')}: return True
-    if path.as_posix() == 'assets/remote/vendor/gsap.min.js': return True
+    if path.parts[-4:] == ('assets','remote','vendor','gsap.min.js'): return True
     if path.parts[-3:-1]==('assets','remote') and path.name in REMOTE_PAGE: return True
     if (path.parts[-4:-2]==('assets','theme') and path.suffix.lower()=='.png') or path.parts[-3:]==('assets','theme','manifest.json'): return True
     if path.parts[-3:-1]==('assets','fonts') and path.suffix.lower() in {'.ttf','.txt'}: return True   # OFL title-glyph subsets
