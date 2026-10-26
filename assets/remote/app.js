@@ -19,6 +19,21 @@
   if (!key) { $('pair').hidden = false; return; }
 
   let state = null, rev = 0, shownId = null, busyGesture = false, poller = null;
+  let controllerOnly = false;
+  try { controllerOnly = localStorage.getItem('photosieve-controller-only') !== 'false'; } catch (_) {}
+  function setController(value) {
+    controllerOnly = value; app.dataset.controller = String(value);
+    $('controller-toggle').setAttribute('aria-pressed', String(value));
+    $('controller-toggle').textContent = value ? '预览' : '按键';
+    $('controller-toggle').setAttribute('aria-label', value ? '切换照片预览' : '切换大按键控制器');
+    try { localStorage.setItem('photosieve-controller-only', String(value)); } catch (_) {}
+    if (state) render();
+  }
+  $('controller-toggle').addEventListener('click', () => setController(!controllerOnly));
+  app.dataset.controller = String(controllerOnly);
+  $('controller-toggle').setAttribute('aria-pressed', String(controllerOnly));
+  $('controller-toggle').textContent = controllerOnly ? '预览' : '按键';
+  $('controller-toggle').setAttribute('aria-label', controllerOnly ? '切换照片预览' : '切换大按键控制器');
   const images = new Map();   // photo id -> {url, promise}
   const edge = Math.min(1600, Math.round(Math.max(innerWidth, innerHeight) * Math.min(3, devicePixelRatio || 1)));
 
@@ -45,7 +60,7 @@
         const response = await api(`api/state?since=${rev}`, { signal: controller.signal });
         const next = await response.json();
         setOnline(true); backoff = 600;
-        if (next.rev !== rev) apply(next);
+        if (next.rev !== rev || next.instance !== state?.instance) apply(next);
       } catch (error) {
         if (error instanceof KeyError) { forgetKey(); return; }
         if (error.name === 'AbortError') continue;
@@ -59,24 +74,44 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) repoll(false); });
 
-  async function act(action, value) {
+  // Serialize taps so HTTP scheduling cannot reverse keep/delete/next. Never retry an
+  // uncertain command automatically: the desktop might already have applied it.
+  let commandTail = Promise.resolve(), queued = 0;
+  function act(action, value) {
+    if (app.dataset.online !== 'true' || !state || state.blocked) {
+      toast(state && state.blocked || '正在连接电脑，请稍候', true); return Promise.resolve(false);
+    }
+    if (queued >= 12) { toast('操作较快，请稍候', true); return Promise.resolve(false); }
+    const mode = state.mode;
+    queued++;
+    const next = commandTail.then(() => {
+      if (mode !== state.mode || app.dataset.online !== 'true') return false;
+      return sendAction(action, value);
+    }).finally(() => { queued--; });
+    commandTail = next.catch(() => false);
+    return next;
+  }
+  async function sendAction(action, value) {
     haptic(action === 'delete' ? 18 : 8);
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), 6000);
     try {
-      const response = await api('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, value }) });
+      const response = await api('api/act', { signal: timeout.signal, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, value }) });
       const result = await response.json();
       if (!result.ok && result.reason) toast(result.reason, true);
       if (result.state && result.state.rev >= rev) apply(result.state);
       return result.ok;
     } catch (error) {
-      if (error instanceof KeyError) forgetKey(); else toast('没有连上电脑，请检查是否在同一网络', true);
+      setOnline(false);
+      if (error instanceof KeyError) forgetKey(); else toast('连接中断，请在电脑确认最后一次操作', true);
       return false;
-    }
+    } finally { clearTimeout(timer); }
   }
 
   function image(id) {
     if (images.has(id)) return images.get(id).promise;
     const entry = { url: '', promise: null };
-    entry.promise = api(`api/photo?id=${id}&w=${edge}`).then((r) => r.blob()).then((blob) => { entry.url = URL.createObjectURL(blob); return entry.url; });
+    entry.promise = api(`api/photo?id=${id}&w=${edge}`).then((r) => r.blob()).then((blob) => { entry.url = URL.createObjectURL(blob); if (images.get(id) !== entry) URL.revokeObjectURL(entry.url); return entry.url; });
     entry.promise.catch(() => images.delete(id));
     images.set(id, entry);
     return entry.promise;
@@ -94,7 +129,11 @@
     if (!value) $('status').textContent = '连接中断，正在重连…';
     else if (state) render();
   }
-  function apply(next) { state = next; rev = next.rev; render(); }
+  function apply(next) {
+    if (state && next.instance === state.instance && next.rev < rev) return;
+    if (state && next.instance !== state.instance) { keepImages([]); shownId = null; }
+    state = next; rev = next.rev; render();
+  }
 
   function render() {
     if (!state) return;
@@ -129,9 +168,11 @@
       $('empty').hidden = true; card.hidden = false;
       $('name').textContent = part.photo.name + (part.photo.pending ? ' · 正在写入' : '');
       $('camera').textContent = part.photo.camera || '';
-      show(part.photo.id);
-      for (const id of part.next) image(id);
-      keepImages([part.photo.id, ...part.next]);
+      if (!controllerOnly) {
+        show(part.photo.id);
+        for (const id of part.next) image(id).catch(() => {});
+        keepImages([part.photo.id, ...part.next]);
+      } else { shownId = null; photo.removeAttribute('src'); keepImages([]); }
     } else if (mode === 'screen' && part.view !== 'pending') {
       showEmpty(`电脑正在查看“${part.view === 'keep' ? '保留' : '已删除'}”`, ['回到未筛选', () => act('pending')]);
     } else {
@@ -269,7 +310,7 @@
 
   async function perform(action, direction) {
     const advancing = ['keep', 'delete', 'next'].includes(action);
-    if (!advancing || !direction) { await act(action); return; }
+    if (controllerOnly || !advancing || !direction) { await act(action); return; }
     busyGesture = true;
     const part = state.mode === 'screen' ? state.screen : state.grade;
     const upcoming = part.next && part.next[0];
@@ -278,7 +319,8 @@
   }
   function finishFling(upcoming) {
     resetCard(); busyGesture = false;
-    if (upcoming && images.has(upcoming)) { shownId = null; show(upcoming); }
+    const current = state && (state.mode === 'screen' ? state.screen : state.grade);
+    if (!controllerOnly && current && current.photo) { shownId = null; show(current.photo.id); }
     // The next photo rises into place on a stiff spring.
     spring({ x: 0, y: 24 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { stiffness: 520, damping: 34 }, (p) => place(p, Math.min(1, 1 - p.y / 30)));
   }
@@ -325,7 +367,7 @@
         const refresh = pulled > 60; pulled = 0;
         spring({ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, {}, () => {});
         $('pull').style.transform = ''; place({ x: 0, y: 0 });
-        if (refresh) { haptic(6); images.clear(); shownId = null; repoll(true); toast('已刷新'); }
+        if (refresh) { haptic(6); keepImages([]); shownId = null; repoll(true); toast('已刷新'); }
         return;
       }
       if (card.hidden) return;

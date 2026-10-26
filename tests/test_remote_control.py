@@ -168,6 +168,32 @@ class RemoteTest(unittest.TestCase):
         reply = self.json('/api/act', key=self.remote.key, body={'action': 'keep'})[1]
         self.assertFalse(reply['ok']); self.assertIn('设置菜单', reply['reason']); self.assertEqual(self.window.acts, [])
 
+    def test_disabled_or_busy_commands_report_rejection(self):
+        self.window.keep_button = enabled(False)
+        self.assertFalse(self.remote.execute('keep', None)[0])
+        self.assertEqual(self.window.acts, [])
+        self.window.busy = True
+        self.assertFalse(self.remote.execute('next', None)[0])
+        self.window.busy = False
+        self.window.rating_active = True
+        self.window.rating_page.listing = True
+        self.assertFalse(self.remote.execute('star', 3)[0])
+        self.window.rating_page.grade.assert_not_called()
+
+    def test_old_server_revision_reconnects_without_long_poll_delay(self):
+        before = time.monotonic()
+        result = self.remote.wait_state(self.remote.rev + 100, 2)
+        self.assertLess(time.monotonic() - before, .1)
+        self.assertEqual(result['instance'], self.remote.instance)
+
+    def test_expired_queued_command_cannot_run_late(self):
+        command = remote_control._Command('delete', None)
+        command.deadline = time.monotonic() - 1
+        self.remote.run(command)
+        self.assertTrue(command.done.is_set())
+        self.assertFalse(command.result[0])
+        self.assertEqual(self.window.acts, [])
+
     def test_bad_bodies_are_rejected(self):
         key = self.remote.key
         for body in (b'', b'not json', b'{"value": 1}', b'{"action": 5}', json.dumps({'action': 'keep', 'pad': 'x' * 3000}).encode()):

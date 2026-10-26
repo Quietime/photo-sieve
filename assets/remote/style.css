@@ -130,3 +130,25 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 @media (min-width: 700px) {
   .app { max-width: 560px; margin: 0 auto; }
 }
+
+/* Controller mode never downloads previews; the desktop remains the viewing surface. */
+.controller-summary { display: none; }
+.layout-toggle { font-size: 12px; }
+.layout-toggle[aria-pressed="true"] { background: var(--ice-deep); color: white; }
+.app[data-controller="true"] { grid-template-rows: auto auto auto minmax(0, 1fr); }
+.app[data-controller="true"] .stage { display: none; }
+.app[data-controller="true"] .controller-summary { display: flex; flex-direction: column; gap: 8px; padding: 14px 4px; color: var(--muted); font-size: 13px; }
+.app[data-controller="true"] .controller-summary strong { color: var(--text); font-size: 20px; }
+.app[data-controller="true"] .controls-screen { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.app[data-controller="true"] .key { height: 100%; min-height: 64px; font-size: 16px; gap: 10px; }
+.app[data-controller="true"] .key svg { width: 30px; height: 30px; }
+.app[data-controller="true"][data-mode="grade"] .controls-grade { display: grid; grid-template-rows: minmax(70px, 1fr) minmax(64px, 1fr); }
+.app[data-controller="true"] .star { height: 100%; }
+.app[data-controller="true"] .controls-grade .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.app[data-online="false"] .controls { pointer-events: none; opacity: .45; }
+@media (max-width: 390px) { .bar { flex-wrap: wrap; } .brand { flex-basis: calc(100% - 110px); } .modes { margin-left: auto; } }
+@media (orientation: landscape) and (max-height: 500px) {
+  .app[data-controller="true"] .controller-summary { display: none; }
+  .app[data-controller="true"] { grid-template-rows: auto auto minmax(0, 1fr); }
+  .app[data-controller="true"] .controls-screen { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: 1fr; }
+}

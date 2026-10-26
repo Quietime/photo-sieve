@@ -11,7 +11,7 @@ on:
         description: Validation scope
         type: choice
         default: full
-        options: [layout, workbench_ui, workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
+        options: [remote, layout, workbench_ui, workbench, rating_latency, rating_zoom, rating_cache, full, update_ui, features, review_ui, zoom_ui, cache_all, cache_all_final, deletion, responsiveness, cache_ui]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
-      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:layout]') && 'layout') || (contains(github.event.head_commit.message, '[checks:workbench-ui]') && 'workbench_ui') || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
+      CHECK_SCOPE: ${{ inputs.checks || (contains(github.event.head_commit.message, '[checks:remote]') && 'remote') || (contains(github.event.head_commit.message, '[checks:layout]') && 'layout') || (contains(github.event.head_commit.message, '[checks:workbench-ui]') && 'workbench_ui') || (contains(github.event.head_commit.message, '[checks:workbench]') && 'workbench') || (contains(github.event.head_commit.message, '[checks:rating-latency]') && 'rating_latency') || (contains(github.event.head_commit.message, '[checks:rating-zoom]') && 'rating_zoom') || (contains(github.event.head_commit.message, '[checks:rating-cache]') && 'rating_cache') || (contains(github.event.head_commit.message, '[checks:cache-all-final]') && 'cache_all_final') || (contains(github.event.head_commit.message, '[checks:cache-all]') && 'cache_all') || (contains(github.event.head_commit.message, '[checks:cache-ui]') && 'cache_ui') || (contains(github.event.head_commit.message, '[checks:responsiveness]') && 'responsiveness') || (contains(github.event.head_commit.message, '[checks:deletion]') && 'deletion') || (contains(github.event.head_commit.message, '[checks:zoom-ui]') && 'zoom_ui') || (contains(github.event.head_commit.message, '[checks:review-ui]') && 'review_ui') || (contains(github.event.head_commit.message, '[checks:features]') && 'features') || (contains(github.event.head_commit.message, '[checks:update-ui]') && 'update_ui') || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,6 +32,21 @@ jobs:
           cache: pip
       - name: Install native dependencies
         run: python -m pip install -r requirements-desktop.txt 'pyinstaller>=6,<7'
+      - name: Verify phone controller protocol and safeguards
+        if: env.CHECK_SCOPE == 'remote'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest tests.test_remote_control -v
+      - name: Verify phone browser and native desktop interactions
+        if: env.CHECK_SCOPE == 'remote'
+        timeout-minutes: 6
+        env:
+          QT_QPA_PLATFORM: windows
+          NODE_PATH: ${{ github.workspace }}/remote-browser-ci/node_modules
+        run: |
+          npm install --prefix remote-browser-ci playwright@1.56.0
+          node remote-browser-ci/node_modules/playwright/cli.js install chromium
+          python tools/check_remote.py remote-controller-ci
       - name: Prepare verified offline ARW metadata runtime
         run: python tools/prepare_exiftool.py
       - name: Prepare public verification photos

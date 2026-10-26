@@ -21,6 +21,7 @@
         <div class="status" id="status" aria-live="polite">正在连接电脑…</div>
       </div>
     </div>
+    <button class="undo layout-toggle" id="controller-toggle" aria-label="切换大按键控制器" aria-pressed="false">按键</button>
     <button class="undo" id="undo" data-action="undo" aria-label="撤销上一步">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12h-2"/></svg>
     </button>
@@ -51,6 +52,7 @@
     <div class="camera" id="camera"></div>
   </section>
 
+  <section class="controller-summary" aria-label="控制器提示"><strong>看电脑，用手机操作</strong><span>保留／删除作用于电脑左侧当前照片</span></section>
   <section class="controls controls-screen" aria-label="筛选操作">
     <button class="key" id="restore" data-action="restore" aria-label="恢复最近删除">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 3 9l5 5M3 9h11a6 6 0 0 1 0 12h-3"/></svg><span>恢复</span>

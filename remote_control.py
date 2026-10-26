@@ -71,7 +71,7 @@ def lan_addresses():
 
 class _Command:
     def __init__(self, action, value):
-        self.action = action; self.value = value; self.done = threading.Event(); self.result = None
+        self.action = action; self.value = value; self.done = threading.Event(); self.result = None; self.deadline = time.monotonic() + 4.0
 
 
 class _Inbox(QObject):
@@ -90,13 +90,13 @@ class RemoteControl(QObject):
         if len(self.key) < 20:
             self.reset_key(save_only=True)
         self.port = int(self.settings.value('remote/port', DEFAULT_PORT) or DEFAULT_PORT)
-        self.server = None; self.thread = None
+        self.server = None; self.thread = None; self.instance = secrets.token_hex(8)
         self.cond = threading.Condition(); self.state = {'rev': 0, 'running': False}; self.rev = 0; self.allowed = {}
         self.clients = OrderedDict(); self.last_request = 0.0; self.last_json = ''
         self.photos = OrderedDict(); self.photo_lock = threading.Lock()
         self.inbox = _Inbox(self); self.inbox.arrived.connect(self.run, Qt.ConnectionType.QueuedConnection)
         self.inbox.visitor.connect(self.changed.emit, Qt.ConnectionType.QueuedConnection)
-        self.timer = QTimer(self); self.timer.setInterval(150); self.timer.timeout.connect(self.tick)
+        self.timer = QTimer(self); self.timer.setInterval(50); self.timer.timeout.connect(self.tick)
 
     # ---- lifecycle (interface thread) -------------------------------------------------------
     @property
@@ -116,6 +116,7 @@ class RemoteControl(QObject):
         else:
             raise OSError(f'无法开启手机遥控：{last_error}')
         server.remote = self; self.server = server; self.port = server.server_address[1]
+        self.instance = secrets.token_hex(8)
         self.thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.3}, name='phone-remote', daemon=True)
         self.thread.start(); self.settings.setValue('remote/enabled', True)
         self.refresh(force=True); self.timer.start(); self.changed.emit()
@@ -127,7 +128,7 @@ class RemoteControl(QObject):
         if server:
             threading.Thread(target=lambda: (server.shutdown(), server.server_close()), daemon=True).start()
         with self.cond:
-            self.state = {'rev': self.rev + 1, 'running': False}; self.rev += 1; self.cond.notify_all()
+            self.state = {'rev': self.rev + 1, 'running': False, 'instance': self.instance}; self.rev += 1; self.cond.notify_all()
         if remember:
             self.settings.setValue('remote/enabled', False)
         self.changed.emit()
@@ -164,7 +165,7 @@ class RemoteControl(QObject):
 
     def snapshot(self):
         w = self.window; library = getattr(w, 'library', None)
-        state = {'session': bool(getattr(w, 'session_active', False)), 'mode': 'grade' if w.rating_active else 'screen',
+        state = {'instance': self.instance, 'session': bool(getattr(w, 'session_active', False)), 'mode': 'grade' if w.rating_active else 'screen',
                  'folder': '', 'busy': bool(w.busy or w.pending_ops or w.job_running()), 'blocked': self.blocked()}
         root = (w.state_data or {}).get('root') or ''
         state['folder'] = Path(root).name or root
@@ -233,7 +234,7 @@ class RemoteControl(QObject):
     # ---- commands (interface thread) ---------------------------------------------------------
     def run(self, command):
         try:
-            command.result = self.execute(command.action, command.value)
+            command.result = (False, '操作已超时，请重试') if time.monotonic() >= command.deadline else self.execute(command.action, command.value)
         except Exception as error:   # a failing command must never take the remote down
             command.result = (False, f'操作失败：{error}')
         self.refresh()
@@ -244,6 +245,8 @@ class RemoteControl(QObject):
         reason = self.blocked()
         if reason:
             return False, reason
+        if not w.session_active or w.busy or w.job_running():
+            return False, '请等待电脑打开照片文件夹'
         if action == 'mode':
             if value not in ('screen', 'grade'):
                 return False, '未知模式'
@@ -258,6 +261,10 @@ class RemoteControl(QObject):
             if action not in GRADE_ACTIONS:
                 return False, '照片分级中没有这个操作'
             page = w.rating_page
+            can = self.grade_state({})['can']
+            capability = 'grade' if action in ('star', 'label') else action
+            if not can.get(capability):
+                return False, '当前无法进行此操作，请等待电脑就绪'
             if action == 'star':
                 if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 5:
                     return False, '星级应为 0–5'
@@ -282,6 +289,8 @@ class RemoteControl(QObject):
             return True, ''
         if w.view != 'pending' or w.stack.currentIndex() != 0:
             return False, '电脑没有停在“未筛选”，请先切回'
+        if not self.screen_state({})['can'].get(action):
+            return False, '当前无法进行此操作，请等待电脑就绪'
         {'keep': lambda: w.act('keep'), 'delete': lambda: w.act('delete'), 'next': w.next_photo,
          'restore': lambda: w.restore(), 'undo': lambda: w.restore(general=True)}[action]()
         return True, ''
@@ -314,7 +323,7 @@ class RemoteControl(QObject):
     def wait_state(self, since, timeout):
         deadline = time.monotonic() + timeout
         with self.cond:
-            while self.server is not None and self.state.get('rev', 0) <= since:
+            while self.server is not None and self.state.get('rev', 0) == since:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     break
@@ -322,7 +331,7 @@ class RemoteControl(QObject):
             return dict(self.state)
 
     def submit(self, action, value, timeout=4.0):
-        command = _Command(action, value)
+        command = _Command(action, value); command.deadline = time.monotonic() + timeout
         self.inbox.arrived.emit(command)
         if not command.done.wait(timeout):
             return False, '电脑没有及时响应', self.current()
@@ -362,6 +371,12 @@ class _Server(ThreadingHTTPServer):
     def __init__(self, address, handler):
         super().__init__(address, handler)
         self.slots = threading.BoundedSemaphore(MAX_HANDLERS)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        # Commands and long-poll replies are tiny; avoid Nagle/delayed-ACK stalls.
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return connection, address
 
     def handle_error(self, request, client_address):
         import sys
@@ -519,7 +534,7 @@ def open_dialog(window):
     body = QHBoxLayout(); body.setSpacing(20); layout.addLayout(body, 1)
     code = QLabel(); code.setFixedSize(220, 220); code.setAccessibleName('配对二维码'); body.addWidget(code, 0, Qt.AlignmentFlag.AlignTop)
     side = QVBoxLayout(); side.setSpacing(10); body.addLayout(side, 1)
-    steps = QLabel('1. 手机连上与电脑相同的 Wi‑Fi\n2. 用相机或微信扫描左侧二维码\n3. 上滑保留、下滑删除、左滑下一张、右滑恢复；分级时点四芒星打分')
+    steps = QLabel('1. 手机连上与电脑相同的 Wi‑Fi\n2. 用相机或微信扫描左侧二维码\n3. 默认大按键控制器，看电脑即可操作；点“预览”查看照片\n也可预览照片：上滑保留、下滑删除；分级时点星级打分')
     steps.setWordWrap(True); side.addWidget(steps)
     address = QComboBox(); address.setAccessibleName('电脑地址'); side.addWidget(address)
     link = QLabel(); link.setObjectName('caption'); link.setWordWrap(True); link.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); side.addWidget(link)

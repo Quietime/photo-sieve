@@ -35,11 +35,32 @@ const { chromium, devices } = playwright;
     await page.mouse.up();
   }
   try {
+    await context.addInitScript(() => localStorage.setItem('photosieve-controller-only', 'false'));
     await page.goto(url);
     if (new URL(page.url()).hash) throw new Error('key left in the address bar');
     await page.waitForSelector('#photo.ready', { timeout: 20000 });
     const start = await pending(); step('loaded', { pending: start }); await shot('01-screen');
 
+    await page.click('#controller-toggle');
+    await page.waitForTimeout(400);
+    let previewRequests = 0;
+    const latencies = [];
+    page.on('requestfinished', request => {
+      if (request.url().endsWith('/api/act')) { const timing = request.timing(); latencies.push(timing.responseEnd); }
+    });
+    const countPreview = request => { if (request.url().includes('/api/photo')) previewRequests++; };
+    page.on('request', countPreview);
+    await page.evaluate(() => { for (let i = 0; i < 4; i++) document.getElementById('next').click(); });
+    await page.waitForTimeout(1000);
+    if (previewRequests) throw new Error('controller mode fetched photos');
+    if (await page.locator('#stage').isVisible()) throw new Error('controller still shows preview');
+    if (await page.locator('.controls-grade').isVisible()) throw new Error('grading controls visible in screening');
+    const bounds = await page.locator('.controls-screen').boundingBox();
+    if (bounds.y + bounds.height > page.viewportSize().height + 1) throw new Error('controller exceeds viewport');
+    await shot('00-controller'); step('controller-no-preview-and-rapid-next', { commandRoundTripMs: latencies.map(n => Math.round(n)) });
+    page.off('request', countPreview);
+    await page.click('#controller-toggle');
+    await page.waitForSelector('#photo.ready');
     let before = await photoId();
     await swipe(0, -300); await waitFor(async () => (await pending()) === start - 1, 'swipe up keeps');
     await waitFor(async () => (await photoId()) !== before && await page.locator('#photo.ready').count(), 'next photo shown');
