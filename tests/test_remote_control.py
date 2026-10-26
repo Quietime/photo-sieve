@@ -180,6 +180,15 @@ class RemoteTest(unittest.TestCase):
         self.assertFalse(self.remote.execute('star', 3)[0])
         self.window.rating_page.grade.assert_not_called()
 
+    def test_usb_links_and_local_motion_asset(self):
+        from urllib.parse import urlsplit
+        link = urlsplit(self.remote.urls('usb')[0])
+        self.assertEqual(link.query, 'via=usb')
+        self.assertEqual(link.fragment, 'k=' + self.remote.key)
+        self.assertEqual(urlsplit(self.remote.urls()[0]).query, '')
+        self.assertEqual(self.call('/vendor/gsap.min.js')['status'], 200)
+        self.assertEqual(self.call('/vendor/../remote_control.py')['status'], 404)
+
     def test_old_server_revision_reconnects_without_long_poll_delay(self):
         before = time.monotonic()
         result = self.remote.wait_state(self.remote.rev + 100, 2)

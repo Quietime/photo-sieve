@@ -37,6 +37,7 @@ PHOTO_EDGE = 1600            # the smallest preview edge the desktop already cac
 SCREEN_ACTIONS = {'keep', 'delete', 'next', 'restore', 'undo', 'pending'}
 GRADE_ACTIONS = {'star', 'previous', 'next', 'undo', 'label'}
 STATIC = {'': ('index.html', 'text/html; charset=utf-8'), 'index.html': ('index.html', 'text/html; charset=utf-8'),
+          'vendor/gsap.min.js': ('vendor/gsap.min.js', 'text/javascript; charset=utf-8'),
           'app.js': ('app.js', 'text/javascript; charset=utf-8'), 'style.css': ('style.css', 'text/css; charset=utf-8'),
           'manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
 ASSET = re.compile(r'^art/([a-z0-9][a-z0-9-]{0,60})\.(png|webp|jpg|svg)$')
@@ -56,6 +57,17 @@ def lan_addresses():
         finally:
             probe.close()
     except OSError:
+        pass
+    # USB tethering adapters may not be the default route or in the hostname DNS.
+    # Enumerate all up IPv4 interfaces so Android's USB network address is offered too.
+    try:
+        from PySide6.QtNetwork import QNetworkInterface
+        for interface in QNetworkInterface.allInterfaces():
+            if interface.flags() & QNetworkInterface.InterfaceFlag.IsUp:
+                for entry in interface.addressEntries():
+                    ip = entry.ip().toString()
+                    if re.fullmatch(r'\d+\.\d+\.\d+\.\d+', ip): found.append(ip)
+    except (ImportError, RuntimeError):
         pass
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
@@ -141,8 +153,9 @@ class RemoteControl(QObject):
                 self.cond.notify_all()     # pollers holding the old key get 403 on their next call
             self.changed.emit()
 
-    def urls(self):
-        return [f'http://{ip}:{self.port}/#k={self.key}' for ip in lan_addresses()]
+    def urls(self, transport='wifi'):
+        query = '?via=usb' if transport == 'usb' else ''
+        return [f'http://{ip}:{self.port}/{query}#k={self.key}' for ip in lan_addresses()]
 
     def connected(self, within=IDLE_SECONDS):
         now = time.monotonic()
@@ -531,6 +544,8 @@ def open_dialog(window):
     dialog = QDialog(window); dialog.remote_dialog = True; dialog.setWindowTitle('手机遥控'); dialog.setMinimumSize(560, 470)
     layout = QVBoxLayout(dialog); layout.setContentsMargins(24, 20, 24, 24); layout.setSpacing(14)
     switch = QCheckBox('开启手机遥控（同一 Wi‑Fi 下用手机代替键盘）'); layout.addWidget(switch)
+    transport = QComboBox(); transport.addItem('Wi-Fi 无线连接', 'wifi'); transport.addItem('安卓 USB 有线连接', 'usb')
+    transport.setAccessibleName('连接方式'); transport.setCurrentIndex(1 if remote.settings.value('remote/transport','wifi') == 'usb' else 0); layout.addWidget(transport)
     body = QHBoxLayout(); body.setSpacing(20); layout.addLayout(body, 1)
     code = QLabel(); code.setFixedSize(220, 220); code.setAccessibleName('配对二维码'); body.addWidget(code, 0, Qt.AlignmentFlag.AlignTop)
     side = QVBoxLayout(); side.setSpacing(10); body.addLayout(side, 1)
@@ -548,15 +563,20 @@ def open_dialog(window):
     buttons.addWidget(copy); buttons.addWidget(reset); buttons.addStretch(); buttons.addWidget(window.button('完成', dialog.accept, 'primary'))
 
     def current_url():
-        urls = remote.urls(); index = max(0, min(address.currentIndex(), len(urls) - 1))
+        urls = remote.urls(transport.currentData()); index = max(0, min(address.currentIndex(), len(urls) - 1))
         return urls[index] if remote.running else ''
 
     def refresh():
         on = remote.running
         switch.blockSignals(True); switch.setChecked(on); switch.blockSignals(False)
-        ips = [u.split('/')[2] for u in remote.urls()]
+        usb = transport.currentData() == 'usb'
+        steps.setText('1. 安卓手机用数据线连接电脑\n2. 手机设置 → 个人热点／网络共享 → 开启 USB 网络共享\n3. 在下方选择 USB 网卡的电脑地址，扫码打开控制器\n无需 USB 调试；若地址未出现，稍候会自动刷新。' if usb else '1. 手机与电脑连接同一 Wi-Fi\n2. 手机相机扫描二维码\n3. 默认大按键控制器，也可点预览查看照片')
+        ips = [u.split('/')[2] for u in remote.urls(transport.currentData())]
         if [address.itemText(i) for i in range(address.count())] != ips:
-            address.blockSignals(True); address.clear(); address.addItems(ips); address.blockSignals(False)
+            selected = address.currentText()
+            address.blockSignals(True); address.clear(); address.addItems(ips)
+            if selected in ips: address.setCurrentText(selected)
+            address.blockSignals(False)
         address.setEnabled(on and len(ips) > 1); copy.setEnabled(on); reset.setEnabled(True)
         url = current_url()
         if on:
@@ -573,6 +593,7 @@ def open_dialog(window):
             window.error(str(error))
         refresh()
 
+    transport.currentIndexChanged.connect(lambda _: (remote.settings.setValue('remote/transport',transport.currentData()), refresh()))
     switch.toggled.connect(toggled); address.currentIndexChanged.connect(lambda _: refresh())
     remote.changed.connect(refresh)
     timer = QTimer(dialog); timer.timeout.connect(refresh); timer.start(2000)

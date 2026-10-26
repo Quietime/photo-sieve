@@ -5,6 +5,8 @@
   const $ = (id) => document.getElementById(id);
   const app = $('app'), stage = $('stage'), card = $('card'), photo = $('photo');
   const STORE = 'photosieve-remote-key';
+  const wired = new URLSearchParams(location.search).get('via') === 'usb';
+  $('transport-note').textContent = wired ? 'USB 网络直连' : 'Wi-Fi 局域网直连';
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   let key = '';
@@ -12,7 +14,7 @@
   if (fromLink) {
     key = fromLink[1];
     try { localStorage.setItem(STORE, key); } catch (_) { /* private mode: the key lives for this tab */ }
-    history.replaceState(null, '', location.pathname);   // keep the key out of the address bar
+    history.replaceState(null, '', location.pathname + location.search);   // keep the key out of the address bar
   } else {
     try { key = localStorage.getItem(STORE) || ''; } catch (_) { key = ''; }
   }
@@ -126,6 +128,7 @@
   function setOnline(value) {
     if (app.dataset.online === String(value)) return;
     app.dataset.online = String(value);
+    $('connection').textContent = value ? (wired ? '已连接 · USB 网络模式' : '已连接 · Wi-Fi 模式') : '连接中断，正在重连…';
     if (!value) $('status').textContent = '连接中断，正在重连…';
     else if (state) render();
   }
@@ -149,6 +152,8 @@
     else if (mode === 'screen') status = `未筛选 ${fmt(part.counts.pending)} · 保留 ${fmt(part.counts.keep)} · 已删除 ${fmt(part.counts.deleted)}`;
     else status = part.total ? `第 ${fmt(part.index + 1)} / ${fmt(part.total)} 张` : '没有照片';
     $('status').textContent = status;
+    $('controller-note').textContent = state.blocked || (mode === 'screen' ? '保留／删除只操作电脑左侧照片' : '评级写入电脑当前选中照片');
+    if (mode === 'screen') for (const kind of ['pending','keep','deleted']) $('count-' + kind).textContent = fmt(part.counts[kind]);
     const can = part.can || {};
     for (const id of ['keep', 'delete', 'next', 'restore']) $(id).disabled = !can[id];
     $('undo').disabled = !can.undo;
@@ -403,6 +408,16 @@
     }
   })();
 
+  // Motion Prompt #060 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#060
+  // Segmented selection feedback uses the original 250ms easeInOutCubic timing.
+  const eio = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+  for (const button of document.querySelectorAll('.key,.star,.undo,.mode')) {
+    button.addEventListener('pointerdown', () => {
+      if (!reduced && !button.disabled && window.gsap) gsap.to(button, {scale:.96, duration:.08, overwrite:true});
+    });
+    const release = () => { if (!reduced && window.gsap) gsap.to(button, {scale:1, duration:button.classList.contains('mode') ? .25 : .16, ease:eio, overwrite:true}); };
+    button.addEventListener('pointerup', release); button.addEventListener('pointercancel', release); button.addEventListener('pointerleave', release);
+  }
   // ---- buttons ------------------------------------------------------------------------------
   const directions = { keep: { x: 0, y: -1 }, delete: { x: 0, y: 1 }, next: { x: -1, y: 0 } };
   for (const button of document.querySelectorAll('[data-action]')) {

@@ -51,3 +51,10 @@ Source and documentation: https://exiftool.org/
 Eye-region classifier: OpenCV haarcascade_eye_tree_eyeglasses.xml, Intel Open Source Computer Vision Library license; full notice in assets/eye-model-license.txt and XML header.
 
 Mars concert decoration pack: supplied by the application owner. Artwork extracted from Hua Chenyu Mars concert posters; copyright belongs to the respective artwork owners. Decorative artwork is not covered by the application source code MIT license. The original personal-use attribution is retained in assets/theme/manifest.json.
+
+GSAP 3.15.0 — mobile remote button feedback only
+Copyright 2026 GreenSock. All rights reserved.
+Distributed under the GSAP Standard License: https://gsap.com/standard-license
+https://gsap.com — local browser asset, no external CDN requests.
+Motion Prompt #060 timing/easing adaptation, MIT (c) 2026 Shohei Ohtaki.
+https://showheyohtaki.github.io/motion-prompt/#060

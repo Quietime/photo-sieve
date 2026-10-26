@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#1E1F23">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#303236">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="referrer" content="no-referrer">
@@ -15,9 +15,10 @@
 <div class="app" id="app" data-mode="screen" data-online="false">
   <header class="bar">
     <div class="brand">
-      <img class="art art-brand" src="art/pyramid.png" alt="" aria-hidden="true">
+      <svg class="remote-logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#013e75"/><path d="M16 6 25 11 25 21 16 26 7 21 7 11Z M16 6 20 13 25 21 M7 11 16 11 25 11 M7 21 12 14 16 6 M16 26 12 19 7 11 M25 21 16 21 7 21" fill="none" stroke="#fffbf0" stroke-width="1.5"/></svg>
       <div class="titles">
         <div class="folder" id="folder">照片快筛</div>
+        <div class="connection" id="connection">正在连接电脑…</div>
         <div class="status" id="status" aria-live="polite">正在连接电脑…</div>
       </div>
     </div>
@@ -47,21 +48,26 @@
     </div>
   </main>
 
+  <section class="session-counts" aria-label="筛选统计">
+    <div><span>未筛选</span><strong id="count-pending">0</strong></div>
+    <div><span>保留</span><strong id="count-keep">0</strong></div>
+    <div><span>已删除</span><strong id="count-deleted">0</strong></div>
+  </section>
   <section class="info" aria-label="照片信息">
     <div class="name" id="name"></div>
     <div class="camera" id="camera"></div>
   </section>
 
-  <section class="controller-summary" aria-label="控制器提示"><strong>看电脑，用手机操作</strong><span>保留／删除作用于电脑左侧当前照片</span></section>
+  <section class="controller-summary" aria-label="控制器提示"><span id="controller-note">保留／删除只操作电脑左侧照片</span></section>
   <section class="controls controls-screen" aria-label="筛选操作">
-    <button class="key" id="restore" data-action="restore" aria-label="恢复最近删除">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 3 9l5 5M3 9h11a6 6 0 0 1 0 12h-3"/></svg><span>恢复</span>
-    </button>
-    <button class="key key-delete" id="delete" data-action="delete" aria-label="删除">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg><span>删除</span>
-    </button>
     <button class="key key-keep" id="keep" data-action="keep" aria-label="保留">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span>保留</span>
+    </button>
+    <button class="key key-delete" id="delete" data-action="delete" aria-label="删除">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/></svg><span>删除</span>
+    </button>
+    <button class="key" id="restore" data-action="restore" aria-label="恢复最近删除">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 3 9l5 5M3 9h11a6 6 0 0 1 0 12h-3"/></svg><span>恢复</span>
     </button>
     <button class="key" id="next" data-action="next" aria-label="下一张">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg><span>下一张</span>
@@ -106,7 +112,9 @@
     <h1>照片快筛</h1>
     <p>请在电脑上打开 <b>更多选项 → 手机遥控</b>，<br>再用手机相机扫描二维码。</p>
   </section>
+<footer class="transport-note" id="transport-note">局域网直连</footer>
 </div>
-<script src="app.js"></script>
+<script src="vendor/gsap.min.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>

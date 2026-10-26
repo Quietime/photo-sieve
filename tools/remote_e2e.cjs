@@ -36,13 +36,15 @@ const { chromium, devices } = playwright;
   }
   try {
     await context.addInitScript(() => localStorage.setItem('photosieve-controller-only', 'false'));
-    await page.goto(url);
+    const usbUrl = new URL(url); usbUrl.searchParams.set('via','usb');
+    await page.goto(usbUrl.href);
     if (new URL(page.url()).hash) throw new Error('key left in the address bar');
     await page.waitForSelector('#photo.ready', { timeout: 20000 });
     const start = await pending(); step('loaded', { pending: start }); await shot('01-screen');
 
     await page.click('#controller-toggle');
     await page.waitForTimeout(400);
+    if (!(await page.textContent('#connection')).includes('USB')) throw new Error('USB mode missing');
     let previewRequests = 0;
     const latencies = [];
     page.on('requestfinished', request => {
@@ -57,6 +59,14 @@ const { chromium, devices } = playwright;
     if (await page.locator('.controls-grade').isVisible()) throw new Error('grading controls visible in screening');
     const bounds = await page.locator('.controls-screen').boundingBox();
     if (bounds.y + bounds.height > page.viewportSize().height + 1) throw new Error('controller exceeds viewport');
+    for (const size of [{width:360,height:740},{width:412,height:915},{width:844,height:390}]) {
+      await page.setViewportSize(size);
+      const box = await page.locator('.controls-screen').boundingBox();
+      if (box.x < 0 || box.x + box.width > size.width + 1 || box.y + box.height > size.height + 1) throw new Error('controller overflow at '+size.width);
+      if (await page.locator('.controls-grade').isVisible()) throw new Error('screening includes rating controls');
+      await shot('controller-'+size.width);
+    }
+    await page.setViewportSize({width:390,height:844});
     await shot('00-controller'); step('controller-no-preview-and-rapid-next', { commandRoundTripMs: latencies.map(n => Math.round(n)) });
     page.off('request', countPreview);
     await page.click('#controller-toggle');
@@ -79,6 +89,7 @@ const { chromium, devices } = playwright;
 
     await page.click('#mode-grade');
     await waitFor(async () => (await page.getAttribute('#app', 'data-mode')) === 'grade', 'grade mode');
+    if (await page.locator('.controls-screen').isVisible()) throw new Error('grade includes screening controls');
     await page.waitForSelector('#photo.ready', { timeout: 20000 }); step('grade-mode'); await shot('03-grade');
     await page.click('.star[data-star="3"]');
     await waitFor(async () => (await page.locator('.star.on').count()) === 3 && !(await page.textContent('#name')).includes('正在写入'), 'three stars');
