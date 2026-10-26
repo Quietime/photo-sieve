@@ -543,7 +543,7 @@ def open_dialog(window):
     remote = window.remote
     dialog = QDialog(window); dialog.remote_dialog = True; dialog.setWindowTitle('手机遥控'); dialog.setMinimumSize(560, 470)
     layout = QVBoxLayout(dialog); layout.setContentsMargins(24, 20, 24, 24); layout.setSpacing(14)
-    switch = QCheckBox('开启手机遥控（同一 Wi‑Fi 下用手机代替键盘）'); layout.addWidget(switch)
+    switch = QCheckBox('开启手机控制器（Wi‑Fi / 安卓 USB）'); layout.addWidget(switch)
     transport = QComboBox(); transport.addItem('Wi-Fi 无线连接', 'wifi'); transport.addItem('安卓 USB 有线连接', 'usb')
     transport.setAccessibleName('连接方式'); transport.setCurrentIndex(1 if remote.settings.value('remote/transport','wifi') == 'usb' else 0); layout.addWidget(transport)
     body = QHBoxLayout(); body.setSpacing(20); layout.addLayout(body, 1)
@@ -555,7 +555,7 @@ def open_dialog(window):
     link = QLabel(); link.setObjectName('caption'); link.setWordWrap(True); link.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); side.addWidget(link)
     clients = QLabel(); clients.setWordWrap(True); side.addWidget(clients)
     side.addStretch()
-    note = QLabel('首次开启时 Windows 可能询问防火墙，请允许“专用网络”。配对码只保存在本机；更换后旧手机需要重新扫码。跨网络使用可配合 Tailscale 等虚拟局域网。')
+    note = QLabel('首次开启请允许 Windows 防火墙的“专用网络”访问；USB 网卡可在 Windows 网络设置中设为专用网络。配对码更换后，旧手机需要重新扫码。USB 模式需先在安卓手机开启 USB 网络共享。')
     note.setObjectName('caption'); note.setWordWrap(True); layout.addWidget(note)
     buttons = QHBoxLayout(); layout.addLayout(buttons)
     copy = window.button('复制链接', lambda: QGuiApplication.clipboard().setText(current_url()))
