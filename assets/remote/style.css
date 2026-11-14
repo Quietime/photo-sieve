@@ -34,7 +34,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 [hidden] { display: none !important; }
 
 .app {
-  position: fixed; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto;
+  position: fixed; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr);
   padding: calc(var(--safe-top) + 6px) 12px calc(var(--safe-bottom) + 10px); gap: 8px;
 }
 
@@ -48,7 +48,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app[data-online="false"] .status::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lava); margin-right: 6px; vertical-align: 1px; }
 .modes { display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--panel); flex: 0 0 auto; }
-.mode { min-width: 56px; height: 38px; padding: 0 12px; border-radius: 9px; font-size: 14px; color: var(--muted); transition: background .25s, color .25s, transform .35s var(--spring); }
+.mode { min-width: 52px; height: 38px; padding: 0 10px; border-radius: 9px; font-size: 14px; color: var(--muted); transition: background .25s, color .25s, transform .35s var(--spring); }
 .mode[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .mode:active { transform: scale(.94); transition-duration: .08s; }
 
@@ -69,6 +69,11 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .art-empty { width: 132px; height: 132px; object-fit: contain; }
 .soft { height: 44px; padding: 0 20px; border-radius: 22px; background: var(--panel-hi); color: var(--text); transition: transform .35s var(--spring); }
 .soft:active { transform: scale(.95); transition-duration: .08s; }
+
+/* zoom */
+.photo { transform-origin: center center; will-change: transform; }
+.zoom-chip { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); padding: 6px 12px; border-radius: 999px; background: rgba(30, 31, 35, .82); color: var(--text); font-size: 12px; pointer-events: none; z-index: 3; }
+.app.zoomed .hint { display: none; }
 
 /* info */
 .info { min-height: 38px; padding: 0 4px; }

@@ -75,6 +75,12 @@ class ScreenCheck:
         # Buttons in an inner settings panel must not accidentally match hidden older panels.
         candidates = [b for b in widget.findChildren(QAbstractButton)
             if b.isVisibleTo(widget) and (b.text() == text or b.accessibleName() == text)]
+        # The settings panel groups items into categories (5.0.2): look on each category's page in turn.
+        for name in list(getattr(widget, 'category_buttons', {})) if not candidates else []:
+            widget.select_category(name)
+            candidates = [b for b in widget.findChildren(QAbstractButton)
+                if b.isVisibleTo(widget) and (b.text() == text or b.accessibleName() == text)]
+            if candidates: break
         if not candidates:
             raise AssertionError('Visible button not found: ' + text)
         return candidates[-1]
@@ -385,6 +391,7 @@ def run(output):
                 audit.check('preload_settings_apply', window.preload_count == 350 and window.library.cache_limit == 10 * 1024**3)
 
                 panel = audit.open_menu(window, '14c_menu_before_clear_cache')
+                panel.select_category('缓存与性能')   # the settings panel is grouped into categories since 5.0.2
                 audit.click(audit.button(panel,'一键清理全部缓存'))
                 audit.until(lambda: not window.cache_clearing and not window.busy)
                 audit.screenshot('14e_cache_cleared_feedback', window)

@@ -196,6 +196,7 @@
 
   function show(id) {
     if (shownId === id) return;
+    if (zoom.on || zoom.scale !== 1) resetZoom();
     shownId = id; photo.classList.remove('ready');
     image(id).then((url) => {
       if (shownId !== id) return;
@@ -330,6 +331,135 @@
     spring({ x: 0, y: 24 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { stiffness: 520, damping: 34 }, (p) => place(p, Math.min(1, 1 - p.y / 30)));
   }
 
+  // ---- zoom: double-tap or pinch to check focus at full resolution ---------------------------
+  // While zoomed, one finger pans and swipes do nothing; double-tap or pinching back out leaves.
+  const zoom = { on: false, scale: 1, x: 0, y: 0, pointers: new Map(), pinch: null, pan: null, tapAt: 0, tapPoint: null, doubleTap: false, id: null };
+  let cancelSwipe = () => {};
+  const ZOOM_WIDTH = 3200;
+  function zoomBounds(scale) {
+    const box = stage.getBoundingClientRect();
+    return { x: Math.max(0, (photo.offsetWidth * scale - box.width) / 2), y: Math.max(0, (photo.offsetHeight * scale - box.height) / 2) };
+  }
+  function applyZoom() {
+    photo.style.transform = zoom.scale === 1 && !zoom.x && !zoom.y ? '' : `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`;
+    app.classList.toggle('zoomed', zoom.on);
+  }
+  function maxScale() {
+    const native = photo.naturalWidth || photo.offsetWidth;
+    return Math.max(2, Math.min(8, (zoom.hiWidth || native * 2) / Math.max(1, photo.offsetWidth)));
+  }
+  function relative(p) { const box = stage.getBoundingClientRect(); return { x: p.x - box.left - box.width / 2, y: p.y - box.top - box.height / 2 }; }
+  function zoomTo(scale, anchor, animate = true) {
+    // Keep the point under `anchor` (stage-centred coordinates) where it is while the scale changes.
+    const s0 = zoom.scale, s1 = Math.max(1, Math.min(maxScale(), scale));
+    const tx = anchor.x - (anchor.x - zoom.x) * (s1 / s0), ty = anchor.y - (anchor.y - zoom.y) * (s1 / s0);
+    const b = zoomBounds(s1); const target = { x: Math.max(-b.x, Math.min(b.x, tx)), y: Math.max(-b.y, Math.min(b.y, ty)) };
+    if (!animate || reduced) { zoom.scale = s1; zoom.x = target.x; zoom.y = target.y; applyZoom(); return; }
+    const from = { x: zoom.scale, y: 0 }, fromPos = { x: zoom.x, y: zoom.y };
+    spring({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }, { stiffness: 420, damping: 34 }, (p) => {
+      zoom.scale = from.x + (s1 - from.x) * p.x; zoom.x = fromPos.x + (target.x - fromPos.x) * p.x; zoom.y = fromPos.y + (target.y - fromPos.y) * p.x; applyZoom();
+    });
+  }
+  function enterZoom(anchor) {
+    if (!shownId || card.hidden) return;
+    zoom.on = true; zoom.id = shownId; cancelSwipe(); resetCard(); haptic(6);
+    zoomTo(2.5, anchor);
+    // Swap in a sharper preview; the box keeps its size, so the zoom does not jump.
+    const id = shownId;
+    api(`api/photo?id=${id}&w=${ZOOM_WIDTH}`).then((r) => r.blob()).then((blob) => {
+      if (!zoom.on || zoom.id !== id) return;
+      const url = URL.createObjectURL(blob); const hi = new Image();
+      hi.onload = () => { if (zoom.on && zoom.id === id) { zoom.hiWidth = hi.naturalWidth; zoom.hiUrl = url; photo.src = url; } else URL.revokeObjectURL(url); };
+      hi.src = url;
+    }).catch(() => toast('清晰预览读取失败', true));
+    $('zoom-chip').hidden = false;
+  }
+  function leaveZoom() {
+    if (!zoom.on) return;
+    zoom.on = false; $('zoom-chip').hidden = true;
+    zoomTo(1, { x: 0, y: 0 });
+    const entry = images.get(zoom.id);
+    if (entry && entry.url) setTimeout(() => { if (!zoom.on) photo.src = entry.url; }, 260);
+    if (zoom.hiUrl) { const old = zoom.hiUrl; setTimeout(() => URL.revokeObjectURL(old), 1000); zoom.hiUrl = null; }
+    zoom.hiWidth = 0;
+  }
+  function resetZoom() { zoom.on = false; zoom.scale = 1; zoom.x = 0; zoom.y = 0; zoom.hiWidth = 0; $('zoom-chip').hidden = true; applyZoom(); }
+
+  stage.addEventListener('pointerdown', (e) => {
+    zoom.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const now = e.timeStamp;
+    zoom.doubleTap = zoom.pointers.size === 1 && now - zoom.tapAt < 320 && zoom.tapPoint && Math.hypot(e.clientX - zoom.tapPoint.x, e.clientY - zoom.tapPoint.y) < 40;
+    if (zoom.pointers.size === 2) {                        // pinch starts (zoomed or not)
+      if (!zoom.on) enterZoomForPinch();
+      const [a, b] = [...zoom.pointers.values()];
+      zoom.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale: zoom.scale, x: zoom.x, y: zoom.y, mid: relative({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }) };
+      zoom.pan = null; e.stopImmediatePropagation(); return;
+    }
+    if (zoom.on || zoom.doubleTap) {
+      stage.setPointerCapture(e.pointerId); cancelAnimationFrame(springFrame);
+      zoom.pan = { x: e.clientX, y: e.clientY, zx: zoom.x, zy: zoom.y, moved: 0 };
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  function enterZoomForPinch() {
+    if (!shownId || card.hidden) return;
+    zoom.on = true; zoom.id = shownId; cancelSwipe(); resetCard(); $('zoom-chip').hidden = false;
+    const id = shownId;
+    api(`api/photo?id=${id}&w=${ZOOM_WIDTH}`).then((r) => r.blob()).then((blob) => {
+      if (!zoom.on || zoom.id !== id) return;
+      const url = URL.createObjectURL(blob); const hi = new Image();
+      hi.onload = () => { if (zoom.on && zoom.id === id) { zoom.hiWidth = hi.naturalWidth; zoom.hiUrl = url; photo.src = url; } else URL.revokeObjectURL(url); };
+      hi.src = url;
+    }).catch(() => {});
+  }
+  stage.addEventListener('pointermove', (e) => {
+    if (!zoom.pointers.has(e.pointerId)) return;
+    zoom.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (zoom.pinch && zoom.pointers.size >= 2) {
+      const [a, b] = [...zoom.pointers.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y), mid = relative({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const scale = Math.max(.8, Math.min(maxScale() * 1.15, zoom.pinch.scale * dist / Math.max(1, zoom.pinch.dist)));
+      zoom.scale = scale;
+      zoom.x = mid.x - (zoom.pinch.mid.x - zoom.pinch.x) * (scale / zoom.pinch.scale);
+      zoom.y = mid.y - (zoom.pinch.mid.y - zoom.pinch.y) * (scale / zoom.pinch.scale);
+      applyZoom(); e.stopImmediatePropagation(); return;
+    }
+    if (zoom.pan) {
+      const dx = e.clientX - zoom.pan.x, dy = e.clientY - zoom.pan.y; zoom.pan.moved = Math.max(zoom.pan.moved, Math.hypot(dx, dy));
+      if (zoom.on) {
+        const b = zoomBounds(zoom.scale);
+        const rubber = (v, limit) => Math.abs(v) <= limit ? v : Math.sign(v) * (limit + (Math.abs(v) - limit) * .3);
+        zoom.x = rubber(zoom.pan.zx + dx, b.x); zoom.y = rubber(zoom.pan.zy + dy, b.y); applyZoom();
+      }
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  const zoomEnd = (e) => {
+    if (!zoom.pointers.has(e.pointerId)) return;
+    const point = zoom.pointers.get(e.pointerId); zoom.pointers.delete(e.pointerId);
+    if (zoom.pinch) {
+      e.stopImmediatePropagation();
+      if (zoom.pointers.size < 2) {
+        zoom.pinch = null;
+        if (zoom.scale < 1.05) leaveZoom(); else zoomTo(zoom.scale, { x: 0, y: 0 });
+        const rest = [...zoom.pointers.entries()][0];
+        zoom.pan = rest ? { x: rest[1].x, y: rest[1].y, zx: zoom.x, zy: zoom.y, moved: 99 } : null;
+      }
+      return;
+    }
+    if (zoom.pan) {
+      const tap = zoom.pan.moved < 10; zoom.pan = null; e.stopImmediatePropagation();
+      if (zoom.doubleTap && tap) { zoom.tapAt = 0; zoom.doubleTap = false; if (zoom.on) leaveZoom(); else enterZoom(relative(point)); return; }
+      if (zoom.on) {
+        if (tap) { zoom.tapAt = e.timeStamp; zoom.tapPoint = point; }
+        zoomTo(zoom.scale, { x: 0, y: 0 });             // spring back inside the edges
+      }
+      return;
+    }
+    zoom.tapAt = e.timeStamp; zoom.tapPoint = point;      // a plain tap may become the first of a double-tap
+  };
+  stage.addEventListener('pointerup', zoomEnd, true); stage.addEventListener('pointercancel', zoomEnd, true);
+
   // ---- gestures on the photo: swipe, pull to refresh, long press -----------------------------
   (() => {
     let start = null, samples = [], pressTimer = 0, pulled = 0;
@@ -402,6 +532,7 @@
       void total;
     };
     stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+    cancelSwipe = () => { start = null; pulled = 0; clearTimeout(pressTimer); $('pull').style.transform = ''; };
     function currentOffset() {
       const m = /translate3d\((-?[\d.]+)px, (-?[\d.]+)px/.exec(card.style.transform || '');
       return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
@@ -423,7 +554,7 @@
   for (const button of document.querySelectorAll('[data-action]')) {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
-      settleFling();
+      settleFling(); leaveZoom();
       if (action === 'clear') { act('star', 0); return; }
       if (state && state.mode === 'screen' && directions[action] && !card.hidden) perform(action, directions[action]);
       else act(action);

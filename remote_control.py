@@ -32,8 +32,10 @@ PAGE_DIR = Path(__file__).resolve().parent / 'assets' / 'remote'
 DEFAULT_PORT = 8765
 POLL_SECONDS = 20            # one long poll waits at most this long for a change
 IDLE_SECONDS = 60            # snapshots stop when no phone has asked for this long
+PRESENT_SECONDS = 30         # a phone counts as connected while it polled this recently (polls are ≤ 20 s apart)
 MAX_HANDLERS = 16            # concurrent requests; more get 503 instead of more threads
 PHOTO_EDGE = 1600            # the smallest preview edge the desktop already caches
+ZOOM_EDGE = 3200             # largest edge sent to a phone that zooms in to check focus
 SCREEN_ACTIONS = {'keep', 'delete', 'next', 'restore', 'undo', 'pending'}
 GRADE_ACTIONS = {'star', 'previous', 'next', 'undo', 'label'}
 STATIC = {'': ('index.html', 'text/html; charset=utf-8'), 'index.html': ('index.html', 'text/html; charset=utf-8'),
@@ -94,6 +96,7 @@ class _Inbox(QObject):
 
 class RemoteControl(QObject):
     changed = Signal()       # server started/stopped, key reset or a phone connected: refresh the dialog
+    presence = Signal(int)   # number of phones seen in the last PRESENT_SECONDS, when it changes
 
     def __init__(self, window, settings=None):
         super().__init__(window)
@@ -103,12 +106,14 @@ class RemoteControl(QObject):
             self.reset_key(save_only=True)
         self.port = int(self.settings.value('remote/port', DEFAULT_PORT) or DEFAULT_PORT)
         self.server = None; self.thread = None; self.instance = secrets.token_hex(8)
-        self.cond = threading.Condition(); self.state = {'rev': 0, 'running': False}; self.rev = 0; self.allowed = {}
+        self.cond = threading.Condition(); self.state = {'rev': 0, 'running': False}; self.rev = 0; self.allowed = {}; self.last_allowed = {}
         self.clients = OrderedDict(); self.last_request = 0.0; self.last_json = ''
         self.photos = OrderedDict(); self.photo_lock = threading.Lock()
         self.inbox = _Inbox(self); self.inbox.arrived.connect(self.run, Qt.ConnectionType.QueuedConnection)
         self.inbox.visitor.connect(self.changed.emit, Qt.ConnectionType.QueuedConnection)
         self.timer = QTimer(self); self.timer.setInterval(50); self.timer.timeout.connect(self.tick)
+        self.present = 0; self.presence_timer = QTimer(self); self.presence_timer.setInterval(2000); self.presence_timer.timeout.connect(self.check_presence)
+        self.inbox.visitor.connect(self.check_presence, Qt.ConnectionType.QueuedConnection)
 
     # ---- lifecycle (interface thread) -------------------------------------------------------
     @property
@@ -131,12 +136,12 @@ class RemoteControl(QObject):
         self.instance = secrets.token_hex(8)
         self.thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.3}, name='phone-remote', daemon=True)
         self.thread.start(); self.settings.setValue('remote/enabled', True)
-        self.refresh(force=True); self.timer.start(); self.changed.emit()
+        self.refresh(force=True); self.timer.start(); self.presence_timer.start(); self.changed.emit()
         return True
 
     def stop(self, remember=True):
         server, self.server = self.server, None
-        self.timer.stop()
+        self.timer.stop(); self.presence_timer.stop(); self.clients.clear(); self.check_presence()
         if server:
             threading.Thread(target=lambda: (server.shutdown(), server.server_close()), daemon=True).start()
         with self.cond:
@@ -157,6 +162,11 @@ class RemoteControl(QObject):
         query = '?via=usb' if transport == 'usb' else ''
         return [f'http://{ip}:{self.port}/{query}#k={self.key}' for ip in lan_addresses()]
 
+    def check_presence(self):
+        count = len(self.connected(PRESENT_SECONDS)) if self.server else 0
+        if count != self.present:
+            self.present = count; self.presence.emit(count)
+
     def connected(self, within=IDLE_SECONDS):
         now = time.monotonic()
         return [(ip, now - seen) for ip, seen in self.clients.items() if now - seen < within]
@@ -174,7 +184,9 @@ class RemoteControl(QObject):
         self.last_json = text
         with self.cond:
             self.rev += 1; state['rev'] = self.rev; state['running'] = True
-            self.state = state; self.allowed = allowed; self.cond.notify_all()
+            # The previous step's photos stay servable too: a phone may ask for them as the desktop moves on.
+            previous = {pid: lib for pid, lib in self.last_allowed.items() if any(lib is l for l in allowed.values())}
+            self.state = state; self.last_allowed = allowed; self.allowed = {**previous, **allowed}; self.cond.notify_all()
 
     def snapshot(self):
         w = self.window; library = getattr(w, 'library', None)
@@ -360,12 +372,15 @@ class RemoteControl(QObject):
             library = self.allowed.get(pid)
         if library is None:
             return None
-        width = max(320, min(2048, int(width)))
+        width = max(320, min(ZOOM_EDGE, int(width)))
         cache_key = (id(library), pid, width)
         with self.photo_lock:
             if cache_key in self.photos:
                 self.photos.move_to_end(cache_key); return self.photos[cache_key]
-        image = library.preview_image(pid, PHOTO_EDGE)
+        # A zoomed-in phone asks for more pixels: use the smallest cached preview edge that covers them.
+        from app import PREVIEW_EDGES
+        edge = next((e for e in PREVIEW_EDGES if e >= width), PREVIEW_EDGES[-1]) if width > PHOTO_EDGE else PHOTO_EDGE
+        image = library.preview_image(pid, min(edge, ZOOM_EDGE))
         image = image.convert('RGB') if image.mode != 'RGB' else image.copy()
         image.thumbnail((width, width))
         out = io.BytesIO(); image.save(out, 'JPEG', quality=84, optimize=True, progressive=True)
@@ -454,6 +469,8 @@ class _Handler(BaseHTTPRequestHandler):
         if remote is None:
             return self.send(503)
         parts = urlsplit(self.path); path = parts.path.lstrip('/'); query = parse_qs(parts.query)
+        if path in ('icon.png', 'apple-touch-icon.png'):
+            return self.serve_file(PAGE_DIR.parent / 'photosieve.png', 'image/png', False, cache=True)
         if path in STATIC:
             name, content_type = STATIC[path]
             return self.serve_file(PAGE_DIR / name, content_type, name.endswith('.html'))

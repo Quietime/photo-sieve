@@ -71,6 +71,38 @@ const { chromium, devices } = playwright;
     page.off('request', countPreview);
     await page.click('#controller-toggle');
     await page.waitForSelector('#photo.ready');
+
+    // Double-tap zooms in at full resolution (no action is taken), double-tap again zooms back out.
+    const box0 = await page.locator('#stage').boundingBox();
+    const hiRes = page.waitForResponse((r) => r.url().includes('w=3200') && r.status() === 200, { timeout: 15000 });
+    await page.mouse.dblclick(box0.x + box0.width / 2, box0.y + box0.height / 2);
+    await page.waitForSelector('#zoom-chip:not([hidden])', { timeout: 5000 }); await hiRes;
+    await page.waitForTimeout(500);
+    const zoomed = await page.evaluate(() => document.getElementById('photo').style.transform);
+    if (!/scale\(/.test(zoomed)) throw new Error('double-tap did not zoom: ' + zoomed);
+    await shot('01b-zoomed');
+    await swipe(0, -300); await page.waitForTimeout(500);
+    if ((await pending()) !== start) throw new Error('a drag while zoomed must pan, not keep');
+    await page.mouse.dblclick(box0.x + box0.width / 2, box0.y + box0.height / 2);
+    await page.waitForSelector('#zoom-chip', { state: 'hidden', timeout: 5000 }); await page.waitForTimeout(500);
+    step('double-tap-zoom');
+
+    // A two-finger pinch zooms in; pinching back below 1x leaves zoom.
+    const cdp = await context.newCDPSession(page);
+    const cx = box0.x + box0.width / 2, cy = box0.y + box0.height / 2;
+    const touch = (type, d) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: cx - d, y: cy, id: 1 }, { x: cx + d, y: cy, id: 2 }] });
+    await touch('touchStart', 30);
+    for (let d = 30; d <= 150; d += 15) { await touch('touchMove', d); await page.waitForTimeout(16); }
+    await touch('touchEnd', 0); await page.waitForTimeout(600);
+    const pinched = await page.evaluate(() => document.getElementById('photo').style.transform);
+    if (!/scale\((?:[2-9]|1\.[5-9])/.test(pinched)) throw new Error('pinch did not zoom: ' + pinched);
+    await touch('touchStart', 150);
+    for (let d = 150; d >= 20; d -= 15) { await touch('touchMove', d); await page.waitForTimeout(16); }
+    await touch('touchEnd', 0);
+    await page.waitForSelector('#zoom-chip', { state: 'hidden', timeout: 5000 }); await page.waitForTimeout(500);
+    if ((await pending()) !== start) throw new Error('pinching must never act on the photo');
+    step('pinch-zoom');
+
     let before = await photoId();
     await swipe(0, -300); await waitFor(async () => (await pending()) === start - 1, 'swipe up keeps');
     await waitFor(async () => (await photoId()) !== before && await page.locator('#photo.ready').count(), 'next photo shown');

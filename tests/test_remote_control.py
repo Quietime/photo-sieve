@@ -126,6 +126,22 @@ class RemoteTest(unittest.TestCase):
         self.call('/api/photo?id=2&w=800', key=self.remote.key)
         self.assertEqual(self.library.calls, [(2, remote_control.PHOTO_EDGE)])   # second request served from memory
 
+    def test_zoom_requests_a_larger_cached_preview(self):
+        r = self.call('/api/photo?id=1&w=3000', key=self.remote.key)
+        import io
+        self.assertEqual(max(Image.open(io.BytesIO(r['body'])).size), 1600)   # the fake preview is 1600 px wide: never upscaled
+        self.assertEqual(self.library.calls, [(1, 3200)])
+        self.call('/api/photo?id=1&w=9999', key=self.remote.key)
+        self.assertEqual(self.library.calls[-1], (1, 3200))                    # capped at ZOOM_EDGE
+        self.assertEqual(self.call('/icon.png')['headers']['Content-Type'], 'image/png')
+
+    def test_presence_follows_polling_phones(self):
+        seen = []; self.remote.presence.connect(seen.append)
+        self.json('/api/state', key=self.remote.key); application.processEvents(); self.remote.check_presence()
+        self.assertEqual(self.remote.present, 1); self.assertEqual(seen[-1], 1)
+        self.remote.stop(); application.processEvents()
+        self.assertEqual(self.remote.present, 0); self.assertEqual(seen[-1], 0)
+
     def test_screen_commands_run_through_the_window_handlers(self):
         key = self.remote.key
         status, reply = self.json('/api/act', key=key, body={'action': 'keep'})

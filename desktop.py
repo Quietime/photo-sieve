@@ -276,6 +276,9 @@ class Window(QMainWindow):
         self.apply_mode_preferences()
         from remote_control import RemoteControl
         self.remote=RemoteControl(self)
+        def presence(count):
+            self.phone_chip.setText('手机已连接' if count<=1 else f'{count} 台手机已连接');self.phone_chip.setVisible(count>0)
+        self.remote.presence.connect(presence)
         if QSettings('PhotoSieve','PhotoSieve').value('remote/enabled',False,type=bool):
             try:self.remote.start()
             except OSError as error:crashlog.event('remote_not_started',error=str(error))
@@ -412,8 +415,10 @@ class Window(QMainWindow):
         self.resume_button=self.button('继续上次进度',self.resume_last);tools.addWidget(self.resume_button)
         last=QSettings('PhotoSieve','PhotoSieve').value('last_folder','') or self.library.meta('root') or ''
         self.resume_button.setEnabled(bool(last));self.resume_button.setToolTip(str(last))
+        # Shown only while a phone is connected to the remote; clicking it opens the pairing dialog.
+        self.phone_chip=self.button('手机已连接',lambda:self.remote_dialog());self.phone_chip.hide();tools.addWidget(self.phone_chip)
         self.more_button = self.button('', self.show_menu, 'icon'); self.more_button.symbol='more'; self.more_button.setAccessibleName('更多选项'); tools.addWidget(self.more_button)
-        for control in (self.review_mode_button,self.rating_button,self.open_button,self.resume_button,self.more_button): control.compact=True; control.setFixedHeight(28)
+        for control in (self.review_mode_button,self.rating_button,self.open_button,self.resume_button,self.phone_chip,self.more_button): control.compact=True; control.setFixedHeight(28)
         self.more_button.setFixedWidth(30)
         self.badge = QLabel(self.more_button); self.badge.setFixedSize(8, 8); self.badge.move(22, 0)
         self.badge.setStyleSheet(f'background:{theme.BLUE}; border-radius:4px;'); self.badge.hide()
