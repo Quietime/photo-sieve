@@ -321,7 +321,7 @@ def run(output):
 
                 panel = audit.open_menu(window, '12_more_options')
                 titles=[label.text() for label in panel.findChildren(QLabel) if label.objectName()=='sectionTitle']
-                audit.check('settings_have_mode_and_global_categories',panel.windowTitle()=='照片筛选设置' and all(title in titles for title in ['照片管理','筛选界面与操作','筛选预加载','应用全局']))
+                audit.check('settings_have_mode_and_global_categories',panel.windowTitle()=='照片筛选设置' and all(title in titles for title in ['照片管理','筛选界面与操作','应用全局']) and '预加载与缓存…' in [control.text() for control in panel.findChildren(QAbstractButton)])
                 names=[control.text() for control in panel.findChildren(QAbstractButton) if control.objectName()=='menuItem']
                 audit.check('settings_have_no_duplicate_controls',len(names)==len(set(names)))
                 audit.check('bottom_action_row_hidden_by_default',window.action_row.isHidden())

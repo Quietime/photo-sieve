@@ -83,9 +83,8 @@ def run(output):
                     page.show_aux();until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 250' in page.camera_info.text())
                     current=page.pid();assert page.face_panel.isVisible() and page.face_panel.result['imagebytes']==crops[current],(page.face_panel.isVisible(),page.face_panel.result)
                     assert 'NIKON D800E' in page.camera_info.text() and '24.0-70.0 mm' in page.camera_info.text() and '2024-06-29' in page.camera_info.text()
-                    # 5.0: the face crop sits beside the preview (it takes width, not height); camera info is on the info line below.
-                    pane_right=page.pane.mapTo(page,page.pane.rect().topRight()).x()
-                    assert page.aux.mapTo(page,page.aux.rect().topLeft()).x()>pane_right
+                    # 5.0.1: face crop and camera info sit side by side under the preview.
+                    assert page.aux.mapTo(page,page.aux.rect().topLeft()).y()>=page.pane.mapTo(page,page.pane.rect().bottomLeft()).y()
                     assert page.info_line.mapTo(page,QPoint()).y()>=page.pane.mapTo(page,page.pane.rect().bottomLeft()).y()
                     page.select(1);until(lambda:page.face_panel.result is not None and page.face_panel.result['photo_id']==page.pid() and 'ISO 251' in page.camera_info.text())
                     assert page.face_panel.result['imagebytes']==crops[page.pid()]

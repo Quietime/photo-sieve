@@ -186,7 +186,7 @@ def run(output):
                 until(panel.isVisible)
                 capture('05-compact-categorized-more-menu', window)
                 check('menu_is_embedded_not_separate_window', not panel.isWindow())
-                check('four_distinct_menu_groups', panel.group_count == 4)
+                check('three_distinct_menu_groups', panel.group_count == 3)
                 check('normal_menu_needs_no_vertical_scroll', panel.scroll.verticalScrollBar().maximum() == 0)
                 check('compact_controls_fit_34px_rows', all(26 <= control.height() <= 34 for control in panel.action_controls.values()))
                 text = '\n'.join(label.text() for label in panel.findChildren(QLabel))

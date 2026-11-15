@@ -38,10 +38,10 @@ def run(output):
             try:
                 until(lambda:w.keep_button.isEnabled());p=w.rating_page;p.engine.close();p.engine=FakeEngine();w.toggle_rating()
                 until(lambda:not p.listing and not p.loading and p.pane.pixmap is not None)
-                current=p.pid();size=p.grid.tile_width
-                p.gallery_larger.click();assert p.grid.tile_width==size+20
-                p.gallery_smaller.click();assert p.grid.tile_width==size
-                p.gallery_size.setValue(300);assert p.grid.tile_width==300 and p.grid.iconSize().width()==284
+                current=p.pid();size=p.grid.wanted_width
+                p.gallery_larger.click();assert p.grid.wanted_width==size+20
+                p.gallery_smaller.click();assert p.grid.wanted_width==size
+                p.gallery_size.setValue(300);assert p.grid.wanted_width==300 and p.grid.iconSize().width()>=284
                 assert settings.value('rating_gallery_size',0,type=int)==300 and p.pid()==current
                 checks.append('buttons_slider_resize_gallery_and_persist_without_changing_selection')
                 until(lambda:not p.loading and all(p.thumb_sizes.get(pid)==p.grid.iconSize()*p.devicePixelRatioF() for pid in p.grid.visible_ids()))
@@ -53,13 +53,13 @@ def run(output):
                 bar=p.grid.verticalScrollBar();bar.setValue(bar.maximum()//2);app.processEvents()
                 point=p.grid.viewport().rect().center();anchor=p.grid.indexAt(point);assert anchor.isValid()
                 pid=p.grid.photo_model.ids[anchor.row()]
-                wheel(p.grid.viewport(),120,True,point);assert p.grid.tile_width==240
+                wheel(p.grid.viewport(),120,True,point);assert p.grid.wanted_width==240
                 assert p.grid.photo_model.ids[p.grid.indexAt(point).row()]==pid
-                wheel(p.grid.viewport(),-120,True,point);assert p.grid.tile_width==220 and p.pid()==current
+                wheel(p.grid.viewport(),-120,True,point);assert p.grid.wanted_width==220 and p.pid()==current
                 checks.append('ctrl_wheel_in_gallery_scales_both_directions_and_keeps_cursor_photo')
                 before=bar.value();wheel(p.grid.viewport(),-120);until(lambda:bar.value()>before)
-                assert p.grid.tile_width==220
-                wheel(p.pane.viewport(),-120);assert p.grid.tile_width==220
+                assert p.grid.wanted_width==220
+                wheel(p.pane.viewport(),-120);assert p.grid.wanted_width==220
                 checks.append('ordinary_wheel_scrolls_and_right_preview_does_not_resize_gallery')
                 with patch.object(theme,'REDUCED_MOTION',False):
                     until(lambda:p.grid.scroll_motion is None)
@@ -92,8 +92,8 @@ def run(output):
                 assert picture.bottom()<name.top() and stars.height()>=p.grid.fontMetrics().height()
                 until(lambda:not p.loading);w.grab().save(str(output/'grading-compact-three-columns.png'))
                 checks.append('three_column_mixed_photos_fit_compact_tiles_and_last_caption_is_fully_scrollable')
-                p.gallery_size.setValue(360);wheel(p.grid.viewport(),120,True);assert p.grid.tile_width==360
-                p.gallery_size.setValue(120);wheel(p.grid.viewport(),-120,True);assert p.grid.tile_width==120
+                p.gallery_size.setValue(360);wheel(p.grid.viewport(),120,True);assert p.grid.wanted_width==360
+                p.gallery_size.setValue(120);wheel(p.grid.viewport(),-120,True);assert p.grid.wanted_width==120
                 p.gallery_size.setValue(220);p.select(0);until(lambda:not p.loading and not p.resize_timer.isActive())
                 checks.append('gallery_size_limits_are_enforced')
                 before=p.pane.content_rect().width();original=p.pane.pixmap
@@ -115,7 +115,7 @@ def run(output):
                 checks.append('divider_immediately_grows_and_shrinks_preview_then_refreshes_sharp_cache')
                 p.gallery_size.setValue(300);until(lambda:not p.loading);w.grab().save(str(output/'grading-large-thumbnails.png'))
                 w.toggle_rating();w.toggle_rating();until(lambda:not p.listing and not p.loading)
-                assert p.grid.tile_width==300 and settings.value('rating_gallery_size',0,type=int)==300
+                assert p.grid.wanted_width==300 and settings.value('rating_gallery_size',0,type=int)==300
                 checks.append('gallery_size_survives_mode_switch')
                 assert not errors,errors
             finally:w.prompt_on_close=False;w.close();app.processEvents()

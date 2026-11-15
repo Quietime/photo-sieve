@@ -37,7 +37,7 @@ class RatingDelegate(QStyledItemDelegate):
         lines=(index.data(Qt.ItemDataRole.DisplayRole) or '').split('\n',1)
         painter.setFont(option.font)
         for rect,text in zip((name,stars),lines):
-            painter.setPen(QColor(theme.LABEL if rect==name else theme.SECONDARY))
+            painter.setPen(QColor(theme.LABEL if rect==name else theme.ICE))
             painter.drawText(rect,Qt.AlignmentFlag.AlignCenter,option.fontMetrics.elidedText(text,Qt.TextElideMode.ElideMiddle,rect.width()))
         color=getattr(self.parent(),'label_colors',{}).get(index.data(Qt.ItemDataRole.UserRole))
         if color:
@@ -63,12 +63,20 @@ class RatingGrid(PhotoGrid):
     def hideEvent(self,event):
         self.stop_scroll();super().hideEvent(event)
     def resizeEvent(self,event):
-        self.stop_scroll();super().resizeEvent(event)
+        self.stop_scroll();super().resizeEvent(event);self.spread()
     def set_tile_size(self,value):
-        self.stop_scroll();self.tile_width=value
-        self.tile_height=max(118,round(value*.52)+self.fontMetrics().height()*2+12)
-        self.setGridSize(QSize(value,self.tile_height))
-        self.setIconSize(QSize(value-16,self.tile_height-self.fontMetrics().height()*2-13))
+        self.stop_scroll();self.wanted_width=value;self.tile_width=value;self.spread()
+    def spread(self):
+        """As many columns as fit at the chosen size, widened to share the whole width (no dead strip)."""
+        value=getattr(self,'wanted_width',0)
+        if not value:return
+        # 2 px of slack: QListView wraps a row early when the cells fill the viewport to the pixel.
+        width=self.viewport().width()-2;columns=max(1,width//value);cell=max(value,width//columns) if width>=value else value
+        self.tile_width=cell
+        height=max(118,round(cell*.52)+self.fontMetrics().height()*2+12)
+        if self.gridSize()==QSize(cell,height):return
+        self.tile_height=height;self.setGridSize(QSize(cell,height))
+        self.setIconSize(QSize(cell-16,height-self.fontMetrics().height()*2-13))
     def wheelEvent(self,event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.stop_scroll();delta=event.angleDelta().y()
@@ -273,7 +281,7 @@ class RatingPage(QWidget):
             self.preview_errors.clear()
             self.ids=ids;self.index=ids.index(anchor) if anchor in ids else 0;self.info={};self.grid.captions.clear();self.grid.tips.clear()
             for pid,photo in self.thumb_photos.items():
-                self.grid.captions[pid]=photo['name']+'\n'+self.star_text(None);self.grid.tips[pid]=photo['path']
+                self.grid.captions[pid]=photo['name']+'\n';self.grid.tips[pid]=photo['path']
             self.grid.set_ids(ids);self.show_current(ensure_visible=True);self.visible()
             if stars is not None:self.note.setText('仅显示已读取的 Windows 星级。首次筛选或在资源管理器中改过星级后，请点击“读取全部照片评级”刷新。')
             else:self.note.setText(f'{len(ids):,} 张照片 · 复用整库磁盘缓存，附近照片提前载入内存；星级与保留 / 删除标记独立。')
@@ -438,7 +446,7 @@ class RatingPage(QWidget):
             else:
                 self.thumbs[pid]=QIcon(pix);self.thumb_photos[pid]=photo;self.thumb_sizes[pid]=thumb_size
                 while len(self.thumbs)>128:self.thumbs.popitem(last=False)
-                self.grid.captions[pid]=photo['name']+'\n'+self.star_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
+                self.grid.captions[pid]=photo['name']+'\n'+self.tile_text(self.info.get(pid));self.grid.tips[pid]=photo['path'];row=self.grid.index_of(pid)
                 if row>=0:self.grid.photo_model.changed(row)
             self.prefetch()
             self.visible()
@@ -458,6 +466,12 @@ class RatingPage(QWidget):
         if info['state']!='ready':return 'Windows 评级不可用'
         text='★'*info['stars']+'☆'*(5-info['stars']) if info['stars'] else '未评级'
         return text+(' · 待保存' if info.get('pending') else ' · 保存失败' if info.get('write_error') else '')
+    @staticmethod
+    def tile_text(info):
+        """Second line of a gallery tile: just the stars. Unrated and unread tiles stay clean; the full
+        state of the selected photo is on the information line."""
+        if not info or info['state']!='ready':return ''
+        return '★'*(info['stars'] or 0)+(' 待保存' if info.get('pending') else ' 保存失败' if info.get('write_error') else '')
     def read(self,pid,force=False):
         if pid in self.reading or len(self.reading)>=2 or pid in self.rating_pending or self.undoing or self.host.closing:return
         if pid in self.info and not force:return
@@ -476,7 +490,7 @@ class RatingPage(QWidget):
         def failed(message):done({'state':'error','stars':None,'writable':False,'error':message})
         self.host.submit(work,done,failed,self.pool,100 if pid==self.pid() else 0)
     def update_caption(self,pid):
-        text=self.grid.captions.get(pid,'照片 #'+str(pid)).split('\n')[0];self.grid.captions[pid]=text+'\n'+self.star_text(self.info.get(pid));row=self.grid.index_of(pid)
+        text=self.grid.captions.get(pid,'照片 #'+str(pid)).split('\n')[0];self.grid.captions[pid]=text+'\n'+self.tile_text(self.info.get(pid));row=self.grid.index_of(pid)
         if row>=0:self.grid.photo_model.changed(row)
     def can_grade(self):
         info=self.info.get(self.pid())
@@ -501,7 +515,7 @@ class RatingPage(QWidget):
             embedded=info.get('backend')=='embedded'
             origin='ARW 原图星级' if embedded else 'Windows 系统评级'
             visibility=(' · Windows 可读取' if info.get('windows_visible') else ' · Windows 读取支持待评级后验证' if info.get('windows_visible') is None else ' · 当前 Windows 无法读取原图星级') if embedded else ''
-            self.status.setText(origin+'：'+self.star_text(info)+visibility+(' · '+info.get('error','') if info.get('error') and not embedded else ' · 点击星级写入，0 清除'))
+            self.status.setText((info.get('error') or '此照片不能评级') if info['state']!='ready' and not embedded else origin+'：'+self.star_text(info)+visibility+(' · '+info.get('error','') if info.get('error') and not embedded else ''))
             self.status.setToolTip(info.get('error',''))
         elif self.pid():self.status.setText('正在读取 Windows 系统评级…')
     def toggle_read(self):

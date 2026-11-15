@@ -241,7 +241,7 @@ class SettingsPanel(QFrame):
             content=QWidget();groups=QVBoxLayout(content);groups.setContentsMargins(0,0,8,0);groups.setSpacing(16);groups.addStretch()
             scroll.setWidget(content);self.stack.addWidget(scroll)
             button=QPushButton(name);button.setCheckable(True);button.setMinimumHeight(36)
-            button.setStyleSheet('QPushButton {background:transparent;text-align:left;border-radius:8px;padding:8px 12px;} QPushButton:checked {background:'+theme.ELEVATED+';} QPushButton:hover {background:'+theme.SEPARATOR+';}')
+            button.setStyleSheet('QPushButton {background:transparent;text-align:left;border-radius:8px;padding:8px 12px;} QPushButton:hover {background:'+theme.SEPARATOR+';} QPushButton:checked {background:'+theme.BLUE+';color:#FFFFFF;font-weight:600;}')
             order=[self.mode_category,'缓存与性能','外观与装饰包','更新与日志']
             position=sum(1 for key in self.category_buttons if order.index(key)<order.index(name));self.navigation.insertWidget(position,button)
             button.clicked.connect(lambda _,name=name:self.select_category(name))

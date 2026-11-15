@@ -563,8 +563,6 @@ class Window(QMainWindow):
             rescan.setEnabled(bool(root) and not self.busy and not self.pending_ops);rescan.triggered.connect(lambda:self.scan(root))
         menu.addAction('人脸预览…').triggered.connect(self.face_settings)
         self.add_mode_display_settings(menu,'review')
-        menu.addSection('筛选预加载','仅用于筛选照片和人脸预览')
-        menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
 
     def add_rating_settings(self,menu):
         menu.addSection('分级操作','星级、范围和评级读取在分级页面中操作')
@@ -586,6 +584,8 @@ class Window(QMainWindow):
 
     def add_application_settings(self,menu):
         menu.addSection('应用全局','缓存清理、GPU、更新和日志适用于整个应用')
+        # Preloading lives with the other cache settings, so the mode page fits without scrolling.
+        if not self.rating_active:menu.addAction('预加载与缓存…').triggered.connect(self.cache_dialog)
         clear=menu.addAction('一键清理全部缓存');clear.setEnabled(not self.busy and not self.pending_ops and not self.rating_page.writing);clear.triggered.connect(self.clear_cache)
         gpu=QAction('GPU 合成（应用级）',menu);gpu.setToolTip('应用统一渲染设置，切换后重启生效');gpu.setCheckable(True);gpu.setEnabled(os.name=='nt')
         gpu.setChecked(QSettings('PhotoSieve','PhotoSieve').value('gpu_compositing',False,type=bool));gpu.toggled.connect(self.set_gpu);menu.addAction(gpu)
