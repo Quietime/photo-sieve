@@ -448,7 +448,8 @@ class Window(QMainWindow):
                 info_row=QHBoxLayout(self.review_info);info_row.setContentsMargins(0,0,0,0);info_row.setSpacing(24)
                 self.face_container=QWidget();self.face_container.setFixedSize(160,182)
                 self.face_layout=QVBoxLayout(self.face_container);self.face_layout.setContentsMargins(0,0,0,0)
-                info_row.addStretch(1);info_row.addWidget(self.face_container,0,Qt.AlignmentFlag.AlignVCenter);self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setMaximumWidth(360);info_row.addWidget(self.current_metadata,2);info_row.addStretch(1);pane.addWidget(self.review_info,2)
+                info_row.addStretch(1);info_row.addWidget(self.face_container,0,Qt.AlignmentFlag.AlignVCenter);self.current_metadata=DetailLabel();self.current_metadata.setObjectName('caption');self.current_metadata.setWordWrap(True);self.current_metadata.setMinimumWidth(220);self.current_metadata.setMaximumWidth(360);   # short messages stay on one line
+                info_row.addWidget(self.current_metadata,2);info_row.addStretch(1);pane.addWidget(self.review_info,2)
             name = Elided('name'); name.setFixedHeight(22)
             detail = Elided('caption')
             if index==1:

@@ -209,6 +209,9 @@ class Library:
             if not keep:db.close()
 
     def state(self):
+        # Snapshot the job before reading the counts: a job that finishes in between must look still
+        # running here (so the window polls again), never finished alongside counts from before it ended.
+        job = {**self.job, 'errors': list(self.job['errors'])}
         with self.connect() as db:
             counts = {row['status']: row['n'] for row in db.execute('SELECT status,COUNT(*) n FROM photos WHERE present=1 GROUP BY status')}
             deleted = db.execute('SELECT COUNT(*) FROM photos WHERE ' + self.query('deleted')).fetchone()[0]
@@ -216,7 +219,7 @@ class Library:
             can_undo=self.can_undo(db)
         return {'root': meta.get('root', ''), 'cursor': int(meta.get('cursor') or 0),
                 'counts': {'all': sum(counts.values()), 'pending': counts.get(0, 0), 'keep': counts.get(1, 0), 'deleted': deleted},
-                'job': {**self.job, 'errors': list(self.job['errors'])}, 'data_dir': str(self.directory), 'can_undo':can_undo}
+                'job': job, 'data_dir': str(self.directory), 'can_undo':can_undo}
 
     @staticmethod
     def can_undo(db):

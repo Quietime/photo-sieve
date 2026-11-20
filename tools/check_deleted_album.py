@@ -20,7 +20,7 @@ def run(output):
             application.processEvents()
             if test():return
             QTest.qWait(5)
-        raise AssertionError('Deleted album did not finish: '+repr({'errors':errors if 'errors' in locals() else [],'state':window.library.state()['counts'] if 'window' in locals() else 'unavailable'}))
+        raise AssertionError('Deleted album did not finish: '+repr({'errors':errors if 'errors' in locals() else [],'state':window.library.state()['counts'] if 'window' in locals() else 'unavailable','window':(window.counts,window.pending_ops,window.job_running(),window.select_all_deleted.isEnabled(),window.busy,window.importing,window.view,window.stack.currentIndex()) if 'window' in locals() else None}))
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary);photos=base/'photos';photos.mkdir();settings=QSettings(str(base/'settings.ini'),QSettings.Format.IniFormat)
         settings.setValue('face_preview',False);settings.setValue('warm_count',0)

@@ -289,3 +289,23 @@ class WindowRegressionTest(WindowCase):
         self.assertEqual(self.make_window().library.cache_limit,MAX_BYTES)
 
 if __name__=='__main__':unittest.main()
+
+
+class StateSnapshotOrderTest(unittest.TestCase):
+    def test_a_job_ending_during_state_is_reported_as_still_running(self):
+        """The window stops polling once a state says the job is finished, so that state's counts
+        must come from after the job ended (a rescan otherwise leaves 已删除 showing a stale number)."""
+        import tempfile
+        from pathlib import Path
+        from app import Library
+        with tempfile.TemporaryDirectory() as tmp:
+            library = Library(Path(tmp) / 'ws')
+            library.job = {'revision': 'scan', 'running': True, 'kind': '扫描', 'done': 0, 'total': 0, 'errors': [], 'message': ''}
+            original = Library.can_undo
+            def finish_meanwhile(db):
+                library.job = dict(library.job, running=False, message='已完成')   # the scan ends after the counts were read
+                return original(db)
+            with unittest.mock.patch.object(Library, 'can_undo', staticmethod(finish_meanwhile)):
+                state = library.state()
+            self.assertTrue(state['job']['running'])
+            self.assertFalse(library.state()['job']['running'])

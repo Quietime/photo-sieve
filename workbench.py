@@ -147,7 +147,14 @@ class Workbench:
         if not p.active:return
         cache=self.host.full_cache.status();faces=self.host.full_faces.status();analysis=self.host.analysis.status()
         def count(s):return f'{s.get("visited",s.get("done",0)):,}/{s.get("total") or 0:,}'
-        self.progress.setText('后台缓存 · 预览 '+count(cache)+' · 人脸 '+(count(faces) if self.host.faces.enabled else '已关闭')+' · 分析 '+count(analysis)+(f' · XMP {len(self.xmp_errors)} 项待处理' if self.xmp_errors else ''))
+        # Only what is still running or needs attention; a finished background says nothing.
+        def busy(s):return (s.get('total') or 0)>s.get('visited',s.get('done',0))
+        parts=[name+' '+count(state) for name,state,on in (('预览',cache,True),('人脸',faces,self.host.faces.enabled),('分析',analysis,True)) if on and busy(state)]
+        text=('后台准备 · '+' · '.join(parts)) if parts else ''
+        if self.xmp_errors:text+=(' · ' if text else '')+f'XMP {len(self.xmp_errors)} 项待处理'
+        full='后台缓存 · 预览 '+count(cache)+' · 人脸 '+(count(faces) if self.host.faces.enabled else '已关闭')+' · 分析 '+count(analysis)
+        if self.progress.text()!=text:self.progress.setText(text)
+        if self.progress.toolTip()!=full:self.progress.setToolTip(full)
         token=(id(self.records),self.host.analysis.generation,analysis['done'])
         if time.monotonic()-self.last_interaction>1 and not (self.dialog and self.dialog.isVisible()) and analysis['finished'] and getattr(self,'last_analysis_done',None)!=token and self.mode.currentData()!='none' and not p.listing and not p.writing:
             self.last_analysis_done=token;self.refresh_filters()
