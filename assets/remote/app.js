@@ -212,7 +212,7 @@
       list.textContent = '';
       for (const label of part.labels) {
         const item = document.createElement('button');
-        item.className = 'label-item'; item.dataset.key = label.key; item.setAttribute('role', 'menuitemradio');
+        item.className = 'label-item'; item.dataset.key = label.key; item.setAttribute('role', 'radio');
         const dot = document.createElement('span'); dot.className = 'swatch'; dot.style.background = label.color || 'transparent';
         if (!label.color) dot.style.borderColor = '#8C8A84';
         const text = document.createElement('span'); text.textContent = label.text;

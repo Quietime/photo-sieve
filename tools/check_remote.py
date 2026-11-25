@@ -55,7 +55,7 @@ def main():
             window.remote.start(); url = window.remote.urls()[0].replace(window.remote.urls()[0].split('/')[2].split(':')[0], '127.0.0.1', 1)
             env = dict(os.environ)
             if Path('/opt/pw-browsers/chromium').exists() and 'PLAYWRIGHT_CHROMIUM' not in env:
-                found = sorted(Path('/opt/pw-browsers').glob('chromium-*/chrome-linux/chrome'))
+                found = sorted(Path('/opt/pw-browsers').glob('chromium-*/chrome-linux*/chrome'))   # chrome-linux or chrome-linux64
                 if found: env['PLAYWRIGHT_CHROMIUM'] = str(found[-1])
             runner = subprocess.Popen(['node', str(Path(__file__).with_name('remote_e2e.cjs')), url, str(output)],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
