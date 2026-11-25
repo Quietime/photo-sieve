@@ -1,4 +1,5 @@
 """User-facing operation regressions, using only disposable photographs and records."""
+import theme
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from pathlib import Path
@@ -522,8 +523,8 @@ class ShortcutOwnershipTest(unittest.TestCase):
         dialog = keys.ShortcutDialog(None, chosen)
         try:
             self.assertFalse(dialog.save_button.isEnabled())
-            self.assertNotIn('#FF453A', dialog.fields['keep', 0].styleSheet())
-            self.assertIn('#FF453A', dialog.fields['keep', 1].styleSheet())
+            self.assertNotIn(theme.ERROR_TEXT, dialog.fields['keep', 0].styleSheet())
+            self.assertIn(theme.ERROR_TEXT, dialog.fields['keep', 1].styleSheet())
             dialog.fields['keep', 1].setKeySequence(QKeySequence('P'))
             self.assertTrue(dialog.save_button.isEnabled())
         finally:

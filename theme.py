@@ -18,6 +18,7 @@ SECONDARY = '#C1BFB8'
 TERTIARY = '#ACAAA3'
 ICE = '#A9C4E8'        # grading accent (stars, current thumbnail)
 LAVA = '#A8423C'       # screening accent
+FOCUS = '#A9C4E8'      # keyboard focus rings: 7.2:1 on BG (WCAG 1.4.11 asks 3:1; BLUE was 1.9:1)
 BLUE = '#335E83'
 BLUE_HOVER = '#4C789B'
 BLUE_PRESSED = '#2A4E6D'

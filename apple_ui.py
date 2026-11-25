@@ -133,7 +133,7 @@ class AppleButton(QPushButton):
             painter.setBrush(QColor(255,255,255,18));painter.setPen(QPen(QColor(255,255,255,75 if theme.HIGH_CONTRAST else 32),1));painter.drawRoundedRect(badge,5,5)
             painter.setPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.SECONDARY));painter.drawText(badge,Qt.AlignmentFlag.AlignCenter,self.shortcut)
         if self.hasFocus() and (self.keyboard_focus or theme.HIGH_CONTRAST):
-            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.BLUE),2));painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
+            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor('#FFFFFF' if theme.HIGH_CONTRAST else theme.FOCUS),2));painter.drawRoundedRect(rect,rect.height()/2,rect.height()/2)
 
 
 class MenuRow(QPushButton):
@@ -160,7 +160,7 @@ class MenuRow(QPushButton):
         painter.setPen(QColor(theme.TERTIARY if not self.isEnabled() else theme.LABEL))
         painter.drawText(rect.adjusted(8+2*hover,0,-8,0),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft,self.text())
         if self.hasFocus():
-            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor(theme.BLUE),1.5));painter.drawRoundedRect(rect,8,8)
+            painter.setBrush(Qt.BrushStyle.NoBrush);painter.setPen(QPen(QColor(theme.FOCUS),1.5));painter.drawRoundedRect(rect,8,8)
 
 
 class GlassSurface(QFrame):

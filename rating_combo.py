@@ -51,7 +51,7 @@ class RoundedCombo(QComboBox):
         high_contrast = theme.HIGH_CONTRAST
         # ELEVATED2 is the app's blue action colour; selectors remain neutral until an option is selected.
         fill = '#000000' if high_contrast else '#4A4F56' if self.underMouse() and self.isEnabled() else '#3F434A' if self.isEnabled() else '#34383E'
-        edge = '#FFFFFF' if high_contrast else theme.BLUE if self.hasFocus() else theme.SEPARATOR
+        edge = '#FFFFFF' if high_contrast else theme.FOCUS if self.hasFocus() else theme.SEPARATOR
         color = '#FFFFFF' if high_contrast else theme.LABEL if self.isEnabled() else theme.TERTIARY
         painter.setPen(QPen(QColor(edge), 1.5 if self.hasFocus() or high_contrast else 1))
         painter.setBrush(QColor(fill))

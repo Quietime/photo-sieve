@@ -145,8 +145,8 @@ class RatingPage(QWidget):
         # No page title row: the top bar already says 照片分级. Its two buttons sit at the end of the one filter row.
         row=None
         # One row for every filter and tool, so the row uses the page's width instead of stacking on the left.
-        options=QHBoxLayout();options.setSpacing(12);self.options=options;self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);options.addWidget(self.scope)
-        self.filter=RoundedCombo();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);options.addWidget(self.filter)
+        options=QHBoxLayout();options.setSpacing(12);self.options=options;self.scope=RoundedCombo();self.scope.addItems(['全部照片','保留照片']);self.scope.setAccessibleName('照片范围');self.scope.setToolTip('照片范围');options.addWidget(self.scope)
+        self.filter=RoundedCombo();self.filter.addItems(['全部星级','未评级（0 星）']+[f'{i} 星' for i in range(1,6)]);self.filter.setAccessibleName('星级筛选');self.filter.setToolTip('星级筛选');options.addWidget(self.filter)
         self.options_slot=options.count()   # the workbench puts colour, grouping and its two buttons here
         options.addStretch()
         self.auto=QCheckBox('评级后下一张');self.auto.setChecked(QSettings('PhotoSieve','PhotoSieve').value('rating_auto_next',True,type=bool));options.addWidget(self.auto)
@@ -164,7 +164,7 @@ class RatingPage(QWidget):
         gallery=QWidget();gallery.setMinimumWidth(230);gallery_layout=QVBoxLayout(gallery);gallery_layout.setContentsMargins(0,0,12,0);gallery_layout.setSpacing(8)
         gallery_heading=QHBoxLayout();gallery_heading.setSpacing(8);gallery_heading.addWidget(QLabel('图库'));gallery_heading.addStretch()
         self.gallery_smaller=host.button('−',lambda:self.gallery_size.setValue(self.gallery_size.value()-20));self.gallery_smaller.setFixedSize(24,24);self.gallery_smaller.setToolTip('缩小缩略图');gallery_heading.addWidget(self.gallery_smaller)
-        self.gallery_size=QSlider(Qt.Orientation.Horizontal);self.gallery_size.setRange(120,360);self.gallery_size.setSingleStep(20);self.gallery_size.setPageStep(40);self.gallery_size.setMinimumWidth(70);self.gallery_size.setMaximumWidth(150);self.gallery_size.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.gallery_size.setAccessibleName('图库缩略图大小')
+        self.gallery_size=QSlider(Qt.Orientation.Horizontal);self.gallery_size.setFixedHeight(24);self.gallery_size.setRange(120,360);self.gallery_size.setSingleStep(20);self.gallery_size.setPageStep(40);self.gallery_size.setMinimumWidth(70);self.gallery_size.setMaximumWidth(150);self.gallery_size.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.gallery_size.setAccessibleName('图库缩略图大小')
         self.gallery_size.setValue(max(120,min(360,QSettings('PhotoSieve','PhotoSieve').value('rating_gallery_size',144,type=int))));gallery_heading.addWidget(self.gallery_size)
         self.gallery_larger=host.button('+',lambda:self.gallery_size.setValue(self.gallery_size.value()+20));self.gallery_larger.setFixedSize(24,24);self.gallery_larger.setToolTip('放大缩略图');gallery_heading.addWidget(self.gallery_larger);gallery_layout.addLayout(gallery_heading)
         self.gallery_smaller.setEnabled(self.gallery_size.value()>120);self.gallery_larger.setEnabled(self.gallery_size.value()<360)
@@ -181,7 +181,8 @@ class RatingPage(QWidget):
         self.face_panel=FacePanel(self.aux);aux_layout.addWidget(self.face_panel,0,Qt.AlignmentFlag.AlignVCenter)
         metadata=QWidget(self.aux);metadata.setMaximumWidth(380);self.quality_layout=QVBoxLayout(metadata);self.quality_layout.setContentsMargins(0,0,0,0);self.quality_layout.setSpacing(4)
         self.camera_info=QLabel('请选择照片');self.camera_info.setObjectName('caption');self.camera_info.setWordWrap(True);self.camera_info.setAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
-        self.quality_layout.addWidget(self.camera_info,1);aux_layout.addWidget(metadata,2);aux_layout.addStretch(1);column.addWidget(self.aux)
+        # Camera settings and the quality hint read as one block, centred beside the face crop.
+        self.quality_layout.addWidget(self.camera_info);aux_layout.addWidget(metadata,2,Qt.AlignmentFlag.AlignVCenter);aux_layout.addStretch(1);column.addWidget(self.aux)
         self.panes=[self.pane];self.splitter.addWidget(preview);self.splitter.setStretchFactor(0,1);self.splitter.setStretchFactor(1,1);self.splitter.setSizes([600,400]);layout.addWidget(self.splitter,1)
         self.splitter.handle(1).setToolTip('左右拖动，调整图库和预览的宽度');self.splitter.splitterMoved.connect(self.split_moved)
         self.pane.clicked.connect(lambda photo,point:self.zoom(point,self.pane));self.pane.escape_requested.connect(self.unzoom);self.pane.next_requested.connect(lambda:self.move(1))

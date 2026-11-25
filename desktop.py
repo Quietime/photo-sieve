@@ -507,7 +507,7 @@ class Window(QMainWindow):
         self.select_all_deleted = self.button('全选', self.select_deleted); footer.addWidget(self.select_all_deleted)
         self.purge_selected = self.button('从磁盘永久删除所选', self.purge_selection, 'delete'); footer.addWidget(self.purge_selected)
         self.restore_selected = self.button('批量恢复', self.restore_selection, 'primary'); footer.addWidget(self.restore_selected); grid_layout.addLayout(footer)
-        self.purge_selected.setToolTip('删除待删除区中的实际照片文件，不只是移除图库记录；执行前会再次确认')
+        self.purge_selected.setToolTip('从磁盘删除“已删除”中所选照片的文件，不只是移除记录；执行前会再次确认')
         self.stack.addWidget(deleted)
 
         empty = WelcomePage(); hero = QVBoxLayout(empty); hero.setContentsMargins(24,24,24,24); hero.setSpacing(12); hero.addStretch()
@@ -1253,7 +1253,7 @@ class Window(QMainWindow):
         if action == 'delete':
             self.delete_streak += 1
             back = f'{self.key("restore")} 恢复'
-            self.toast.defer(f'已移到暂存 · {back}' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · {back}', 'delete'); self.refresh_chrome()
+            self.toast.defer(f'已移到“已删除” · {back}' if self.delete_streak == 1 else f'已删除 {self.delete_streak} 张 · {back}', 'delete'); self.refresh_chrome()
         elif self.delete_streak and not self.toast.active():
             self.delete_streak = 0
         def done(result):
@@ -1653,7 +1653,7 @@ class Window(QMainWindow):
         self.deleted_rows.extend(rows); self.deleted_more = len(rows) == 60
         for photo in rows:
             item = QListWidgetItem(self.tile, photo['name']); item.setData(ROLE, photo['id'])
-            item.setToolTip('原位置：' + photo['path'] + '\n暂存：' + str(photo['backup'])); self.deleted_grid.addItem(item)
+            item.setToolTip('原位置：' + photo['path'] + '\n现在位置：' + str(photo['backup'])); self.deleted_grid.addItem(item)
             self.deleted_items[photo['id']] = item
         if getattr(self,'all_deleted_selected',False): self.deleted_grid.selectAll()
         self.deleted_grid.blockSignals(previous); self.update_actions()

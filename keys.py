@@ -2,6 +2,7 @@
 Like Lightroom or Photo Mechanic, every action takes a main key and an optional second one (↑ or P to keep, say)."""
 import json
 
+import theme
 from PySide6.QtCore import Signal, QTimer
 from PySide6.QtGui import QKeySequence
 from ui_shell import QDialog
@@ -94,7 +95,7 @@ class ShortcutDialog(QDialog):
                 field.findChild(QLineEdit).setPlaceholderText('未设置')   # Qt's own hint is in English
                 grid.addWidget(field, row, 1 + slot); self.fields[action, slot] = field
         content=QWidget();content.setLayout(grid);scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(content);scroll.setMinimumHeight(240);scroll.setMaximumHeight(420);layout.addWidget(scroll)
-        self.problem = QLabel(); self.problem.setStyleSheet('color:#FF453A; font-size:12px;'); self.problem.setWordWrap(True); layout.addWidget(self.problem)
+        self.problem = QLabel(); self.problem.setStyleSheet(f'color:{theme.ERROR_TEXT}; font-size:12px;'); self.problem.setWordWrap(True); layout.addWidget(self.problem)
         buttons = QHBoxLayout()
         from apple_ui import AppleButton
         reset = AppleButton('恢复默认'); reset.setObjectName('plain'); reset.setAutoDefault(False); reset.clicked.connect(self.reset); buttons.addWidget(reset)
@@ -119,10 +120,10 @@ class ShortcutDialog(QDialog):
             line=field.findChild(QLineEdit); line.setPlaceholderText('未设置')
             QTimer.singleShot(0,line,lambda line=line:line.setPlaceholderText('未设置'))
             actual=normal(field.keySequence().toString(QKeySequence.SequenceFormat.PortableText))
-            edge = '#FF453A' if actual in clashes else 'transparent'
-            field.setStyleSheet(f'QLineEdit {{ background:#2C2C2E; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}'
-                                'QLineEdit:focus { border-color:#0A84FF; }' if edge == 'transparent' else
-                                f'QLineEdit {{ background:#2C2C2E; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}')
+            edge = theme.ERROR_TEXT if actual in clashes else 'transparent'
+            field.setStyleSheet(f'QLineEdit {{ background:{theme.ELEVATED}; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}'
+                                f'QLineEdit:focus {{ border-color:{theme.FOCUS}; }}' if edge == 'transparent' else
+                                f'QLineEdit {{ background:{theme.ELEVATED}; border:1px solid {edge}; border-radius:8px; padding:5px 8px; }}')
         if clashes:
             self.problem.setText('这些键被设给了多个操作：' + '、'.join(label(key) for key in sorted(clashes)))
         elif missing:

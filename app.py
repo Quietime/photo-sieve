@@ -484,10 +484,10 @@ class Library:
                     if original.exists():
                         raise LibraryError(409, '原路径已有文件，无法撤回；请先移走冲突文件。')
                     if not backup.is_file() or not original.parent.is_dir():
-                        raise LibraryError(409, '待删除照片或原目录无法访问，请连接硬盘后重试。')
+                        raise LibraryError(409, '“已删除”中的照片或原文件夹无法访问，请连接硬盘后重试。')
                     stat = backup.stat()
                     if (stat.st_size, stat.st_mtime_ns) != (h['size'], h['mtime']):
-                        raise LibraryError(409, '待删除照片已被外部程序修改，请手动检查。')
+                        raise LibraryError(409, '“已删除”中的照片已被其他程序修改，请手动检查。')
                     try:
                         os.rename(backup, original)
                     except OSError as exc:
@@ -705,7 +705,7 @@ class Library:
             raise LibraryError(409, '原照片已改变，请重新扫描后再删除')
         stash = path.parent / TRASH_DIRECTORY
         if stash.is_symlink():
-            raise LibraryError(409, '待删除目录是符号链接，请检查后重试。')
+            raise LibraryError(409, '“已删除”所在的文件夹是符号链接，请检查后重试。')
         try:
             stash.mkdir(exist_ok=True)
             backup = stash / (secrets.token_hex(16) + path.suffix)
@@ -715,7 +715,7 @@ class Library:
             # Same-directory filesystem move: no decoding or full-size copying.
             self.rename_for_trash(path, backup)
         except Exception as exc:
-            raise LibraryError(409, f'无法移入待删除区：{exc}')
+            raise LibraryError(409, f'无法移到“已删除”：{exc}')
         with self.connect() as db:
             db.execute('UPDATE photos SET present=0 WHERE id=?', (photo_id,))
             db.execute("INSERT INTO history(photo_id,before,after,size,mtime,action,backup) VALUES (?,?,?,?,?,'trash',?)",
@@ -789,11 +789,11 @@ class Library:
                         if (backup.is_symlink() or backup.parent.is_symlink() or
                             backup.parent != original.parent / TRASH_DIRECTORY or
                             not backup.resolve().is_relative_to(root)):
-                            raise ValueError('暂存路径已改变，拒绝彻底删除')
+                            raise ValueError('“已删除”中的文件位置已改变，已停止彻底删除')
                         if backup.exists():
                             stat = backup.stat()
                             if (stat.st_size, stat.st_mtime_ns) != (row['trash_size'], row['trash_mtime']):
-                                raise ValueError('暂存照片已改变，请先检查文件')
+                                raise ValueError('“已删除”中的照片已改变，请先检查文件')
                             backup.unlink()
                         with self.connect() as db:
                             db.execute("DELETE FROM history WHERE photo_id=? AND action='trash' AND backup=?", (row['id'], str(backup)))

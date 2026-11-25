@@ -201,7 +201,7 @@ class SettingsToggle(QCheckBox):
         painter.setPen(QPen(QColor(theme.ICE if self.isChecked() else theme.SECONDARY),1));painter.setBrush(QColor(theme.BLUE if self.isChecked() else theme.SEPARATOR));painter.drawRoundedRect(track,9,9)
         painter.setBrush(QColor(theme.LABEL));painter.setPen(Qt.PenStyle.NoPen);painter.drawEllipse(QRectF(track.x()+(16 if self.isChecked() else 2),track.y()+2,14,14))
         if self.hasFocus():
-            painter.setPen(QPen(QColor(theme.ICE),1));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),6,6)
+            painter.setPen(QPen(QColor(theme.FOCUS),1.5));painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRoundedRect(QRectF(self.rect()).adjusted(1,1,-1,-1),6,6)
 
 
 class SettingsPanel(QFrame):
